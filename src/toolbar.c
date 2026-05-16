@@ -469,15 +469,20 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
     GtkWidget *tb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
     gtk_widget_add_css_class(tb, "npp-toolbar");
 
-    /* Tight inter-button spacing to match macOS (2 pt gap on macOS). */
+    /* Tight inter-button spacing to match macOS (2 pt gap on macOS).
+     * A thin base line under the toolbar mirrors the line above it. */
     {
         GtkCssProvider *css = gtk_css_provider_new();
-        gtk_css_provider_load_from_data(css,
-            ".npp-toolbar { padding: 2px 4px; }"
+        const char *line = is_dark_mode() ? "#444444" : "#cccccc";
+        char buf[512];
+        snprintf(buf, sizeof(buf),
+            ".npp-toolbar { padding: 2px 4px;"
+            " border-bottom: 1px solid %s; }"
             ".npp-toolbar button { padding: 2px; margin: 0 1px;"
             " min-width: 24px; min-height: 24px; }"
             ".npp-toolbar separator { margin: 2px 4px; }",
-            -1);
+            line);
+        gtk_css_provider_load_from_data(css, buf, -1);
         gtk_style_context_add_provider_for_display(
             gdk_display_get_default(),
             GTK_STYLE_PROVIDER(css),
