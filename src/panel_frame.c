@@ -4,7 +4,7 @@
  * GTK3 port of src/PanelFrame.mm. Builds a vertical GtkBox:
  *
  *   ┌────────────────────────────────────────────┐
- *   │ Title              [pop_out]   [ × ]       │  26-px title bar
+ *   │ Title              [pop_out]   [ × ]       │  25-px title bar
  *   ├────────────────────────────────────────────┤  1-px separator
  *   │                                            │
  *   │              content widget                │  fills the rest
@@ -71,7 +71,7 @@ static const char *kFrameCssLight =
     ".nextpad-panel-frame-titlebar { "
     "  background-color: #f0f0f0; "   /* matches the main toolbar background */
     "  border: none; "
-    "  min-height: 26px; "
+    "  min-height: 25px; "
     "}\n"
     ".nextpad-panel-frame-title { "
     "  font-size: 11pt; "
@@ -111,7 +111,7 @@ static const char *kFrameCssDark =
     ".nextpad-panel-frame-titlebar { "
     "  background-color: #2F2F2F; "
     "  border: none; "
-    "  min-height: 26px; "
+    "  min-height: 25px; "
     "}\n"
     ".nextpad-panel-frame-title { "
     "  font-size: 11pt; "
@@ -284,7 +284,7 @@ GtkWidget *panel_frame_new(const char *name,
 
     /* ── Title bar ── */
     st->title_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_size_request(st->title_bar, -1, 26);
+    gtk_widget_set_size_request(st->title_bar, -1, 25);
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->title_bar),
         "nextpad-panel-frame-titlebar");
