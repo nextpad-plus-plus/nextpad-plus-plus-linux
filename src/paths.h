@@ -40,9 +40,11 @@ gchar *npp_bundle_file(const char *subdir_or_null, const char *leaf);
  *   shortcuts.xml         ← from bundle/shortcuts.xml
  *   langs.xml             ← from bundle/langs.model.xml
  *   stylers.xml           ← from bundle/stylers.model.xml
- *   contextMenu.xml       ← from bundle/contextMenu.xml
- *   tabContextMenu.xml    ← from bundle/tabContextMenu.xml
- *   toolbarButtonsConf.xml← from bundle/toolbarButtonsConf.xml
+ *   contextMenu.xml            ← from bundle/contextMenu.xml (active)
+ *   tabContextMenu_example.xml ← from bundle/tabContextMenu.xml
+ *                                (inactive template — user renames it
+ *                                 to tabContextMenu.xml to activate)
+ *   toolbarButtonsConf_example.xml ← from bundle/toolbarButtonsConf.xml
  *
  * Mirrors macOS `ensureNppDirs()`.
  */

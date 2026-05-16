@@ -317,6 +317,13 @@ static void setup_sci(GtkWidget *sci)
     gitgutter_setup(sci);
     changehistory_setup(sci);
     spell_on_sci_created(sci);
+
+    /* Disable Scintilla's own GTK4 context-menu popover: we install our
+     * own (on_sci_button_press -> NppMenu). Without this, a right-click
+     * maps two grabbing popovers on the same ScintillaView; they ping-pong
+     * grabs and flood the log with "grabbing popup with non-topmost
+     * parent" warnings every few ms. */
+    sci_msg(sci, SCI_USEPOPUP, SC_POPUP_NEVER, 0);
     {
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), GDK_BUTTON_SECONDARY);
@@ -448,6 +455,30 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
     }
 }
 
+/* ---- Tab save-state floppy icon ----------------------------------- *
+ * macOS NppTabBar.mm draws the toolbar saveFile / saveFileRed icons to
+ * the left of the tab title at kIconSize*0.704 ≈ 11px. We mirror that:
+ * saveFile.png when the doc is saved, the red saveFileRed.png when it
+ * carries unsaved changes. The state is shown by the icon, so the title
+ * no longer carries a "*" prefix (matches macOS). */
+#define TAB_STATUS_ICON_PX 11
+
+static void set_tab_status_icon(GtkWidget *img, gboolean modified)
+{
+    static GdkTexture *t_saved = NULL, *t_unsaved = NULL;
+    GdkTexture **slot = modified ? &t_unsaved : &t_saved;
+    if (!*slot) {
+        gchar *p = g_strdup_printf("%s/icons/standard/toolbar/%s",
+                                   RESOURCES_DIR,
+                                   modified ? "saveFileRed.png" : "saveFile.png");
+        *slot = gdk_texture_new_from_filename(p, NULL);
+        g_free(p);
+    }
+    if (*slot)
+        gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(*slot));
+    gtk_image_set_pixel_size(GTK_IMAGE(img), TAB_STATUS_ICON_PX);
+}
+
 static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
 {
     const char *base = doc->filepath
@@ -468,15 +499,15 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
         g_signal_connect(gc, "pressed", G_CALLBACK(on_tab_button_press), sci);
         gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(gc));
     }
-    /* Tab labels: ~11pt font (50% smaller than the GTK default ~16-18pt
-     * for headers), to match macOS NppTabBar's NSFont systemFontOfSize:11.
+    /* Tab labels: 11pt absolute — kept absolute so the size is stable
+     * across themes/font settings.
      * Names ≤ 30 chars render unconditionally with no ellipsis; longer
      * names truncate in the middle. */
     int name_len = (int)strlen(buf);
     GtkWidget *label = gtk_label_new(NULL);
     {
         gchar *escaped = g_markup_escape_text(buf, -1);
-        char  *markup  = g_strdup_printf("<span size=\"small\">%s</span>", escaped);
+        char  *markup  = g_strdup_printf("<span size=\"11pt\">%s</span>", escaped);
         gtk_label_set_markup(GTK_LABEL(label), markup);
         g_free(markup);
         g_free(escaped);
@@ -494,12 +525,13 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     /* P16 — use macOS tabbar close button icon when available. */
     GtkWidget *img = NULL;
     const char *closepath = RESOURCES_DIR "/icons/standard/tabbar/closeTabButton.png";
-    if (g_file_test(closepath, G_FILE_TEST_EXISTS)) {
-        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(closepath, 14, 14, TRUE, NULL);
-        if (pb) {
-            img = gtk_image_new_from_pixbuf(pb);
-            g_object_unref(pb);
-        }
+    /* Full-res (32px) texture downsampled once by GtkImage at device
+     * resolution — avoids the soft pre-scaled-pixbuf double-resample. */
+    GdkTexture *ctex = gdk_texture_new_from_filename(closepath, NULL);
+    if (ctex) {
+        img = gtk_image_new_from_paintable(GDK_PAINTABLE(ctex));
+        g_object_unref(ctex);
+        gtk_image_set_pixel_size(GTK_IMAGE(img), 14);
     }
     if (!img)
         img = gtk_image_new_from_icon_name("window-close-symbolic");
@@ -510,14 +542,20 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
 
     g_signal_connect(btn, "clicked", G_CALLBACK(on_close_btn_clicked), sci);
 
+    /* Save-state floppy icon, left of the title (macOS NppTabBar parity). */
+    GtkWidget *status = gtk_image_new();
+    set_tab_status_icon(status, doc->modified);
+
+    npp_box_pack(GTK_BOX(box), status, FALSE, 0);
     npp_box_pack(GTK_BOX(box), label, FALSE, 0);
     npp_box_pack(GTK_BOX(box), btn, FALSE, 0);
     /* P3 — tab_close_button: hide the × on each tab when pref disables it. */
     if (!g_prefs.tab_close_button)
         gtk_widget_set_visible(btn, FALSE);
 
-    /* store label widget on sci for later updates */
+    /* store label + status icon on sci for later updates */
     g_object_set_data(G_OBJECT(sci), "tab-label", label);
+    g_object_set_data(G_OBJECT(sci), "tab-status-icon", status);
     return box;
 }
 
@@ -529,20 +567,25 @@ static void refresh_tab_label(int page)
     GtkWidget *label = g_object_get_data(G_OBJECT(sci), "tab-label");
     if (!label || !doc) return;
 
+    /* Save-state is shown by the floppy icon (saveFile / saveFileRed), so
+     * the title carries no "*" prefix — matches the macOS NppTabBar. */
+    GtkWidget *status = g_object_get_data(G_OBJECT(sci), "tab-status-icon");
+    if (status) set_tab_status_icon(status, doc->modified);
+
     const char *base = doc->filepath
         ? g_path_get_basename(doc->filepath)
         : NULL;
     char buf[80];
     if (base)
-        snprintf(buf, sizeof(buf), "%s%s", doc->modified ? "*" : "", base);
+        snprintf(buf, sizeof(buf), "%s", base);
     else
-        snprintf(buf, sizeof(buf), "%snew %d", doc->modified ? "*" : "", doc->new_index);
+        snprintf(buf, sizeof(buf), "new %d", doc->new_index);
 
-    /* Keep the 11pt small font and update ellipsization based on length —
+    /* Keep the 11pt tab font and update ellipsization based on length —
      * matches make_tab_label() behaviour above. */
     {
         gchar *escaped = g_markup_escape_text(buf, -1);
-        char  *markup  = g_strdup_printf("<span size=\"small\">%s</span>", escaped);
+        char  *markup  = g_strdup_printf("<span size=\"11pt\">%s</span>", escaped);
         gtk_label_set_markup(GTK_LABEL(label), markup);
         g_free(markup);
         g_free(escaped);

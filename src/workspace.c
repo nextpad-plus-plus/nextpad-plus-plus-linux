@@ -137,13 +137,16 @@ static GdkPixbuf *s_folder_closed_pb = NULL;
 static GdkPixbuf *s_folder_open_pb   = NULL;
 static GdkPixbuf *s_file_pb          = NULL;
 
+/* The standard/ treeview icons are the colour set (the light/dark variants
+ * are monochrome line-art). Load native then HYPER-downsample to `size`. */
 static GdkPixbuf *load_tree_pb(const char *leaf, int size) {
     gchar *p = g_build_filename(
         RESOURCES_DIR, "icons", "standard", "panels", "treeview", leaf, NULL);
-    GdkPixbuf *pb = NULL;
-    if (g_file_test(p, G_FILE_TEST_EXISTS))
-        pb = gdk_pixbuf_new_from_file_at_scale(p, size, size, TRUE, NULL);
+    GdkPixbuf *full = gdk_pixbuf_new_from_file(p, NULL);
     g_free(p);
+    if (!full) return NULL;
+    GdkPixbuf *pb = gdk_pixbuf_scale_simple(full, size, size, GDK_INTERP_HYPER);
+    g_object_unref(full);
     return pb;
 }
 

@@ -93,7 +93,16 @@ static gboolean is_dark_mode(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Icon loading — same PNG set as macOS, scaled to ICON_PX            */
+/* Icon loading — same PNG set as macOS.                               */
+/*                                                                      */
+/* The source icons are 96×96. We must NOT pre-downscale them to a      */
+/* fixed pixbuf: in GTK4 a pixbuf becomes a fixed-size GdkTexture that   */
+/* the GSK renderer then resamples again at draw time (linear filter,   */
+/* fractional row-centring) — a second lossy step that softens the      */
+/* icons. GTK3 avoided this because GtkImage blitted the pixbuf 1:1 via  */
+/* Cairo. Instead, hand GTK4 the full-resolution texture and let         */
+/* GtkImage downsample it ONCE, at the true device-pixel size           */
+/* (scale-factor aware), via gtk_image_set_pixel_size().                 */
 /* ------------------------------------------------------------------ */
 static GtkWidget *load_icon(const char *name)
 {
@@ -108,22 +117,25 @@ static GtkWidget *load_icon(const char *name)
                  RESOURCES_DIR "/icons/light/toolbar/regular/%s_off.png", name);
 
     GError *err = NULL;
-    int px = icon_px();
-    GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, px, px, TRUE, &err);
-    if (!pb) {
-        if (err) g_error_free(err);
+    GdkTexture *tex = gdk_texture_new_from_filename(path, &err);
+    if (!tex) {
+        if (err) g_clear_error(&err);
         /* Fallback: try standard/ (16×16 classic icons) */
         snprintf(path, sizeof(path),
                  RESOURCES_DIR "/icons/standard/toolbar/%s.png", name);
-        err = NULL;
-        pb = gdk_pixbuf_new_from_file_at_scale(path, px, px, TRUE, &err);
-        if (!pb) {
-            if (err) g_error_free(err);
-            return gtk_image_new_from_icon_name("image-missing");
+        tex = gdk_texture_new_from_filename(path, &err);
+        if (!tex) {
+            if (err) g_clear_error(&err);
+            GtkWidget *mi = gtk_image_new_from_icon_name("image-missing");
+            gtk_image_set_pixel_size(GTK_IMAGE(mi), icon_px());
+            return mi;
         }
     }
-    GtkWidget *img = gtk_image_new_from_pixbuf(pb);
-    g_object_unref(pb);
+    GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
+    g_object_unref(tex);
+    /* Render the high-res texture at the logical icon size; GTK4 applies
+     * the display scale factor on top, so it stays crisp on HiDPI. */
+    gtk_image_set_pixel_size(GTK_IMAGE(img), icon_px());
     return img;
 }
 

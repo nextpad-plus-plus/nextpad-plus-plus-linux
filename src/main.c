@@ -4287,14 +4287,20 @@ static void install_tab_color_css(void) {
         ".tab-color-3 { color: #4080ff; }\n"   /* blue   */
         ".tab-color-4 { color: #ff5555; }\n"   /* red    */
         ".tab-color-5 { color: #a060c0; }\n"   /* purple */
-        /* Slim the editor tab strip ~20%: GTK4's default notebook tab
-         * carries generous vertical padding; trim it and drop the
-         * min-height floor so the tab hugs its label. margin:0 removes the
-         * theme's inter-tab gap so tabs sit flush against each other. */
+        /* Tab strip height: pin a compact content min-height and strip the
+         * close button's default GtkButton padding/min-size so the tab row
+         * stays tight (~28px — a ~15% trim of the earlier ~33px). margin:0
+         * removes the theme's inter-tab gap so tabs sit flush. */
         "notebook > header > tabs > tab {"
-        "  min-height: 0;"
+        "  min-height: 23px;"
         "  padding-top: 2px;"
         "  padding-bottom: 2px;"
+        "  margin: 0;"
+        "}\n"
+        "notebook > header > tabs > tab button {"
+        "  min-height: 0;"
+        "  min-width: 0;"
+        "  padding: 0;"
         "  margin: 0;"
         "}\n";
     gtk_css_provider_load_from_data(p, css, -1);

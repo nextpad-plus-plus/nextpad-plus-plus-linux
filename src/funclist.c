@@ -23,15 +23,26 @@ enum {
 static GdkPixbuf *s_icon_leaf = NULL;
 static GdkPixbuf *s_icon_node = NULL;
 
+/* The standard/ treeview icons are the colour set (the light/dark variants
+ * are monochrome line-art); load them at native 16px and HYPER-downsample
+ * to the 14px tree size for a crisp result. */
+static GdkPixbuf *fl_load_icon(const char *leaf, int size)
+{
+    gchar *p = g_strdup_printf(
+        RESOURCES_DIR "/icons/standard/panels/treeview/%s", leaf);
+    GdkPixbuf *full = gdk_pixbuf_new_from_file(p, NULL);
+    g_free(p);
+    if (!full) return NULL;
+    GdkPixbuf *pb = gdk_pixbuf_scale_simple(full, size, size, GDK_INTERP_HYPER);
+    g_object_unref(full);
+    return pb;
+}
+
 static void load_funclist_icons(void)
 {
     if (s_icon_leaf && s_icon_node) return;
-    const char *leaf_path = RESOURCES_DIR "/icons/standard/panels/treeview/funcList_leaf.png";
-    const char *node_path = RESOURCES_DIR "/icons/standard/panels/treeview/funcList_node.png";
-    if (!s_icon_leaf)
-        s_icon_leaf = gdk_pixbuf_new_from_file_at_scale(leaf_path, 14, 14, TRUE, NULL);
-    if (!s_icon_node)
-        s_icon_node = gdk_pixbuf_new_from_file_at_scale(node_path, 14, 14, TRUE, NULL);
+    if (!s_icon_leaf) s_icon_leaf = fl_load_icon("funcList_leaf.png", 14);
+    if (!s_icon_node) s_icon_node = fl_load_icon("funcList_node.png", 14);
 }
 
 /* ------------------------------------------------------------------ */

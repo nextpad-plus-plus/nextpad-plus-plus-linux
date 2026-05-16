@@ -159,13 +159,16 @@ static GtkWidget *pf_make_pop_image(gboolean popped) {
                "%s/icons/%s/panels/toolbar/%s.png",
                RESOURCES_DIR, theme_subdir, icon_name);
 
-    if (g_file_test(path, G_FILE_TEST_EXISTS)) {
-        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(path, 13, 13, NULL);
-        if (pb) {
-            GtkWidget *img = gtk_image_new_from_pixbuf(pb);
-            g_object_unref(pb);
-            return img;
-        }
+    /* Load the full-resolution (48px) source as a texture and let GtkImage
+     * downsample it once, at device resolution, via set_pixel_size. A
+     * pre-scaled pixbuf becomes a fixed texture the GSK renderer resamples
+     * again at draw time — the soft double-resample we removed elsewhere. */
+    GdkTexture *tex = gdk_texture_new_from_filename(path, NULL);
+    if (tex) {
+        GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
+        g_object_unref(tex);
+        gtk_image_set_pixel_size(GTK_IMAGE(img), 13);
+        return img;
     }
 
     /* Fallback to stock icons. */

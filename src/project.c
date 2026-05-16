@@ -109,11 +109,16 @@ static GdkPixbuf *px_file_invalid     = NULL;
 static void load_icons(void)
 {
     if (px_workspace) return;
-    const char *base = RESOURCES_DIR "/icons/standard/panels/treeview/";
+    /* The standard/ treeview icons are the colour set (the light/dark
+     * variants are monochrome line-art). Load native, HYPER-scale to 16px. */
     char p[512];
 #define LOAD(name, var) \
-    do { g_snprintf(p, sizeof(p), "%s%s.png", base, name); \
-         var = gdk_pixbuf_new_from_file_at_scale(p, 16, 16, TRUE, NULL); \
+    do { g_snprintf(p, sizeof(p), \
+             RESOURCES_DIR "/icons/standard/panels/treeview/%s.png", name); \
+         GdkPixbuf *full = gdk_pixbuf_new_from_file(p, NULL); \
+         var = full ? gdk_pixbuf_scale_simple(full, 16, 16, GDK_INTERP_HYPER) \
+                    : NULL; \
+         if (full) g_object_unref(full); \
        } while (0)
     LOAD("project_work_space",        px_workspace);
     LOAD("project_work_space_dirty",  px_workspace_dirty);
