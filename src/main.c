@@ -4282,37 +4282,80 @@ static void action_tab_set_color(GSimpleAction *a, GVariant *p, gpointer u) {
 static void install_tab_color_css(void) {
     GtkCssProvider *p = gtk_css_provider_new();
     GString *css = g_string_new(
-        ".tab-color-1 { color: #d0a800; }\n"   /* yellow */
-        ".tab-color-2 { color: #2ca52c; }\n"   /* green  */
-        ".tab-color-3 { color: #4080ff; }\n"   /* blue   */
-        ".tab-color-4 { color: #ff5555; }\n"   /* red    */
-        ".tab-color-5 { color: #a060c0; }\n"   /* purple */
-        /* Tab strip height: pin a compact content min-height and strip the
-         * close button's default GtkButton padding/min-size so the tab row
-         * stays tight (~28px — a ~15% trim of the earlier ~33px). margin:0
-         * removes the theme's inter-tab gap so tabs sit flush. */
-        "notebook > header > tabs > tab {"
-        "  min-height: 23px;"
+        /* Per-tab colour overrides. Scoped to the editor tab label and
+         * carrying the .tab-color-N class, so their specificity beats the
+         * default #262626 tab-text rule added below. */
+        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-1 { color: #d0a800; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-2 { color: #2ca52c; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-3 { color: #4080ff; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-4 { color: #ff5555; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-5 { color: #a060c0; }\n"
+        /* Editor tab strip geometry. All selectors are scoped to the
+         * editor notebook (.npp-editor-tabs) so Preferences / Plugin Admin
+         * / Find-dialog notebooks keep their default theme tabs.
+         * Inactive tabs sit 3px lower (margin-top) and are 3px shorter
+         * than the active tab — the macOS NppTabBar kActiveBoost.
+         * No bottom margin: every tab sits flush on the header's #cccccc
+         * base line. */
+        "notebook.npp-editor-tabs > header > tabs > tab {"
+        "  min-height: 18px;"
         "  padding-top: 2px;"
         "  padding-bottom: 2px;"
-        "  margin: 0;"
+        "  margin: 3px 0 0 0;"
         "}\n"
-        "notebook > header > tabs > tab button {"
+        "notebook.npp-editor-tabs > header > tabs > tab:checked {"
+        "  min-height: 21px;"
+        "  margin-top: 0;"
+        "}\n"
+        "notebook.npp-editor-tabs > header > tabs > tab button {"
         "  min-height: 0;"
         "  min-width: 0;"
         "  padding: 0;"
         "  margin: 0;"
         "}\n");
 
-    /* Main tab strip empty (header) area — light grey #f0f0f0 to match
-     * the toolbar. Light mode only; dark mode keeps the theme header. */
+    /* macOS NppTabBar styling — light mode only; dark keeps the Yaru
+     * theme tabs. Values mirror NppThemeManager: #f0f0f0 strip, white
+     * active tab with a 3px orange (#fda640) top stripe, grey-gradient
+     * inactive tabs, #949494 border, 3px rounded top corners. */
     GtkSettings *settings = gtk_settings_get_default();
     gboolean dark = FALSE;
     if (settings)
         g_object_get(settings, "gtk-application-prefer-dark-theme", &dark, NULL);
     if (!dark)
         g_string_append(css,
-            "notebook > header { background-color: #f0f0f0; }\n");
+            /* One full-width 1px #cccccc base line under the whole tab
+             * strip. box-shadow:none + border:none strip the theme's own
+             * header/tabs separator. 1px (not 2px): a 2px line shows its
+             * top pixel only in the empty area — where no tab covers it —
+             * which reads as a stray extra line; 1px is uniform. */
+            "notebook.npp-editor-tabs > header {"
+            "  background-color: #f0f0f0;"
+            "  box-shadow: none;"
+            "  border: none;"
+            "  border-bottom: 1px solid #cccccc;"
+            "}\n"
+            "notebook.npp-editor-tabs > header > tabs {"
+            "  box-shadow: none;"
+            "  border: none;"
+            "}\n"
+            /* Default tab text colour (lower specificity than tab-color-N). */
+            "notebook.npp-editor-tabs > header > tabs > tab label { color: #262626; }\n"
+            "notebook.npp-editor-tabs > header > tabs > tab {"
+            "  background-image: linear-gradient(to bottom, #dbdbdb, #cccccc);"
+            "  border: 1px solid #949494;"
+            "  border-bottom: none;"
+            "  border-top-left-radius: 3px;"
+            "  border-top-right-radius: 3px;"
+            "}\n"
+            "notebook.npp-editor-tabs > header > tabs > tab:hover {"
+            "  background-image: linear-gradient(to bottom, #e6e6e6, #dedede);"
+            "}\n"
+            "notebook.npp-editor-tabs > header > tabs > tab:checked {"
+            "  background-image: none;"
+            "  background-color: #ffffff;"
+            "  box-shadow: inset 0 3px 0 0 #fda640;"
+            "}\n");
 
     gtk_css_provider_load_from_data(p, css->str, -1);
     g_string_free(css, TRUE);

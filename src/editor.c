@@ -510,15 +510,16 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
         g_signal_connect(gc, "pressed", G_CALLBACK(on_tab_button_press), sci);
         gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(gc));
     }
-    /* Tab labels: 11pt absolute — kept absolute so the size is stable
-     * across themes/font settings.
+    /* Tab labels: 10pt absolute — kept absolute so the size is stable
+     * across themes/font settings. Text colour is set via CSS
+     * (install_tab_color_css) so the per-tab colour feature still works.
      * Names ≤ 30 chars render unconditionally with no ellipsis; longer
      * names truncate in the middle. */
     int name_len = (int)strlen(buf);
     GtkWidget *label = gtk_label_new(NULL);
     {
         gchar *escaped = g_markup_escape_text(buf, -1);
-        char  *markup  = g_strdup_printf("<span size=\"11pt\">%s</span>", escaped);
+        char  *markup  = g_strdup_printf("<span size=\"10pt\">%s</span>", escaped);
         gtk_label_set_markup(GTK_LABEL(label), markup);
         g_free(markup);
         g_free(escaped);
@@ -596,7 +597,7 @@ static void refresh_tab_label(int page)
      * matches make_tab_label() behaviour above. */
     {
         gchar *escaped = g_markup_escape_text(buf, -1);
-        char  *markup  = g_strdup_printf("<span size=\"11pt\">%s</span>", escaped);
+        char  *markup  = g_strdup_printf("<span size=\"10pt\">%s</span>", escaped);
         gtk_label_set_markup(GTK_LABEL(label), markup);
         g_free(markup);
         g_free(escaped);
@@ -933,6 +934,10 @@ GtkWidget *editor_init(GtkWidget *window)
     stylestore_init(NULL);
     s_window   = window;
     s_notebook = gtk_notebook_new();
+    /* Marks this as the editor notebook so install_tab_color_css() can
+     * scope the macOS tab styling here and not to Preferences / Plugin
+     * Admin / Find dialog notebooks. */
+    gtk_widget_add_css_class(s_notebook, "npp-editor-tabs");
     gtk_notebook_set_scrollable(GTK_NOTEBOOK(s_notebook), TRUE);
     gtk_notebook_set_show_border(GTK_NOTEBOOK(s_notebook), FALSE);
     g_signal_connect(s_notebook, "switch-page", G_CALLBACK(on_switch_page), NULL);
