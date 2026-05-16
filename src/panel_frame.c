@@ -84,6 +84,7 @@ static const char *kFrameCssLight =
     "  min-width: 13px; "
     "  min-height: 13px; "
     "  border: none; "
+    "  border-radius: 0px; "
     "  background: transparent; "
     "}\n"
     ".nextpad-panel-frame-button:hover { "
@@ -124,6 +125,7 @@ static const char *kFrameCssDark =
     "  min-width: 13px; "
     "  min-height: 13px; "
     "  border: none; "
+    "  border-radius: 0px; "
     "  background: transparent; "
     "}\n"
     ".nextpad-panel-frame-button:hover { "
@@ -171,11 +173,15 @@ static void pf_apply_css(GtkWidget *target) {
 
 /* Try to load the project-shipped pop_out / pop_in PNGs. Falls back to
  * stock icons if the asset is missing (e.g. when running from a stripped
- * install). The pop button is 16×16; in either case we set the image
- * pixel size so the icon fits. */
+ * install). The pop button is 13×13 (20% smaller than the former 16×16). */
 #ifndef RESOURCES_DIR
 #  define RESOURCES_DIR "resources"
 #endif
+
+/* Rendered pop-out icon size — 20% smaller than the former 13px. */
+#define PF_POP_ICON_PX 10
+/* Pop-out button box size — 20% smaller than the former 16px. */
+#define PF_POP_BTN_PX  13
 
 static GtkWidget *pf_make_pop_image(gboolean popped) {
     const char *theme_subdir = pf_is_dark() ? "dark" : "standard";
@@ -185,22 +191,29 @@ static GtkWidget *pf_make_pop_image(gboolean popped) {
                "%s/icons/%s/panels/toolbar/%s.png",
                RESOURCES_DIR, theme_subdir, icon_name);
 
-    /* Load the full-resolution (48px) source as a texture and let GtkImage
-     * downsample it once, at device resolution, via set_pixel_size. A
-     * pre-scaled pixbuf becomes a fixed texture the GSK renderer resamples
-     * again at draw time — the soft double-resample we removed elsewhere. */
-    GdkTexture *tex = gdk_texture_new_from_filename(path, NULL);
-    if (tex) {
-        GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
-        g_object_unref(tex);
-        gtk_image_set_pixel_size(GTK_IMAGE(img), 13);
-        return img;
+    /* The source PNG is 48px. Pre-downsample it to the exact target size
+     * with the high-quality HYPER filter, then hand GtkImage a texture
+     * already at the final size — so there is no soft GSK resample at
+     * draw time (a 48->10px GSK downscale renders noticeably blurry). */
+    GdkPixbuf *full = gdk_pixbuf_new_from_file(path, NULL);
+    if (full) {
+        GdkPixbuf *small = gdk_pixbuf_scale_simple(
+            full, PF_POP_ICON_PX, PF_POP_ICON_PX, GDK_INTERP_HYPER);
+        g_object_unref(full);
+        if (small) {
+            GdkTexture *tex = gdk_texture_new_for_pixbuf(small);
+            g_object_unref(small);
+            GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
+            g_object_unref(tex);
+            gtk_image_set_pixel_size(GTK_IMAGE(img), PF_POP_ICON_PX);
+            return img;
+        }
     }
 
     /* Fallback to stock icons. */
     GtkWidget *img = gtk_image_new_from_icon_name(
         popped ? "go-down" : "go-up");
-    gtk_image_set_pixel_size(GTK_IMAGE(img), 13);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), PF_POP_ICON_PX);
     return img;
 }
 
@@ -304,7 +317,7 @@ GtkWidget *panel_frame_new(const char *name,
     st->pop_button = gtk_button_new();
     gtk_button_set_has_frame(GTK_BUTTON(st->pop_button), FALSE);
     gtk_widget_set_focus_on_click(st->pop_button, FALSE);
-    gtk_widget_set_size_request(st->pop_button, 16, 16);
+    gtk_widget_set_size_request(st->pop_button, PF_POP_BTN_PX, PF_POP_BTN_PX);
     gtk_widget_set_valign(st->pop_button, GTK_ALIGN_CENTER);
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->pop_button),
