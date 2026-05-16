@@ -4,7 +4,7 @@
  * GTK3 port of src/PanelFrame.mm. Builds a vertical GtkBox:
  *
  *   ┌────────────────────────────────────────────┐
- *   │ Title              [pop_out]   [ × ]       │  24-px title bar
+ *   │ Title              [pop_out]   [ × ]       │  26-px title bar
  *   ├────────────────────────────────────────────┤  1-px separator
  *   │                                            │
  *   │              content widget                │  fills the rest
@@ -12,7 +12,7 @@
  *   └────────────────────────────────────────────┘
  *
  * Theme: a per-frame GtkCssProvider paints the title bar with a tab-bar
- * style background (hardcoded #F0F0F0 light / #2F2F2F dark — we currently
+ * style background (hardcoded #f0f0f0 light / #2F2F2F dark — we currently
  * have no central NppThemeManager equivalent, so each panel reads the
  * GtkSettings "gtk-application-prefer-dark-theme" hint).
  *
@@ -69,9 +69,9 @@ static PanelFrameState *pf_state(GtkWidget *frame) {
  * can override per-instance without leaking into the global style cascade. */
 static const char *kFrameCssLight =
     ".nextpad-panel-frame-titlebar { "
-    "  background-color: #F0F0F0; "
+    "  background-color: #f0f0f0; "   /* matches the main toolbar background */
     "  border: none; "
-    "  min-height: 24px; "
+    "  min-height: 26px; "
     "}\n"
     ".nextpad-panel-frame-title { "
     "  font-size: 11pt; "
@@ -91,13 +91,27 @@ static const char *kFrameCssLight =
     "}\n"
     ".nextpad-panel-frame-button:active { "
     "  background-color: #CCE8FF; "
+    "}\n"
+    /* Close X button: a permanent 1px square grey border (macOS
+     * _PFCloseButton uses colorWithWhite:0.75), turning toolbar-blue on
+     * hover/press. Declared after -button so its border wins. */
+    ".nextpad-panel-frame-close { "
+    "  border: 1px solid #bfbfbf; "
+    "}\n"
+    ".nextpad-panel-frame-close:hover, .nextpad-panel-frame-close:active { "
+    "  border-color: #d0eaff; "
+    "}\n"
+    /* Hairline dividing the panel title bar from the toolbar/content. */
+    ".nextpad-panel-frame-separator { "
+    "  background-color: #cccccc; "
+    "  min-height: 1px; "
     "}\n";
 
 static const char *kFrameCssDark =
     ".nextpad-panel-frame-titlebar { "
     "  background-color: #2F2F2F; "
     "  border: none; "
-    "  min-height: 24px; "
+    "  min-height: 26px; "
     "}\n"
     ".nextpad-panel-frame-title { "
     "  font-size: 11pt; "
@@ -117,6 +131,18 @@ static const char *kFrameCssDark =
     "}\n"
     ".nextpad-panel-frame-button:active { "
     "  background-color: rgba(255,255,255,0.18); "
+    "}\n"
+    /* Close X button: permanent 1px square border (dark-mode grey). */
+    ".nextpad-panel-frame-close { "
+    "  border: 1px solid #555555; "
+    "}\n"
+    ".nextpad-panel-frame-close:hover, .nextpad-panel-frame-close:active { "
+    "  border-color: #6f8fb0; "
+    "}\n"
+    /* Hairline dividing the panel title bar from the toolbar/content. */
+    ".nextpad-panel-frame-separator { "
+    "  background-color: #444444; "
+    "  min-height: 1px; "
     "}\n";
 
 static gboolean pf_is_dark(void) {
@@ -258,7 +284,7 @@ GtkWidget *panel_frame_new(const char *name,
 
     /* ── Title bar ── */
     st->title_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_size_request(st->title_bar, -1, 24);
+    gtk_widget_set_size_request(st->title_bar, -1, 26);
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->title_bar),
         "nextpad-panel-frame-titlebar");
@@ -302,6 +328,9 @@ GtkWidget *panel_frame_new(const char *name,
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->close_button),
         "nextpad-panel-frame-button");
+    gtk_style_context_add_class(
+        gtk_widget_get_style_context(st->close_button),
+        "nextpad-panel-frame-close");
     pf_apply_css(st->close_button);
     {
         GtkWidget *x_img = gtk_image_new_from_icon_name(
@@ -319,6 +348,10 @@ GtkWidget *panel_frame_new(const char *name,
 
     /* ── Separator ── */
     st->separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_style_context_add_class(
+        gtk_widget_get_style_context(st->separator),
+        "nextpad-panel-frame-separator");
+    pf_apply_css(st->separator);
 
     /* ── Stack: title bar + separator + content. ── */
     npp_box_pack(GTK_BOX(frame), st->title_bar, FALSE, 0);

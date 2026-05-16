@@ -4281,7 +4281,7 @@ static void action_tab_set_color(GSimpleAction *a, GVariant *p, gpointer u) {
 /* Install CSS for tab colours once. */
 static void install_tab_color_css(void) {
     GtkCssProvider *p = gtk_css_provider_new();
-    static const char *css =
+    GString *css = g_string_new(
         ".tab-color-1 { color: #d0a800; }\n"   /* yellow */
         ".tab-color-2 { color: #2ca52c; }\n"   /* green  */
         ".tab-color-3 { color: #4080ff; }\n"   /* blue   */
@@ -4302,8 +4302,20 @@ static void install_tab_color_css(void) {
         "  min-width: 0;"
         "  padding: 0;"
         "  margin: 0;"
-        "}\n";
-    gtk_css_provider_load_from_data(p, css, -1);
+        "}\n");
+
+    /* Main tab strip empty (header) area — light grey #f0f0f0 to match
+     * the toolbar. Light mode only; dark mode keeps the theme header. */
+    GtkSettings *settings = gtk_settings_get_default();
+    gboolean dark = FALSE;
+    if (settings)
+        g_object_get(settings, "gtk-application-prefer-dark-theme", &dark, NULL);
+    if (!dark)
+        g_string_append(css,
+            "notebook > header { background-color: #f0f0f0; }\n");
+
+    gtk_css_provider_load_from_data(p, css->str, -1);
+    g_string_free(css, TRUE);
     gtk_style_context_add_provider_for_display(
         gdk_display_get_default(),
         GTK_STYLE_PROVIDER(p),
@@ -5695,10 +5707,11 @@ static void side_host_bump(GtkWidget *host, int delta) {
         if (paned) {
             GtkAllocation a;
             gtk_widget_get_allocation(paned, &a);
-            /* Right-attached panels get a 200 px default width to match
-             * the macOS NPPSidePanel default (NPPSidePanelHostController.mm).
+            /* Right-attached panels get a 300 px default width (~50% wider
+             * than the macOS NPPSidePanel default) so the panel-frame
+             * pop-out / close buttons aren't clipped on first open.
              * Falls back to half the width when the window is narrow. */
-            int target = a.width > 240 ? a.width - 200 : a.width / 2;
+            int target = a.width > 340 ? a.width - 300 : a.width / 2;
             if (target > 0) gtk_paned_set_position(GTK_PANED(paned), target);
         }
     } else {

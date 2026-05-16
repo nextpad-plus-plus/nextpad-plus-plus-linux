@@ -456,21 +456,32 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
 }
 
 /* ---- Tab save-state floppy icon ----------------------------------- *
- * macOS NppTabBar.mm draws the toolbar saveFile / saveFileRed icons to
- * the left of the tab title at kIconSize*0.704 ≈ 11px. We mirror that:
- * saveFile.png when the doc is saved, the red saveFileRed.png when it
- * carries unsaved changes. The state is shown by the icon, so the title
- * no longer carries a "*" prefix (matches macOS). */
+ * macOS NppTabBar.mm draws the theme toolbar floppy to the left of the
+ * tab title at kIconSize*0.704 ≈ 11px. We mirror that: the normal disk
+ * when saved, the red disk when there are unsaved changes. The floppy
+ * PNGs come from the theme toolbar set — icons/light|dark/toolbar/regular,
+ * matching macOS toolbarIconDir — never the standard/ set. The icon
+ * carries the state, so the title has no "*" prefix (matches macOS). */
 #define TAB_STATUS_ICON_PX 11
+
+static gboolean tab_dark_mode(void)
+{
+    GtkSettings *s = gtk_settings_get_default();
+    gboolean dark = FALSE;
+    if (s) g_object_get(s, "gtk-application-prefer-dark-theme", &dark, NULL);
+    return dark;
+}
 
 static void set_tab_status_icon(GtkWidget *img, gboolean modified)
 {
-    static GdkTexture *t_saved = NULL, *t_unsaved = NULL;
-    GdkTexture **slot = modified ? &t_unsaved : &t_saved;
+    gboolean dark = tab_dark_mode();
+    static GdkTexture *cache[2][2];   /* [dark][modified] */
+    GdkTexture **slot = &cache[dark ? 1 : 0][modified ? 1 : 0];
     if (!*slot) {
-        gchar *p = g_strdup_printf("%s/icons/standard/toolbar/%s",
-                                   RESOURCES_DIR,
-                                   modified ? "saveFileRed.png" : "saveFile.png");
+        gchar *p = g_strdup_printf(
+            "%s/icons/%s/toolbar/regular/%s", RESOURCES_DIR,
+            dark ? "dark" : "light",
+            modified ? "save_off_red.png" : "save_off.png");
         *slot = gdk_texture_new_from_filename(p, NULL);
         g_free(p);
     }
