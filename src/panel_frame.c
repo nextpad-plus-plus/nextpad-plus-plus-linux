@@ -173,15 +173,20 @@ static void pf_apply_css(GtkWidget *target) {
 
 /* Try to load the project-shipped pop_out / pop_in PNGs. Falls back to
  * stock icons if the asset is missing (e.g. when running from a stripped
- * install). The pop button is 13×13 (20% smaller than the former 16×16). */
+ * install). The pop button is 16×16 with a 12px icon — matching the
+ * macOS PanelFrame _PFPopButton (16×16 button, ~13px icon). */
 #ifndef RESOURCES_DIR
 #  define RESOURCES_DIR "resources"
 #endif
 
-/* Rendered pop-out icon size — 20% smaller than the former 13px. */
-#define PF_POP_ICON_PX 10
-/* Pop-out button box size — 20% smaller than the former 16px. */
-#define PF_POP_BTN_PX  13
+/* Pop-out icon: rendered 16×16 (macOS spec). The pop_out/pop_in PNGs are
+ * bilevel 48px; 16 is exactly 48/3, a clean integer downscale (no
+ * fractional-sample blur). */
+#define PF_POP_ICON_PX 16
+/* Pop-out button box size (matches the macOS _PFPopButton). */
+#define PF_POP_BTN_PX  16
+/* Margin around the pop-out button — macOS renders it with a 4pt inset. */
+#define PF_POP_BTN_MARGIN 4
 
 static GtkWidget *pf_make_pop_image(gboolean popped) {
     const char *theme_subdir = pf_is_dark() ? "dark" : "standard";
@@ -192,9 +197,9 @@ static GtkWidget *pf_make_pop_image(gboolean popped) {
                RESOURCES_DIR, theme_subdir, icon_name);
 
     /* The source PNG is 48px. Pre-downsample it to the exact target size
-     * with the high-quality HYPER filter, then hand GtkImage a texture
-     * already at the final size — so there is no soft GSK resample at
-     * draw time (a 48->10px GSK downscale renders noticeably blurry). */
+     * (48/3 = 16, a clean integer ratio) with the high-quality HYPER
+     * filter, then hand GtkImage a texture already at the final size — so
+     * there is no soft GSK resample at draw time. */
     GdkPixbuf *full = gdk_pixbuf_new_from_file(path, NULL);
     if (full) {
         GdkPixbuf *small = gdk_pixbuf_scale_simple(
@@ -313,12 +318,16 @@ GtkWidget *panel_frame_new(const char *name,
         "nextpad-panel-frame-title");
     pf_apply_css(st->title_label);
 
-    /* Pop-out button. */
+    /* Pop-out button — 16×16 with a 4px margin on every side (macOS spec). */
     st->pop_button = gtk_button_new();
     gtk_button_set_has_frame(GTK_BUTTON(st->pop_button), FALSE);
     gtk_widget_set_focus_on_click(st->pop_button, FALSE);
     gtk_widget_set_size_request(st->pop_button, PF_POP_BTN_PX, PF_POP_BTN_PX);
     gtk_widget_set_valign(st->pop_button, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(st->pop_button,    PF_POP_BTN_MARGIN);
+    gtk_widget_set_margin_bottom(st->pop_button, PF_POP_BTN_MARGIN);
+    gtk_widget_set_margin_start(st->pop_button,  PF_POP_BTN_MARGIN);
+    gtk_widget_set_margin_end(st->pop_button,    PF_POP_BTN_MARGIN);
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->pop_button),
         "nextpad-panel-frame-button");
