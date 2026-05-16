@@ -1,0 +1,52 @@
+Nextpad++ Linux port — Third-party file attributions
+======================================================
+
+This directory contains files grafted from notetux-plus-plus
+(https://github.com/notetux-plus-plus/notetux-plus-plus), Copyright (C) 2026
+Andrea Coi, used under the GNU General Public License version 3.
+
+Grafted files (kept identical to their notetux origin where indicated; minor
+edits noted per file in PHASE_PLAN.md):
+
+  src/sci_c.h               — notetux/linux/src/sci_c.h
+  src/lexilla_bridge.cpp    — notetux/linux/src/lexilla_bridge.cpp
+
+Phase G2+ additions will also graft:
+
+  src/stylestore.{c,h}      — notetux/linux/src/stylestore.{c,h}
+  src/lexer.{c,h}           — notetux/linux/src/lexer.{c,h}
+  src/udl.{c,h}             — notetux/linux/src/udl.{c,h}
+  src/macro.{c,h}           — notetux/linux/src/macro.{c,h}
+  src/i18n.{c,h}            — notetux/linux/src/i18n.{c,h}
+  src/session.{c,h}         — notetux/linux/src/session.{c,h}
+  src/backup.{c,h}          — notetux/linux/src/backup.{c,h}
+  src/autocomplete.{c,h}    — notetux/linux/src/autocomplete.{c,h}
+  src/encoding.{c,h}        — notetux/linux/src/encoding.{c,h}
+
+… and additional files identified in docs/PHASE_PLAN.md as direct grafts.
+
+Branding patches
+----------------
+
+The grafted notetux files reference "Notetux++" in window titles and
+"~/.config/notetux" for user config directories. We rebranded these in our
+fork via `src/branding.h` (single source of truth) plus minimal edits to:
+
+  src/editor.c       — APP_NAME in window title strings (lines ~314, ~316)
+  src/stylestore.c   — APP_CONFIG_DIR for user stylers.xml (lines ~352–357, ~385)
+  src/udl.c          — APP_CONFIG_DIR for user UDL directory (line ~491)
+
+When Andrea Coi merges this codebase upstream, flipping `branding.h` reverts
+to "Notetux++" / "notetux" with no other changes needed.
+
+Vendored libraries (symlinked from the macOS port at ../notepad-plus-plus-macos/):
+
+  scintilla/   — Scintilla editing component
+                 https://www.scintilla.org/, public domain / Henry-style license
+  lexilla/     — Lexilla syntax-highlighting library
+                 https://www.scintilla.org/Lexilla.html
+  resources/   — themes, icons, language definitions, localisation XML
+                 © Andrey Letov, GPL-3
+
+The Nextpad++ Linux port itself is distributed under GPL-3, the same license
+as the macOS port and as notetux-plus-plus.

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.nextpad.NextpadPP</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Nextpad++</name>
+  <summary>Native Linux port of Notepad++</summary>
+
+  <description>
+    <p>
+      Nextpad++ is a multi-tab text editor for Linux, ported from the
+      macOS Nextpad++ codebase (which is in turn a native port of the
+      Windows Notepad++). Built on Scintilla and Lexilla with GTK 3.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Multi-tab editing with drag-to-reorder, pinning, and per-tab settings</li>
+      <li>Syntax highlighting for 50+ languages via Lexilla</li>
+      <li>User-defined language (UDL) support</li>
+      <li>Find / Replace / Find in Files with regex support</li>
+      <li>Macro recording and playback</li>
+      <li>Session save/restore + auto-backup</li>
+      <li>Multiple side panels: Document List, Function List, Document Map, Folder-as-Workspace, Search Results, Character Panel, Clipboard History, Project</li>
+      <li>Bookmark margin + 5-colour mark/style system</li>
+      <li>Command Palette (Ctrl+Shift+P) — fuzzy command finder</li>
+      <li>Smart Highlight + Brace Matching</li>
+      <li>Hash generators (MD5, SHA-1, SHA-256, SHA-512) and MIME tools (Base64, ASCII↔Hex)</li>
+      <li>Plugin system compatible with the Notepad++ for macOS plugin SDK</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">org.nextpad.NextpadPP.desktop</launchable>
+
+  <url type="homepage">https://nextpad.org</url>
+  <url type="bugtracker">https://github.com/nextpad-plus-plus/nextpad-plus-plus/issues</url>
+  <url type="vcs-browser">https://github.com/nextpad-plus-plus/nextpad-plus-plus</url>
+
+  <developer_name>Andrey Letov + Andrea Coi</developer_name>
+
+  <categories>
+    <category>Utility</category>
+    <category>TextEditor</category>
+    <category>Development</category>
+  </categories>
+
+  <keywords>
+    <keyword>text</keyword>
+    <keyword>editor</keyword>
+    <keyword>notepad</keyword>
+    <keyword>code</keyword>
+    <keyword>scintilla</keyword>
+  </keywords>
+
+  <provides>
+    <binary>nextpad-plus-plus</binary>
+  </provides>
+
+  <releases>
+    <release version="1.0.6" date="2026-05-13">
+      <description>
+        <p>Initial Linux release. Multi-tab editing, full find/replace, side panels, macros, plugin SDK, command palette.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+</component>

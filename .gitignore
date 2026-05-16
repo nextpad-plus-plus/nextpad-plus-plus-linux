@@ -1,0 +1,33 @@
+# CMake / build artefacts
+build/
+docs/
+scintilla/
+scintilla-patches/
+tmp/
+build-*/
+.cache/
+
+# Compiled objects + binaries
+*.o
+*.a
+*.so
+*.dylib
+nextpad-plus-plus
+Nextpad++
+
+# Tooling / IDE
+compile_commands.json
+.vscode/
+.idea/
+.claude/
+
+# Ad-hoc / scratch
+*.orig
+*.swp
+.DS_Store
+
+# Scintilla GTK4 build artifacts
+scintilla/bin/
+scintilla/gtk4/*.o
+scintilla/gtk4/ScintillaEnums.[ch]
+scintilla/gtk4/scintilla-marshal.[ch]

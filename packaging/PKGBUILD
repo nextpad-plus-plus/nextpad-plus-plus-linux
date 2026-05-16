@@ -1,0 +1,23 @@
+# Maintainer: Andrey Letov <aletik@gmail.com>
+pkgname=nextpad-plus-plus
+pkgver=1.0.6
+pkgrel=1
+pkgdesc="Multi-tab text editor (Linux port of Notepad++)"
+arch=('x86_64' 'aarch64')
+url="https://nextpad.org"
+license=('GPL3')
+depends=('gtk3' 'glib2')
+makedepends=('cmake' 'pkgconf')
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/nextpad-plus-plus/nextpad-plus-plus/archive/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cmake -B build -S "${pkgname}-${pkgver}" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+
+package() {
+    DESTDIR="${pkgdir}" cmake --install build
+}

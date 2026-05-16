@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Nextpad++</string>
+    <key>CFBundleDisplayName</key>
+    <string>Nextpad++</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.nextpadplusplus.mac</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.6</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.6</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleExecutable</key>
+    <string>Nextpad++</string>
+    <key>NSPrincipalClass</key>
+    <string>NppApplication</string>
+    <key>CFBundleIconFile</key>
+    <string>npp</string>
+    <key>LSHasLocalizedDisplayName</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Nextpad++ needs access to open and edit files in Downloads.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Nextpad++ needs access to open and edit files on Desktop.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Nextpad++ needs access to open and edit files in Documents.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Nextpad++ needs access to open and edit files on external drives.</string>
+    <!-- File-type associations.
+         LSHandlerRank=Alternate means we appear in right-click → Open With…
+         submenu but never automatically take over a file type a user already
+         has a default for. Bumping to Default in v1.0.7 will turn on Nextpad++
+         doc-icon overlay (CotEditor pattern) — see the rebrand notes.
+         TypeScript (.ts) is intentionally OMITTED: Apple's UTI for it is
+         public.mpeg-2-transport-stream (a video format), so listing it would
+         advertise Nextpad++ as a video opener.
+    -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Text Document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <!-- Generic text -->
+                <string>public.text</string>
+                <string>public.plain-text</string>
+                <string>public.source-code</string>
+                <string>public.script</string>
+
+                <!-- Markup / structured data -->
+                <string>net.daringfireball.markdown</string>
+                <string>public.html</string>
+                <string>public.xml</string>
+                <string>public.css</string>
+                <string>public.json</string>
+                <string>public.yaml</string>
+                <string>public.toml</string>
+                <string>public.svg-image</string>
+                <string>public.patch-file</string>
+                <string>com.textpattern.textile</string>
+                <string>org.python.restructuredtext</string>
+
+                <!-- Shell / scripting -->
+                <string>public.shell-script</string>
+                <string>public.python-script</string>
+                <string>public.perl-script</string>
+                <string>public.ruby-script</string>
+                <string>public.php-script</string>
+                <string>com.netscape.javascript-source</string>
+
+                <!-- Compiled / typed languages -->
+                <string>public.c-source</string>
+                <string>public.c-header</string>
+                <string>public.c-plus-plus-source</string>
+                <string>public.c-plus-plus-header</string>
+                <string>public.objective-c-source</string>
+                <string>public.objective-c-plus-plus-source</string>
+                <string>public.swift-source</string>
+                <string>public.assembly-source</string>
+                <string>public.fortran-source</string>
+                <string>com.microsoft.c-sharp</string>
+                <string>com.sun.java-source</string>
+                <string>dev.dart.dart-script</string>
+                <string>org.golang.go-script</string>
+                <string>org.rust-lang.rust-script</string>
+                <string>org.haskell.haskell-script</string>
+                <string>org.julia.julia-script</string>
+                <string>org.kotlinlang.source</string>
+                <string>org.lua.lua-source</string>
+                <string>org.scala-lang.scala-source</string>
+                <string>org.dlang.d-source</string>
+
+                <!-- Other common -->
+                <string>com.microsoft.ini</string>
+                <string>org.iso.sql</string>
+                <string>org.tug.tex</string>
+                <string>org.tug.bibtex.bib</string>
+            </array>
+        </dict>
+        <!-- Folder drops — for Open Folder as Workspace -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Folder</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.folder</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

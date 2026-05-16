@@ -1,0 +1,59 @@
+.TH NEXTPAD-PLUS-PLUS 1 "2026-05-13" "1.0.6" "User Commands"
+.SH NAME
+nextpad-plus-plus \- multi-tab text editor (Linux port of Notepad++)
+.SH SYNOPSIS
+.B nextpad-plus-plus
+.RI [ OPTIONS ]
+.RI [ FILE ...]
+.SH DESCRIPTION
+.B nextpad-plus-plus
+is a native Linux port of the Notepad++ text editor, built on Scintilla
+and Lexilla with GTK 3. It supports multi-tab editing, syntax
+highlighting for 50+ languages, user-defined languages, find/replace
+with regex, macro recording, session save/restore, auto-backup, and a
+plugin system compatible with the Notepad++ for macOS plugin SDK.
+.SH OPTIONS
+.TP
+.B \-l \fIN\fR
+Open the file at line \fIN\fR (1-based).
+.TP
+.B \-c \fIN\fR
+Position the caret at column \fIN\fR (1-based; combine with \-l).
+.TP
+.B \-p \fIN\fR
+Position the caret at byte offset \fIN\fR.
+.TP
+.B \-lang \fINAME\fR
+Force a specific language (lexer) for the opened file.
+.TP
+.B \-udl \fINAME\fR
+Force a user-defined language by name.
+.TP
+.B \-ro
+Open the file read-only.
+.TP
+.B \-monitor
+Tail-f mode \- auto-reload the file on every external change without prompting.
+.SH "KEYBOARD SHORTCUTS"
+File operations follow standard conventions (Ctrl+N, Ctrl+O, Ctrl+S,
+Ctrl+W, Ctrl+Q). See the View > Command Palette menu (Ctrl+Shift+P) for
+the full action list.
+.SH FILES
+.TP
+.I ~/.config/nextpad-plus-plus/
+User configuration directory: session.xml, recentfiles.txt, backup/,
+stylers.xml, userDefineLangs/, plugins/.
+.SH SEE ALSO
+The Notepad++ User Manual at https://npp-user-manual.org/.
+.SH AUTHORS
+Andrey Letov (macOS port; copyright 2026).
+.br
+Andrea Coi (notetux-plus-plus Linux foundation, grafted under GPL-3).
+.SH "REPORTING BUGS"
+Please report bugs at https://github.com/nextpad-plus-plus/nextpad-plus-plus/issues.
+.SH COPYRIGHT
+Copyright (C) 2026 Andrey Letov.
+.br
+Licensed under the GNU General Public License version 3 or later.
+.SH HOMEPAGE
+.B https://nextpad.org

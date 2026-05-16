@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Nextpad++
+GenericName=Text Editor
+Comment=A native Linux port of Notepad++ — multi-tab text editor
+Exec=Nextpad++ %F
+Icon=nextpad-plus-plus
+Terminal=false
+Categories=Utility;TextEditor;Development;
+StartupNotify=true
+StartupWMClass=Nextpad++
+Keywords=Text;Editor;Plaintext;Code;
+MimeType=text/plain;text/x-c;text/x-c++;text/x-csrc;text/x-chdr;text/x-c++src;text/x-c++hdr;text/x-python;text/x-shellscript;text/x-perl;text/x-ruby;text/x-php;text/x-java;text/x-csharp;text/x-go;text/x-rust;text/x-lua;text/x-tcl;text/x-pascal;text/x-fortran;text/x-cobol;text/x-asm;text/x-makefile;text/x-cmake;text/markdown;text/html;text/css;text/xml;text/x-yaml;text/x-toml;text/x-ini;application/json;application/x-shellscript;application/x-perl;application/javascript;application/sql;application/xml;application/xhtml+xml;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=Open New Window
+Exec=Nextpad++

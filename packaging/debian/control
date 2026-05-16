@@ -1,0 +1,27 @@
+Source: nextpad-plus-plus
+Section: editors
+Priority: optional
+Maintainer: Andrey Letov <aletik@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.20),
+               pkg-config,
+               libgtk-3-dev,
+               libglib2.0-dev
+Standards-Version: 4.6.0
+Homepage: https://nextpad.org
+Vcs-Browser: https://github.com/nextpad-plus-plus/nextpad-plus-plus
+Vcs-Git: https://github.com/nextpad-plus-plus/nextpad-plus-plus.git
+
+Package: nextpad-plus-plus
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends}
+Description: Multi-tab text editor (Linux port of Notepad++)
+ Nextpad++ is a native Linux port of the Notepad++ text editor, built
+ on Scintilla and Lexilla with GTK 3. It supports multi-tab editing,
+ syntax highlighting for 50+ languages, user-defined languages,
+ find/replace with regex, macro recording, session save/restore,
+ auto-backup, side panels (Document List, Function List, Document Map,
+ Folder Tree, Search Results, Character Panel, Clipboard History,
+ Project), bookmark margin, 5-colour mark/style system, command
+ palette, and a plugin SDK compatible with Notepad++ for macOS.
