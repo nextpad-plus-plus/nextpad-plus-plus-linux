@@ -4324,20 +4324,26 @@ static void install_tab_color_css(void) {
         g_object_get(settings, "gtk-application-prefer-dark-theme", &dark, NULL);
     if (!dark)
         g_string_append(css,
-            /* One full-width 1px #cccccc base line under the whole tab
-             * strip. box-shadow:none + border:none strip the theme's own
-             * header/tabs separator. 1px (not 2px): a 2px line shows its
-             * top pixel only in the empty area — where no tab covers it —
-             * which reads as a stray extra line; 1px is uniform. */
+            /* The #cccccc base line is a border-top on the content
+             * (stack) node, NOT a border on the header. The tabs are the
+             * header's children and draw on top of the header's own
+             * border, so a header border-bottom is covered wherever a tab
+             * sits — only the empty area showed it. The stack is a sibling
+             * laid out below the header, so the tabs cannot paint over its
+             * border-top: the line then runs full width under every tab
+             * and the empty area. box-shadow/border:none strip the theme's
+             * own header/tabs separators so only this line shows. */
             "notebook.npp-editor-tabs > header {"
             "  background-color: #f0f0f0;"
             "  box-shadow: none;"
             "  border: none;"
-            "  border-bottom: 1px solid #cccccc;"
             "}\n"
             "notebook.npp-editor-tabs > header > tabs {"
             "  box-shadow: none;"
             "  border: none;"
+            "}\n"
+            "notebook.npp-editor-tabs > stack {"
+            "  border-top: 1px solid #cccccc;"
             "}\n"
             /* Default tab text colour (lower specificity than tab-color-N). */
             "notebook.npp-editor-tabs > header > tabs > tab label { color: #262626; }\n"
