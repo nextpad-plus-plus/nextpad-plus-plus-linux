@@ -5889,6 +5889,9 @@ static void build_main_window(GtkApplication *app)
     GtkWidget *sresults_frame  = sresults
         ? panel_frame_new("searchresults", "Search results", sresults,
                           sresults_panel_close, NULL) : NULL;
+    /* The Search Results panel has no floating counterpart on macOS —
+     * only the close × is wired; hide the detach button. */
+    if (sresults_frame) panel_frame_set_detachable(sresults_frame, FALSE);
     GtkWidget *doclist_frame   = doclist
         ? panel_frame_new("doclist",   "Document List",  doclist,   NULL, NULL) : NULL;
     GtkWidget *workspace_frame = workspace
@@ -6072,7 +6075,7 @@ static void build_main_window(GtkApplication *app)
     if (doclist_frame)   floating_register("doclist",       doclist_frame);
     if (funclist_frame)  floating_register("funclist",      funclist_frame);
     if (docmap_frame)    floating_register("docmap",        docmap_frame);
-    if (sresults_frame)  floating_register("searchresults", sresults_frame);
+    /* searchresults: not registered — no detach button (see above). */
     if (gitpanel_frame)  floating_register("gitpanel",      gitpanel_frame);
     if (mdpanel_frame)   floating_register("mdpreview",     mdpanel_frame);
 

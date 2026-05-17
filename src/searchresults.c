@@ -633,39 +633,43 @@ void searchresults_end(int total_hits, int total_files)
     SR_SEND(SCI_SCROLLCARET, 0, 0);
 }
 
-/* Idle callback: set paned position once after layout pass completes. */
+/* Pending divider-position idle id, so a stale one can't fight a close. */
+static guint s_pos_idle = 0;
+
+/* One-shot: give the panel a sensible slice of the vpaned once it has
+ * been allocated. Never returns G_SOURCE_CONTINUE — no busy-looping. */
 static gboolean set_initial_paned_pos(gpointer data)
 {
     GtkWidget *paned = data;
-    int total = gtk_widget_get_allocated_height(paned);
-    if (total > 200) {
-        gtk_paned_set_position(GTK_PANED(paned), total - 200);
-        return G_SOURCE_REMOVE;
+    s_pos_idle = 0;
+    if (GTK_IS_PANED(paned)) {
+        int total = gtk_widget_get_height(paned);
+        if (total > 240)
+            gtk_paned_set_position(GTK_PANED(paned), total - 200);
+        else if (total > 0)
+            gtk_paned_set_position(GTK_PANED(paned), total / 2);
     }
-    GtkWidget *top = gtk_widget_get_toplevel(paned);
-    if (top && GTK_IS_WINDOW(top)) {
-        int h = gtk_widget_get_allocated_height(top);
-        if (h > 300) {
-            gtk_paned_set_position(GTK_PANED(paned), h - 240);
-            return G_SOURCE_REMOVE;
-        }
-    }
-    return G_SOURCE_CONTINUE;
+    return G_SOURCE_REMOVE;
 }
 
 void searchresults_set_visible(gboolean v)
 {
     if (!s_panel) return;
+    /* s_panel → frame (panel_frame GtkBox) → vpaned (GtkPaned). */
     GtkWidget *frame = gtk_widget_get_parent(s_panel);
     GtkWidget *paned = frame ? gtk_widget_get_parent(frame) : NULL;
+
     if (v) {
-        gtk_widget_show_all(s_panel);
-        if (frame) gtk_widget_show(frame);
-        if (paned && GTK_IS_PANED(paned))
-            g_idle_add(set_initial_paned_pos, paned);
+        gtk_widget_set_visible(s_panel, TRUE);
+        if (frame) gtk_widget_set_visible(frame, TRUE);
+        if (paned && GTK_IS_PANED(paned) && s_pos_idle == 0)
+            s_pos_idle = g_idle_add(set_initial_paned_pos, paned);
     } else {
-        if (frame) gtk_widget_hide(frame);
-        gtk_widget_hide(s_panel);
+        /* Drop any pending position idle first — otherwise it could fire
+         * after the close and re-open the divider. */
+        if (s_pos_idle) { g_source_remove(s_pos_idle); s_pos_idle = 0; }
+        gtk_widget_set_visible(s_panel, FALSE);
+        if (frame) gtk_widget_set_visible(frame, FALSE);
         /* Collapse the divider so the editor reclaims the full height. */
         if (paned && GTK_IS_PANED(paned)) {
             int total = gtk_widget_get_height(paned);

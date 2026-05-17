@@ -36,4 +36,9 @@ void panel_frame_set_title(GtkWidget *frame, const char *title);
  * (collapse chrome to 0) and docking back (restore). */
 void panel_frame_set_chrome_visible(GtkWidget *frame, gboolean visible);
 
+/* Show or hide the detach (pop-out) button. Panels with no floating
+ * counterpart (e.g. Search Results, matching macOS) hide it; the close ×
+ * stays. Panels are detachable by default. */
+void panel_frame_set_detachable(GtkWidget *frame, gboolean detachable);
+
 #endif /* PANEL_FRAME_H */

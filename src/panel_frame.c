@@ -468,3 +468,10 @@ void panel_frame_set_chrome_visible(GtkWidget *frame, gboolean visible) {
     gtk_widget_set_visible(st->title_bar, visible);
     gtk_widget_set_visible(st->separator, visible);
 }
+
+void panel_frame_set_detachable(GtkWidget *frame, gboolean detachable) {
+    g_return_if_fail(GTK_IS_WIDGET(frame));
+    PanelFrameState *st = pf_state(frame);
+    if (!st || !st->pop_button) return;
+    gtk_widget_set_visible(st->pop_button, detachable);
+}
