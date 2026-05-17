@@ -27,7 +27,12 @@
 /* ------------------------------------------------------------------ */
 /* Module state                                                        */
 /* ------------------------------------------------------------------ */
-static GtkWidget *s_notebook;
+static GtkWidget *s_notebook;          /* primary editor view              */
+static GtkWidget *s_notebook_v;        /* secondary vertical (right) view   */
+static GtkWidget *s_notebook_h;        /* secondary horizontal (bottom) view*/
+static GtkWidget *s_split_v;           /* GtkPaned H-orient: primary | secV */
+static GtkWidget *s_split_h;           /* GtkPaned V-orient: (split_v) / secH*/
+static GtkWidget *s_active_notebook;   /* notebook of the focused view (#3) */
 static GtkWidget *s_window;
 
 /* GTK4: each notebook page is a GtkScrolledWindow wrapping the ScintillaView.
@@ -1056,8 +1061,21 @@ GtkWidget *editor_init(GtkWidget *window)
      * every launch. Toggled via editor_incr_search_show / _close (Ctrl+I). */
     gtk_widget_set_visible(s_search_bar, FALSE);
 
+    /* Split-view scaffolding (#3 — mirrors macOS hSplit{ vSplit{ primary |
+     * secV }, secH }). The primary notebook is the start child of a
+     * horizontal GtkPaned, which is the start child of a vertical GtkPaned.
+     * Until a split is created the panes have only a start child, so this
+     * renders identically to a bare notebook — zero regression unsplit. */
+    s_split_v = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_paned_set_start_child(GTK_PANED(s_split_v), s_notebook);
+    gtk_paned_set_resize_start_child(GTK_PANED(s_split_v), TRUE);
+    s_split_h = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
+    gtk_paned_set_start_child(GTK_PANED(s_split_h), s_split_v);
+    gtk_paned_set_resize_start_child(GTK_PANED(s_split_h), TRUE);
+    s_active_notebook = s_notebook;
+
     s_editor_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    npp_box_pack(GTK_BOX(s_editor_container), s_notebook, TRUE, 0);
+    npp_box_pack(GTK_BOX(s_editor_container), s_split_h, TRUE, 0);
     npp_box_pack(GTK_BOX(s_editor_container), s_search_bar, FALSE, 0);
     return s_editor_container;
 }
