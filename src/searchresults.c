@@ -430,14 +430,17 @@ static void sr_apply_fold_style(void)
 {
     stylestore_apply_fold_marks(s_sci);
     SR_SEND(SCI_MARKERENABLEHIGHLIGHT, 0, 0);
-    /* Scintilla's SC_MARK_BOXMINUS glyph always fills a connector stub
-     * below the box with the marker's BACK colour (LineMarker.cxx). Pin
-     * BACK and the fold-margin colour to the same value so that stub
-     * blends into the margin and leaves no visible line leftover. */
-    SR_SEND(SCI_SETFOLDMARGINCOLOUR,   1, 0xE9E9E9);
-    SR_SEND(SCI_SETFOLDMARGINHICOLOUR, 1, 0xE9E9E9);
-    for (int mn = SC_MARKNUM_FOLDEREND; mn <= SC_MARKNUM_FOLDEROPEN; mn++)
-        SR_SEND(SCI_MARKERSETBACK, mn, 0xE9E9E9);
+    /* macOS-style fold marks: a crisp box with a black border and black
+     * +/- glyph on a white interior. In this Scintilla's LineMarker.cxx
+     * the box FILL is the marker FORE colour and the box BORDER + glyph
+     * are the BACK colour — so FORE = white, BACK = black. (The BoxMinus
+     * down-connector stub is dropped by an NPP Scintilla patch.) */
+    SR_SEND(SCI_SETFOLDMARGINCOLOUR,   1, 0xF2F2F2);
+    SR_SEND(SCI_SETFOLDMARGINHICOLOUR, 1, 0xF2F2F2);
+    for (int mn = SC_MARKNUM_FOLDEREND; mn <= SC_MARKNUM_FOLDEROPEN; mn++) {
+        SR_SEND(SCI_MARKERSETFORE, mn, 0xFFFFFF);  /* box interior */
+        SR_SEND(SCI_MARKERSETBACK, mn, 0x000000);  /* border + glyph */
+    }
 }
 
 static void sr_setup_sci(void)
