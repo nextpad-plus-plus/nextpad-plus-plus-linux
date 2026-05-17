@@ -32,6 +32,7 @@
 #include "floating.h"
 
 #include <string.h>
+#include <gdk/gdkkeysyms.h>
 
 /* ─────────────────────────────────────────────────────────────────────── */
 /* Per-frame state                                                        */
@@ -48,12 +49,16 @@ typedef struct {
     GtkWidget *content;
     void     (*on_close)(GtkWidget *frame, gpointer user);
     gpointer   on_close_user;
+    int             zoom;       /* per-panel zoom level, steps from 0     */
+    GtkCssProvider *zoom_css;   /* font-size scaler, scoped to content    */
 } PanelFrameState;
 
 #define PF_STATE_KEY "nextpad-panel-frame-state"
 
 static void pf_state_free(gpointer p) {
-    g_free(p);
+    PanelFrameState *st = p;
+    if (st->zoom_css) g_object_unref(st->zoom_css);
+    g_free(st);
 }
 
 static PanelFrameState *pf_state(GtkWidget *frame) {
@@ -277,6 +282,47 @@ static void on_content_hide(GtkWidget *content, gpointer ud) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────── */
+/* Panel content zoom — Ctrl +/- / Ctrl 0                                 */
+/*                                                                         */
+/* Every panel routes through panel_frame_new(), so wiring the zoom here    */
+/* gives ALL panels the shortcut for free. Each panel keeps its OWN zoom    */
+/* level (macOS behaviour): the CSS provider is scoped to that panel's      */
+/* content style context, so font-size scales just that panel — its         */
+/* labels and tree/list cell text. Ctrl +/-/0 act on the focused panel.    */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+static void pf_apply_zoom(PanelFrameState *st)
+{
+    if (st->zoom < -4) st->zoom = -4;   /* clamp: 60% … 200% */
+    if (st->zoom > 10) st->zoom = 10;
+    char css[128];
+    g_snprintf(css, sizeof(css),
+               ".npp-panel-content { font-size: %d%%; }\n",
+               100 + st->zoom * 10);
+    gtk_css_provider_load_from_data(st->zoom_css, css, -1);
+}
+
+/* Ctrl + / Ctrl - / Ctrl 0 — added per frame; acts on that frame only. */
+static gboolean pf_on_key(GtkEventControllerKey *ctl, guint keyval,
+                          guint keycode, GdkModifierType state, gpointer u)
+{
+    (void)keycode; (void)u;
+    if (!(state & GDK_CONTROL_MASK)) return FALSE;
+    GtkWidget *frame = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(ctl));
+    PanelFrameState *st = pf_state(frame);
+    if (!st || !st->zoom_css) return FALSE;
+    switch (keyval) {
+    case GDK_KEY_plus:  case GDK_KEY_equal:  case GDK_KEY_KP_Add:
+        st->zoom++;   pf_apply_zoom(st); return TRUE;
+    case GDK_KEY_minus: case GDK_KEY_KP_Subtract:
+        st->zoom--;   pf_apply_zoom(st); return TRUE;
+    case GDK_KEY_0:     case GDK_KEY_KP_0:
+        st->zoom = 0; pf_apply_zoom(st); return TRUE;
+    }
+    return FALSE;
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
 /* Construction                                                           */
 /* ─────────────────────────────────────────────────────────────────────── */
 
@@ -382,6 +428,20 @@ GtkWidget *panel_frame_new(const char *name,
      * the wrapper in lock-step with the content widget. */
     g_signal_connect(content, "show", G_CALLBACK(on_content_show), frame);
     g_signal_connect(content, "hide", G_CALLBACK(on_content_hide), frame);
+
+    /* Per-panel content zoom (Ctrl +/-/0): a CSS provider scoped to THIS
+     * panel's content, so each panel keeps an independent zoom level. */
+    st->zoom     = 0;
+    st->zoom_css = gtk_css_provider_new();
+    gtk_widget_add_css_class(content, "npp-panel-content");
+    gtk_style_context_add_provider(gtk_widget_get_style_context(content),
+                                   GTK_STYLE_PROVIDER(st->zoom_css),
+                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    {
+        GtkEventController *kc = gtk_event_controller_key_new();
+        g_signal_connect(kc, "key-pressed", G_CALLBACK(pf_on_key), NULL);
+        gtk_widget_add_controller(frame, kc);
+    }
 
     /* Sync the frame to the content's CURRENT visibility. Several panel
      * modules hide their content inside their own _init() (e.g. docmap,

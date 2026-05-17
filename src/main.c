@@ -5805,6 +5805,14 @@ static gboolean on_window_delete(GtkWindow *w, gpointer ud)
     return TRUE;
 }
 
+/* Search Results panel-frame close (× in its title bar): route to the
+ * panel's own hide so the paned divider collapses cleanly. */
+static void sresults_panel_close(GtkWidget *frame, gpointer user)
+{
+    (void)frame; (void)user;
+    searchresults_set_visible(FALSE);
+}
+
 static void build_main_window(GtkApplication *app)
 {
     g_window = GTK_APPLICATION_WINDOW(gtk_application_window_new(app));
@@ -5879,7 +5887,8 @@ static void build_main_window(GtkApplication *app)
      * call below. Wrapping is opt-in per panel — searchresults lives in
      * its own vpaned slot and still gets a frame so its chrome matches. */
     GtkWidget *sresults_frame  = sresults
-        ? panel_frame_new("searchresults", "Search results", sresults, NULL, NULL) : NULL;
+        ? panel_frame_new("searchresults", "Search results", sresults,
+                          sresults_panel_close, NULL) : NULL;
     GtkWidget *doclist_frame   = doclist
         ? panel_frame_new("doclist",   "Document List",  doclist,   NULL, NULL) : NULL;
     GtkWidget *workspace_frame = workspace
@@ -5984,6 +5993,21 @@ static void build_main_window(GtkApplication *app)
             GtkWidget *menubar = gtk_popover_menu_bar_new_from_model(mbmodel);
             npp_box_pack(GTK_BOX(vbox), menubar, FALSE, 0);
         }
+        /* Tighten the menu-bar dropdowns 20%. GTK4's default is
+         * `popover.menu modelbutton { min-height: 30px; padding: 0 12px }`
+         * — the row height is set purely by min-height (vertical padding
+         * is 0), so 30 -> 24px is a 20% trim. Scoped to popover.menu, so
+         * context-menu popovers are untouched. */
+        GtkCssProvider *menu_css = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(menu_css,
+            "popover.menu modelbutton {"
+            "  min-height: 24px;"
+            "}\n", -1);
+        gtk_style_context_add_provider_for_display(
+            gdk_display_get_default(),
+            GTK_STYLE_PROVIDER(menu_css),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_unref(menu_css);
     }
 
     if (toolbar)   npp_box_pack(GTK_BOX(vbox), toolbar, FALSE, 0);
@@ -6174,10 +6198,13 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.macro-start",  "<Primary>F8");
     set_accel(app, "app.macro-stop",   "<Primary>F9");
     set_accel(app, "app.macro-play",   "<Primary>F10");
-    /* G11 accelerators */
-    set_accel(app, "app.zoom-in",      "<Primary>plus");
-    set_accel(app, "app.zoom-out",     "<Primary>minus");
-    set_accel(app, "app.zoom-reset",   "<Primary>0");
+    /* G11 accelerators.
+     * Zoom (Ctrl +/-/0) is intentionally NOT a global accelerator: it must
+     * act on whatever is focused — the editor or a panel. A window-level
+     * accelerator always wins over a focused widget, and "<Primary>plus"
+     * never matches the real keystroke (Ctrl+Shift+= on most layouts).
+     * Editor zoom is handled by a key controller on the Scintilla view
+     * (editor.c); panel zoom by one in panel_frame.c. */
     set_accel(app, "app.word-wrap",    "<Primary><Alt>w");
     set_accel(app, "app.fullscreen",   "F11");
     set_accel(app, "app.tab-next",     "<Primary>Page_Down");

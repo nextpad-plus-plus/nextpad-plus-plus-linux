@@ -118,6 +118,14 @@ static inline void npp_container_remove(GtkWidget *parent, GtkWidget *child)
     else if (GTK_IS_LIST_BOX(parent)) gtk_list_box_remove(GTK_LIST_BOX(parent), child);
     else if (GTK_IS_FLOW_BOX(parent)) gtk_flow_box_remove(GTK_FLOW_BOX(parent), child);
     else if (GTK_IS_FIXED(parent))    gtk_fixed_remove(GTK_FIXED(parent), child);
+    else if (GTK_IS_PANED(parent)) {
+        /* A GtkPaned child must be detached via the paned API — a bare
+         * gtk_widget_unparent() corrupts the paned's start/end bookkeeping. */
+        if (gtk_paned_get_start_child(GTK_PANED(parent)) == child)
+            gtk_paned_set_start_child(GTK_PANED(parent), NULL);
+        else if (gtk_paned_get_end_child(GTK_PANED(parent)) == child)
+            gtk_paned_set_end_child(GTK_PANED(parent), NULL);
+    }
     else                              gtk_widget_unparent(child);
 }
 #define gtk_container_remove(p, c)  npp_container_remove(GTK_WIDGET(p), (c))

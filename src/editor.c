@@ -230,6 +230,32 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
     npp_menu_popup_at(menu, w, x, y);
 }
 
+/* Editor zoom — Ctrl +/-/0 on the focused editor. A key controller (not a
+ * global accelerator) so it is focus-scoped and panels keep their own
+ * Ctrl +/-. Shift is ignored, so "Ctrl +" (really Ctrl+Shift+=) works. */
+#ifndef SCI_ZOOMIN
+#define SCI_ZOOMIN  2333
+#endif
+#ifndef SCI_ZOOMOUT
+#define SCI_ZOOMOUT 2334
+#endif
+
+static gboolean on_sci_zoom_key(GtkEventControllerKey *ctl, guint keyval,
+                                guint keycode, GdkModifierType state, gpointer d)
+{
+    (void)ctl; (void)keycode; (void)d;
+    if (!(state & GDK_CONTROL_MASK)) return FALSE;
+    switch (keyval) {
+    case GDK_KEY_plus:  case GDK_KEY_equal:  case GDK_KEY_KP_Add:
+        editor_send(SCI_ZOOMIN,  0, 0); return TRUE;
+    case GDK_KEY_minus: case GDK_KEY_KP_Subtract:
+        editor_send(SCI_ZOOMOUT, 0, 0); return TRUE;
+    case GDK_KEY_0:     case GDK_KEY_KP_0:
+        editor_send(SCI_SETZOOM, 0, 0); return TRUE;
+    }
+    return FALSE;
+}
+
 static void setup_sci(GtkWidget *sci)
 {
     sci_msg(sci, SCI_SETCODEPAGE,     SC_CP_UTF8, 0);
@@ -329,6 +355,12 @@ static void setup_sci(GtkWidget *sci)
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), GDK_BUTTON_SECONDARY);
         g_signal_connect(gc, "pressed", G_CALLBACK(on_sci_button_press), NULL);
         gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(gc));
+    }
+    {
+        /* Focus-scoped editor zoom: Ctrl +/-/0. */
+        GtkEventController *zc = gtk_event_controller_key_new();
+        g_signal_connect(zc, "key-pressed", G_CALLBACK(on_sci_zoom_key), NULL);
+        gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(zc));
     }
 }
 
@@ -964,10 +996,10 @@ GtkWidget *editor_init(GtkWidget *window)
     g_signal_connect_swapped(s_search_case,  "toggled",        G_CALLBACK(incr_search_do),  NULL);
     g_signal_connect_swapped(close_btn,      "clicked",        G_CALLBACK(editor_incr_search_close), NULL);
 
-    /* Hide the incremental search bar by default; show_all on the
-     * container would otherwise reveal it on every launch. Toggle via
-     * editor_incr_search_show / _close. */
-    gtk_widget_set_no_show_all(s_search_bar, TRUE);
+    /* Hide the incremental search bar by default — GTK4 widgets are
+     * visible on creation, so it must be explicitly hidden or it shows on
+     * every launch. Toggled via editor_incr_search_show / _close (Ctrl+I). */
+    gtk_widget_set_visible(s_search_bar, FALSE);
 
     s_editor_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     npp_box_pack(GTK_BOX(s_editor_container), s_notebook, TRUE, 0);
