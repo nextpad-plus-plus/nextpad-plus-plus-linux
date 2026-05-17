@@ -4,6 +4,7 @@
 #include "backup.h"
 #include "encoding.h"
 #include "sci_messages.h"
+#include "i18n.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -284,6 +285,12 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         if (!strcmp(attr, "theme")) {
             strncpy(g_prefs.theme_preset, val, sizeof(g_prefs.theme_preset) - 1);
             g_prefs.theme_preset[sizeof(g_prefs.theme_preset) - 1] = '\0';
+        }
+    }
+    else if (!strcmp(group, "Localization")) {
+        if (!strcmp(attr, "language")) {
+            strncpy(g_prefs.ui_language, val, sizeof(g_prefs.ui_language) - 1);
+            g_prefs.ui_language[sizeof(g_prefs.ui_language) - 1] = '\0';
         }
     }
     else if (!strcmp(group, "MISC")) {
@@ -646,6 +653,15 @@ void prefs_save(void)
             b2yn(g_prefs.appearance == APPEAR_AUTO));
     }
 
+    /* Localization — the UI language (empty = auto-detect from locale). */
+    if (g_prefs.ui_language[0]) {
+        gchar *lang_esc = g_markup_escape_text(g_prefs.ui_language, -1);
+        g_string_append_printf(b,
+            "        <GUIConfig name=\"Localization\" language=\"%s\" />\n",
+            lang_esc);
+        g_free(lang_esc);
+    }
+
     /* MISC */
     g_string_append_printf(b,
         "        <GUIConfig name=\"MISC\" muteSounds=\"%s\" disableTextDragDrop=\"%s\" "
@@ -979,13 +995,42 @@ static void on_backup_interval(GtkSpinButton *s, gpointer d)
 /* Page builders                                                       */
 /* ------------------------------------------------------------------ */
 
+/* Localization — pick the UI language (Preferences > General). The
+ * choice persists; i18n_set_language() reloads the translation tables so
+ * dialogs opened afterwards use it (the menu bar updates on next launch). */
+static void on_ui_language(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    int idx = gtk_combo_box_get_active(c);
+    const char *stem = i18n_language_stem(idx);
+    if (!stem) return;
+    g_strlcpy(g_prefs.ui_language, stem, sizeof(g_prefs.ui_language));
+    prefs_save();
+    i18n_set_language(stem);
+}
+
 static GtkWidget *page_general(void)
 {
-    /* Trimmed to match macOS General page: title-bar / status-bar /
-     * session memory. Tab Bar, Dark Mode, and the misc toggles now have
-     * dedicated pages so the user can find them where macOS users expect. */
+    /* Trimmed to match macOS General page: localization / title-bar /
+     * status-bar / session memory. Tab Bar, Dark Mode, and the misc
+     * toggles now have dedicated pages so the user can find them where
+     * macOS users expect. */
     GtkWidget *g = make_grid();
     int r = 0;
+
+    /* Localization: native names of every localization/*.xml file. */
+    GtkWidget *lang = gtk_combo_box_text_new();
+    int lsel = 0, lcount = i18n_language_count();
+    for (int i = 0; i < lcount; i++) {
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lang),
+                                       i18n_language_name(i));
+        if (g_prefs.ui_language[0] &&
+            g_strcmp0(i18n_language_stem(i), g_prefs.ui_language) == 0)
+            lsel = i;
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(lang), lsel);
+    g_signal_connect(lang, "changed", G_CALLBACK(on_ui_language), NULL);
+    row(g, r++, "Language:", lang);
 
     make_check(g, r++, "Show status bar",                        g_prefs.show_status_bar,         G_CALLBACK(on_status_visible));
     make_check(g, r++, "Show full file path in title bar",       g_prefs.show_full_path_in_title, G_CALLBACK(on_full_path));

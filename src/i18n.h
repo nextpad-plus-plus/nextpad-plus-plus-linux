@@ -21,6 +21,13 @@ void        i18n_init(void);
 const char *i18n_str     (const char *key, const char *fallback);
 const char *i18n_mnemonic(const char *key, const char *fallback);
 
+/* Language picker (Preferences > General > Language). The list is the
+ * localization/ folder, sorted by native display name. */
+int         i18n_language_count(void);
+const char *i18n_language_name(int i);   /* native display name        */
+const char *i18n_language_stem(int i);   /* XML filename stem           */
+void        i18n_set_language(const char *stem);  /* reload translations */
+
 /* Convenience macros */
 #define T(key, fb)  i18n_str(key, fb)
 #define TM(key, fb) i18n_mnemonic(key, fb)

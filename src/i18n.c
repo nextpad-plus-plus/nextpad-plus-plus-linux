@@ -1,6 +1,7 @@
 /* i18n.c — Notepad++ XML localization loader for the Linux GTK3 port. */
 #include "i18n.h"
 #include "gtk_compat.h"
+#include "prefs.h"
 #include <glib.h>
 #include <string.h>
 #include <stdio.h>
@@ -413,20 +414,131 @@ void i18n_init(void)
     s_plain    = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     s_mnemonic = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 
-    const gchar * const *langs = g_get_language_names();
     char path[1024] = "";
 
-    for (int i = 0; langs[i] && !path[0]; i++) {
-        const char *stem = locale_to_stem(langs[i]);
-        if (!stem) continue;
-        snprintf(path, sizeof(path), RESOURCES_DIR "/localization/%s.xml", stem);
+    /* 1. An explicit choice from Preferences > General > Language. */
+    if (g_prefs.ui_language[0]) {
+        snprintf(path, sizeof(path), RESOURCES_DIR "/localization/%s.xml",
+                 g_prefs.ui_language);
         if (!g_file_test(path, G_FILE_TEST_EXISTS))
             path[0] = '\0';
     }
 
+    /* 2. Otherwise auto-detect from the system locale. */
+    if (!path[0]) {
+        const gchar * const *langs = g_get_language_names();
+        for (int i = 0; langs[i] && !path[0]; i++) {
+            const char *stem = locale_to_stem(langs[i]);
+            if (!stem) continue;
+            snprintf(path, sizeof(path),
+                     RESOURCES_DIR "/localization/%s.xml", stem);
+            if (!g_file_test(path, G_FILE_TEST_EXISTS))
+                path[0] = '\0';
+        }
+    }
+
+    /* 3. Fall back to English. */
     if (!path[0])
         snprintf(path, sizeof(path), RESOURCES_DIR "/localization/english.xml");
 
+    parse_file(path);
+}
+
+/* ------------------------------------------------------------------ */
+/* Language picker support (Preferences > General > Language)          */
+/* ------------------------------------------------------------------ */
+
+typedef struct { char stem[64]; char name[96]; } I18nLang;
+static GArray *s_langs;   /* of I18nLang, sorted by display name */
+
+/* Read the <Native-Langue name="..."> attribute from the file's head. */
+static void read_native_name(const char *fpath, char *out, int outsz)
+{
+    out[0] = '\0';
+    FILE *f = fopen(fpath, "r");
+    if (!f) return;
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    char *p = strstr(buf, "Native-Langue");
+    if (!p) return;
+    p = strstr(p, "name=\"");
+    if (!p) return;
+    p += 6;
+    char *e = strchr(p, '"');
+    if (!e) return;
+    int len = (int)(e - p);
+    if (len > outsz - 1) len = outsz - 1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+}
+
+static int lang_cmp(gconstpointer a, gconstpointer b)
+{
+    return g_ascii_strcasecmp(((const I18nLang *)a)->name,
+                              ((const I18nLang *)b)->name);
+}
+
+static void build_lang_list(void)
+{
+    if (s_langs) return;
+    s_langs = g_array_new(FALSE, FALSE, sizeof(I18nLang));
+    GDir *d = g_dir_open(RESOURCES_DIR "/localization", 0, NULL);
+    if (!d) return;
+    const char *fn;
+    while ((fn = g_dir_read_name(d))) {
+        if (!g_str_has_suffix(fn, ".xml")) continue;
+        I18nLang L;
+        g_strlcpy(L.stem, fn, sizeof(L.stem));
+        char *dot = strrchr(L.stem, '.');
+        if (dot) *dot = '\0';
+        char fpath[1024];
+        snprintf(fpath, sizeof(fpath),
+                 RESOURCES_DIR "/localization/%s", fn);
+        read_native_name(fpath, L.name, sizeof(L.name));
+        if (!L.name[0]) {            /* fall back to the capitalised stem */
+            g_strlcpy(L.name, L.stem, sizeof(L.name));
+            if (L.name[0])
+                L.name[0] = g_ascii_toupper(L.name[0]);
+        }
+        g_array_append_val(s_langs, L);
+    }
+    g_dir_close(d);
+    g_array_sort(s_langs, lang_cmp);
+}
+
+int i18n_language_count(void)
+{
+    build_lang_list();
+    return s_langs ? (int)s_langs->len : 0;
+}
+const char *i18n_language_stem(int i)
+{
+    build_lang_list();
+    return (s_langs && i >= 0 && i < (int)s_langs->len)
+        ? g_array_index(s_langs, I18nLang, i).stem : NULL;
+}
+const char *i18n_language_name(int i)
+{
+    build_lang_list();
+    return (s_langs && i >= 0 && i < (int)s_langs->len)
+        ? g_array_index(s_langs, I18nLang, i).name : NULL;
+}
+
+void i18n_set_language(const char *stem)
+{
+    if (s_plain)    g_hash_table_remove_all(s_plain);
+    if (s_mnemonic) g_hash_table_remove_all(s_mnemonic);
+    char path[1024];
+    if (stem && stem[0])
+        snprintf(path, sizeof(path),
+                 RESOURCES_DIR "/localization/%s.xml", stem);
+    else
+        path[0] = '\0';
+    if (!path[0] || !g_file_test(path, G_FILE_TEST_EXISTS))
+        snprintf(path, sizeof(path),
+                 RESOURCES_DIR "/localization/english.xml");
     parse_file(path);
 }
 

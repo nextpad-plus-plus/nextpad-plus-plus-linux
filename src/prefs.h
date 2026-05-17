@@ -100,6 +100,7 @@ typedef struct {
     gboolean panel_keep_state;        /* default TRUE */
     int      appearance;              /* APPEAR_* */
     char     theme_preset[64];        /* "Default" / "DarkModeDefault" / ... */
+    char     ui_language[64];         /* localization XML stem; "" = auto-detect */
 
     /* ── Auto-completion (lives on Editor tab) ──────────────── */
     gboolean autocomplete_enabled;    /* default TRUE */

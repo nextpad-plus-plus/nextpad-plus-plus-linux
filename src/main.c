@@ -6372,8 +6372,10 @@ int main(int argc, char **argv)
      * toolbar construction time. */
     extern void toolbarconf_init(void);
     toolbarconf_init();
-    i18n_init();
+    /* prefs_load() first so i18n_init() can honour the saved UI language
+     * (Preferences > General > Language) before falling back to locale. */
     prefs_load();
+    i18n_init();
     /* Materialise any newly-added defaults to disk so the schema in
      * config.xml stays in sync with the in-memory NppPrefs. */
     prefs_save();
