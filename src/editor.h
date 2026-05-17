@@ -71,6 +71,9 @@ void       editor_clone_to_view(gboolean vertical);
 void       editor_reset_view(void);
 gboolean   editor_split_active(void);
 
+/* Synchronised scrolling between the primary and secondary split view. */
+void       editor_set_sync_scroll(gboolean vertical, gboolean enable);
+
 /* Tab pinning — NppDoc.pinned is the single source of truth, shared with
  * the Document List. A pinned tab hides its × and blocks close. */
 gboolean   editor_tab_pinned(GtkWidget *sci);

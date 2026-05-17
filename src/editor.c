@@ -1681,6 +1681,92 @@ void editor_set_tab_color(GtkWidget *sci, int slot)
     main_doclist_refresh();
 }
 
+/* ---- Synchronised scrolling between split views (#5) -------------- *
+ * Mirrors macOS _pollScrollSync: a 60 Hz poll detects which view the
+ * user scrolled and propagates the first-visible-line / x-offset to the
+ * other, preserving the relative offset captured when sync was enabled. */
+static gboolean s_sync_v, s_sync_h;
+static guint    s_sync_timer;
+static long     s_sync_pl, s_sync_sl, s_sync_px, s_sync_sx;
+static long     s_sync_line_delta, s_sync_col_delta;
+
+static GtkWidget *sync_primary_sci(void)
+{
+    int p = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook));
+    return p < 0 ? NULL
+        : page_to_sci(gtk_notebook_get_nth_page(GTK_NOTEBOOK(s_notebook), p));
+}
+static GtkWidget *sync_secondary_sci(void)
+{
+    GtkWidget *nb = NULL;
+    if (s_notebook_v &&
+        gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook_v)) > 0)
+        nb = s_notebook_v;
+    else if (s_notebook_h &&
+             gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook_h)) > 0)
+        nb = s_notebook_h;
+    if (!nb) return NULL;
+    int p = gtk_notebook_get_current_page(GTK_NOTEBOOK(nb));
+    return p < 0 ? NULL
+        : page_to_sci(gtk_notebook_get_nth_page(GTK_NOTEBOOK(nb), p));
+}
+
+static gboolean sync_scroll_tick(gpointer d)
+{
+    (void)d;
+    GtkWidget *pri = sync_primary_sci();
+    GtkWidget *sec = sync_secondary_sci();
+    if (!pri || !sec) return G_SOURCE_CONTINUE;     /* no split — idle */
+    long pl = sci_msg(pri, SCI_GETFIRSTVISIBLELINE, 0, 0);
+    long sl = sci_msg(sec, SCI_GETFIRSTVISIBLELINE, 0, 0);
+    long px = sci_msg(pri, SCI_GETXOFFSET, 0, 0);
+    long sx = sci_msg(sec, SCI_GETXOFFSET, 0, 0);
+    gboolean pri_moved = (pl != s_sync_pl) || (px != s_sync_px);
+    gboolean sec_moved = (sl != s_sync_sl) || (sx != s_sync_sx);
+    if (pri_moved != sec_moved) {     /* exactly one — that is the source */
+        if (s_sync_v) {
+            if (pri_moved) sci_msg(sec, SCI_SETFIRSTVISIBLELINE,
+                                   pl + s_sync_line_delta, 0);
+            else           sci_msg(pri, SCI_SETFIRSTVISIBLELINE,
+                                   sl - s_sync_line_delta, 0);
+        }
+        if (s_sync_h) {
+            if (pri_moved) sci_msg(sec, SCI_SETXOFFSET,
+                                   px + s_sync_col_delta, 0);
+            else           sci_msg(pri, SCI_SETXOFFSET,
+                                   sx - s_sync_col_delta, 0);
+        }
+    }
+    s_sync_pl = sci_msg(pri, SCI_GETFIRSTVISIBLELINE, 0, 0);
+    s_sync_sl = sci_msg(sec, SCI_GETFIRSTVISIBLELINE, 0, 0);
+    s_sync_px = sci_msg(pri, SCI_GETXOFFSET, 0, 0);
+    s_sync_sx = sci_msg(sec, SCI_GETXOFFSET, 0, 0);
+    return G_SOURCE_CONTINUE;
+}
+
+void editor_set_sync_scroll(gboolean vertical, gboolean enable)
+{
+    if (vertical) s_sync_v = enable;
+    else          s_sync_h = enable;
+    if (s_sync_v || s_sync_h) {
+        GtkWidget *pri = sync_primary_sci();
+        GtkWidget *sec = sync_secondary_sci();
+        if (pri && sec) {
+            s_sync_pl = sci_msg(pri, SCI_GETFIRSTVISIBLELINE, 0, 0);
+            s_sync_sl = sci_msg(sec, SCI_GETFIRSTVISIBLELINE, 0, 0);
+            s_sync_px = sci_msg(pri, SCI_GETXOFFSET, 0, 0);
+            s_sync_sx = sci_msg(sec, SCI_GETXOFFSET, 0, 0);
+            s_sync_line_delta = s_sync_sl - s_sync_pl;
+            s_sync_col_delta  = s_sync_sx - s_sync_px;
+        }
+        if (!s_sync_timer)
+            s_sync_timer = g_timeout_add(16, sync_scroll_tick, NULL);
+    } else if (s_sync_timer) {
+        g_source_remove(s_sync_timer);
+        s_sync_timer = 0;
+    }
+}
+
 gboolean editor_save_all(void)
 {
     gboolean ok = TRUE;

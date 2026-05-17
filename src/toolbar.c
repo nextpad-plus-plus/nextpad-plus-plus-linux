@@ -180,14 +180,6 @@ static GtkWidget *make_sep(void)
     return gtk_separator_new(GTK_ORIENTATION_VERTICAL);
 }
 
-/* Placeholder: shows the icon but stays insensitive until the feature is wired. */
-static GtkWidget *make_placeholder(const char *icon_name, const char *tooltip)
-{
-    GtkWidget *item = make_btn(icon_name, tooltip, NULL, NULL);
-    gtk_widget_set_sensitive(item, FALSE);
-    return item;
-}
-
 /* ------------------------------------------------------------------ */
 /* Button callbacks — mirror macOS toolbar actions                    */
 /* ------------------------------------------------------------------ */
@@ -369,6 +361,26 @@ static void on_print(GtkButton *i, gpointer d)
     main_do_print();
 }
 
+/* Sync vertical/horizontal scrolling between the split views (#5). */
+static void on_syncv(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    editor_set_sync_scroll(TRUE, gtk_toggle_button_get_active(b));
+}
+static void on_synch(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    editor_set_sync_scroll(FALSE, gtk_toggle_button_get_active(b));
+}
+
+/* User Defined Language dialog (macOS showDefineLanguage:). */
+static void on_udl(GtkButton *i, gpointer d)
+{
+    (void)i; (void)d;
+    extern void udl_editor_show(GtkWindow *parent);
+    udl_editor_show(s_window ? GTK_WINDOW(s_window) : NULL);
+}
+
 static void on_saverecord(GtkButton *i, gpointer d)
 {
     (void)i; (void)d;
@@ -532,9 +544,11 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
     ADD(make_btn("zoomOut", "Zoom Out", G_CALLBACK(on_zoom_out), NULL));
     ADD(make_sep());
 
-    /* Sync scrolling — placeholders until split-pane scroll-sync is wired. */
-    ADD(make_placeholder("syncV", "Synchronise Vertical Scrolling"));
-    ADD(make_placeholder("syncH", "Synchronise Horizontal Scrolling"));
+    /* Sync scrolling between the split views (#5). */
+    ADD(make_toggle("syncV", "Synchronise Vertical Scrolling",
+                    G_CALLBACK(on_syncv), NULL));
+    ADD(make_toggle("syncH", "Synchronise Horizontal Scrolling",
+                    G_CALLBACK(on_synch), NULL));
     ADD(make_sep());
 
     /* View toggles. TB_AllChars is a composite [toggle][▾] (5-item dropdown). */
@@ -546,7 +560,7 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
     ADD(make_sep());
 
     /* Panel toggles. */
-    ADD(make_placeholder("udl",          "User Defined Languages"));
+    ADD(make_btn("udl", "Define Your Language…", G_CALLBACK(on_udl), NULL));
     s_tgl_docmap     = make_toggle("docMap",      "Document Map",        G_CALLBACK(on_tgl_docmap),    NULL);
     s_tgl_doclist    = make_toggle("docList",     "Document List",       G_CALLBACK(on_tgl_doclist),   NULL);
     s_tgl_funclist   = make_toggle("funcList",    "Function List",       G_CALLBACK(on_tgl_funclist),  NULL);
