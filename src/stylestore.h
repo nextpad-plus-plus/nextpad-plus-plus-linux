@@ -50,6 +50,10 @@ void stylestore_apply_default(GtkWidget *sci);
  * Must be called AFTER SCI_STYLECLEARALL. */
 void stylestore_apply_global(GtkWidget *sci);
 
+/* Apply just the fold-margin colour and fold-marker glyph colours — used
+ * by the Search Results panel so its fold marks match the editor's. */
+void stylestore_apply_fold_marks(GtkWidget *sci);
+
 /* Apply per-language colors for the Lexilla lexer name (e.g. "cpp").
  * Must be called AFTER SCI_STYLECLEARALL and after installing the lexer. */
 void stylestore_apply_lexer(GtkWidget *sci, const char *lexer_id);

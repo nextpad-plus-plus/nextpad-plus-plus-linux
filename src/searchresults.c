@@ -13,6 +13,7 @@
 #include "editor.h"
 #include "npp_menu.h"
 #include "sci_c.h"
+#include "stylestore.h"
 #include <gtk/gtk.h>
 #include <string.h>
 #include <stdio.h>
@@ -444,17 +445,15 @@ static void sr_setup_sci(void)
     SR_SEND(SCI_MARKERDEFINE, SC_MARKNUM_FOLDERTAIL,    SC_MARK_LCORNER);
     SR_SEND(SCI_SETFOLDFLAGS, 16, 0);   /* line below a contracted fold */
 
-    /* Fold-mark colours — identical to the editor's fold margin
-     * (stylestore.c: fold-margin colour + per-marker FORE / BACK /
-     * BACKSELECTED across FOLDEREND..FOLDEROPEN, with highlight on). */
-    SR_SEND(SCI_SETFOLDMARGINCOLOUR,   1, 0xE9E9E9);
-    SR_SEND(SCI_SETFOLDMARGINHICOLOUR, 1, 0xE9E9E9);
-    for (int mn = SC_MARKNUM_FOLDEREND; mn <= SC_MARKNUM_FOLDEROPEN; mn++) {
-        SR_SEND(SCI_MARKERSETFORE,         mn, 0x808080); /* grey glyph */
-        SR_SEND(SCI_MARKERSETBACK,         mn, 0xF3F3F3); /* light fill */
-        SR_SEND(SCI_MARKERSETBACKSELECTED, mn, 0x0000CC); /* active red */
-    }
-    SR_SEND(SCI_MARKERENABLEHIGHLIGHT, 1, 0);
+    /* Fold-mark colours — the editor's exact theme-driven styling, via the
+     * shared stylestore helper. Re-applied in searchresults_end() once the
+     * theme is loaded (this runs at init, before theme load). */
+    stylestore_apply_fold_marks(s_sci);
+
+    /* Suppress Scintilla's built-in context menu — we install our own.
+     * Without this the two popups fight ("grabbing popup with non-topmost
+     * parent" flood, then a crash). */
+    SR_SEND(SCI_USEPOPUP, SC_POPUP_NEVER, 0);
 
     /* Styles (manual — no lexer). */
     SR_SEND(SCI_STYLESETFORE, STYLE_DEFAULT, SR_RGB(0x1a, 0x1a, 0x1a));
@@ -597,6 +596,10 @@ void searchresults_end(int total_hits, int total_files)
         g_array_append_val(s_lines, L);
 
     sr_rebuild();
+
+    /* Pick up the live theme's fold colours (the theme loads after
+     * searchresults_init, so the init-time call only had the fallbacks). */
+    stylestore_apply_fold_marks(s_sci);
 
     searchresults_set_visible(TRUE);
 

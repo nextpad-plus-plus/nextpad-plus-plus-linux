@@ -538,6 +538,14 @@ void stylestore_apply_global(GtkWidget *sci)
     if (ws && ws->fg >= 0)
         sci_msg(sci, SCI_SETWHITESPACEFORE, 1, ws->fg);
 
+    stylestore_apply_fold_marks(sci);
+}
+
+/* Fold-margin colour plus the 7 fold-marker glyph colours. Factored out so
+ * the Search Results panel's fold marks match the editor's exactly. Safe to
+ * call before a theme is loaded — find_global() then yields the fallbacks. */
+void stylestore_apply_fold_marks(GtkWidget *sci)
+{
     const StyleEntry *fm = find_global("Fold margin");
     int fmbg = (fm && fm->bg >= 0) ? fm->bg : 0xE9E9E9;
     sci_msg(sci, SCI_SETFOLDMARGINCOLOUR,   1, fmbg);
