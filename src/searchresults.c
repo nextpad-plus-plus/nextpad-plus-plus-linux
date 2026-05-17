@@ -423,6 +423,15 @@ static void on_tree_right_click(GtkGestureClick *g, int n_press,
 /* Scintilla view setup                                               */
 /* ------------------------------------------------------------------ */
 
+/* The editor's theme-driven fold-mark colours, but without the "fold
+ * active" highlight — a read-only results panel has no caret-driven
+ * active fold block, and the highlight just paints stray red marks. */
+static void sr_apply_fold_style(void)
+{
+    stylestore_apply_fold_marks(s_sci);
+    SR_SEND(SCI_MARKERENABLEHIGHLIGHT, 0, 0);
+}
+
 static void sr_setup_sci(void)
 {
     SR_SEND(SCI_SETCODEPAGE, SC_CP_UTF8, 0);
@@ -445,12 +454,12 @@ static void sr_setup_sci(void)
     SR_SEND(SCI_MARKERDEFINE, SC_MARKNUM_FOLDERSUB,     SC_MARK_EMPTY);
     SR_SEND(SCI_MARKERDEFINE, SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_EMPTY);
     SR_SEND(SCI_MARKERDEFINE, SC_MARKNUM_FOLDERTAIL,    SC_MARK_EMPTY);
-    SR_SEND(SCI_SETFOLDFLAGS, 16, 0);   /* line below a contracted fold */
+    SR_SEND(SCI_SETFOLDFLAGS, 0, 0);    /* no fold-boundary lines */
 
-    /* Fold-mark colours — the editor's exact theme-driven styling, via the
-     * shared stylestore helper. Re-applied in searchresults_end() once the
-     * theme is loaded (this runs at init, before theme load). */
-    stylestore_apply_fold_marks(s_sci);
+    /* Fold-mark colours — the editor's theme-driven styling. Re-applied in
+     * searchresults_end() once the theme is loaded (this runs at init,
+     * before theme load). */
+    sr_apply_fold_style();
 
     /* Suppress Scintilla's built-in context menu — we install our own.
      * Without this the two popups fight ("grabbing popup with non-topmost
@@ -601,7 +610,7 @@ void searchresults_end(int total_hits, int total_files)
 
     /* Pick up the live theme's fold colours (the theme loads after
      * searchresults_init, so the init-time call only had the fallbacks). */
-    stylestore_apply_fold_marks(s_sci);
+    sr_apply_fold_style();
 
     searchresults_set_visible(TRUE);
 
