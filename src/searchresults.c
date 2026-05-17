@@ -430,6 +430,14 @@ static void sr_apply_fold_style(void)
 {
     stylestore_apply_fold_marks(s_sci);
     SR_SEND(SCI_MARKERENABLEHIGHLIGHT, 0, 0);
+    /* Scintilla's SC_MARK_BOXMINUS glyph always fills a connector stub
+     * below the box with the marker's BACK colour (LineMarker.cxx). Pin
+     * BACK and the fold-margin colour to the same value so that stub
+     * blends into the margin and leaves no visible line leftover. */
+    SR_SEND(SCI_SETFOLDMARGINCOLOUR,   1, 0xE9E9E9);
+    SR_SEND(SCI_SETFOLDMARGINHICOLOUR, 1, 0xE9E9E9);
+    for (int mn = SC_MARKNUM_FOLDEREND; mn <= SC_MARKNUM_FOLDEROPEN; mn++)
+        SR_SEND(SCI_MARKERSETBACK, mn, 0xE9E9E9);
 }
 
 static void sr_setup_sci(void)
