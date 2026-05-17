@@ -10,11 +10,31 @@
  * lookup; entries are stored already lower-cased. */
 static GHashTable *s_index = NULL;
 
+/* Drop a trailing ellipsis (ASCII "..." or U+2026 "…") and trailing
+ * whitespace. The context-menu XMLs spell it "..." while the GTK menu
+ * model uses "…"; normalising both ends makes the lookup match. */
+static gchar *strip_trailing_ellipsis(const char *s) {
+    gchar *r = g_strdup(s ? s : "");
+    gsize n = strlen(r);
+    for (;;) {
+        if (n >= 3 && (guchar)r[n-3] == 0xE2 &&
+            (guchar)r[n-2] == 0x80 && (guchar)r[n-1] == 0xA6) {
+            n -= 3; r[n] = '\0'; continue;          /* U+2026 … */
+        }
+        if (n >= 1 && (r[n-1] == '.' || r[n-1] == ' ' || r[n-1] == '\t')) {
+            n -= 1; r[n] = '\0'; continue;
+        }
+        break;
+    }
+    return r;
+}
+
 static gchar *lc_key(const char *top, const char *item) {
-    gchar *t = g_ascii_strdown(top  ? top  : "", -1);
-    gchar *i = g_ascii_strdown(item ? item : "", -1);
-    gchar *out = g_strdup_printf("%s\t%s", t, i);
-    g_free(t); g_free(i);
+    gchar *t  = g_ascii_strdown(top  ? top  : "", -1);
+    gchar *i  = g_ascii_strdown(item ? item : "", -1);
+    gchar *in = strip_trailing_ellipsis(i);
+    gchar *out = g_strdup_printf("%s\t%s", t, in);
+    g_free(t); g_free(i); g_free(in);
     return out;
 }
 
@@ -199,13 +219,33 @@ static void on_action_activate(GtkButton *mi, gpointer ud) {
     g_action_group_activate_action(G_ACTION_GROUP(app), action_name, NULL);
 }
 
-extern void editor_tab_toggle_pin(GtkWidget *sci); /* if defined */
-
 static void on_builtin_pintab(GtkButton *mi, gpointer ud) {
     (void)mi;
     GtkApplication *app = (GtkApplication *)ud;
     if (app)
-        g_action_group_activate_action(G_ACTION_GROUP(app), "tab-pin", NULL);
+        g_action_group_activate_action(G_ACTION_GROUP(app),
+                                       "tab-pin-toggle", NULL);
+}
+
+/* Tab-colour context items. The tabContextMenu.xml uses readable item
+ * names ("Apply Color 1".."Apply Color 5", "Remove Color"); map them to
+ * the parameterised "tab-set-color" action (0 = clear, 1..5 = colour).
+ * Returns the colour slot, or -1 if `item` is not a colour command. */
+static int tab_color_slot(const char *item) {
+    if (!item) return -1;
+    if (!g_ascii_strcasecmp(item, "Remove Color")) return 0;
+    if (!g_ascii_strncasecmp(item, "Apply Color ", 12) &&
+        item[12] >= '1' && item[12] <= '5')
+        return item[12] - '0';
+    return -1;
+}
+
+static void on_apply_color(GtkButton *mi, gpointer ud) {
+    GtkApplication *app = (GtkApplication *)ud;
+    int slot = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mi), "color-slot"));
+    if (app)
+        g_action_group_activate_action(G_ACTION_GROUP(app), "tab-set-color",
+                                       g_variant_new_int32(slot));
 }
 
 /* Append the parsed item list onto `menu`. Returns the number of action
@@ -230,10 +270,15 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
         /* Determine action + display name. */
         const char *action = NULL;
         const char *label  = NULL;
+        int color_slot = -1;          /* >=0 → an "Apply/Remove Color" item */
 
         if (it->builtin && !g_ascii_strcasecmp(it->builtin, "PinTab")) {
-            action = "tab-pin";
+            action = "tab-pin-toggle";
             label  = it->display_name ? it->display_name : "Pin Tab";
+        }
+        else if ((color_slot = tab_color_slot(it->menu_item)) >= 0) {
+            action = "tab-set-color";
+            label  = it->display_name ? it->display_name : it->menu_item;
         }
         else if (it->menu_entry && it->menu_item) {
             action = lookup_action(it->menu_entry, it->menu_item);
@@ -251,10 +296,12 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
         if (!action) continue;
         if (!label)  continue;
 
-        gboolean is_pin = it->builtin &&
-                          !g_ascii_strcasecmp(it->builtin, "PinTab");
-        GCallback cb = is_pin ? G_CALLBACK(on_builtin_pintab)
-                              : G_CALLBACK(on_action_activate);
+        gboolean is_pin   = it->builtin &&
+                            !g_ascii_strcasecmp(it->builtin, "PinTab");
+        gboolean is_color = (color_slot >= 0);
+        GCallback cb = is_pin   ? G_CALLBACK(on_builtin_pintab)
+                     : is_color ? G_CALLBACK(on_apply_color)
+                                 : G_CALLBACK(on_action_activate);
 
         /* Folder grouping. */
         NppMenu *target = menu;
@@ -272,6 +319,9 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
         GtkWidget *mi = npp_menu_add(target, label, cb, app);
         g_object_set_data_full(G_OBJECT(mi), "action-name",
                                g_strdup(action), g_free);
+        if (is_color)
+            g_object_set_data(G_OBJECT(mi), "color-slot",
+                              GINT_TO_POINTER(color_slot));
         count++;
     }
     return count;

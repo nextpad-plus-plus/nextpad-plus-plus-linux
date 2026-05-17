@@ -4266,11 +4266,20 @@ static void install_tab_color_css(void) {
          * inset box-shadow paints the stripe without disturbing layout.
          * Colours are the exact macOS palette (yellow/green/blue/orange/
          * pink). */
-        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-1 { box-shadow: inset 0 3px 0 #FCE386; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-2 { box-shadow: inset 0 3px 0 #A9F08C; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-3 { box-shadow: inset 0 3px 0 #7AC9F5; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-4 { box-shadow: inset 0 3px 0 #F5B67A; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-5 { box-shadow: inset 0 3px 0 #F08CF0; }\n"
+        /* Each colour is given for both the inactive tab and (with an
+         * extra :checked, so it out-specifies the active-tab orange
+         * `tab:checked` rule further down) the active tab — a coloured
+         * tab keeps its colour whether active or not, like macOS. */
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-1,\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-1:checked { box-shadow: inset 0 3px 0 0 #FCE386; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-2,\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-2:checked { box-shadow: inset 0 3px 0 0 #A9F08C; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-3,\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-3:checked { box-shadow: inset 0 3px 0 0 #7AC9F5; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-4,\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-4:checked { box-shadow: inset 0 3px 0 0 #F5B67A; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-5,\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-5:checked { box-shadow: inset 0 3px 0 0 #F08CF0; }\n"
         /* Editor tab strip geometry. All selectors are scoped to the
          * editor notebook (.npp-editor-tabs) so Preferences / Plugin Admin
          * / Find-dialog notebooks keep their default theme tabs.
@@ -6265,6 +6274,17 @@ static void on_startup(GtkApplication *app, gpointer ud)
     g_object_unref(menubar);
 }
 
+/* Put keyboard focus in the editor at startup / on raise so the user can
+ * type immediately without clicking into the view first. Deferred to an
+ * idle so it runs after window present and the first layout pass. */
+static gboolean focus_editor_idle(gpointer d)
+{
+    (void)d;
+    GtkWidget *sci = current_sci();
+    if (sci) gtk_widget_grab_focus(sci);
+    return G_SOURCE_REMOVE;
+}
+
 static void on_activate(GtkApplication *app, gpointer ud)
 {
     (void)ud;
@@ -6281,6 +6301,7 @@ static void on_activate(GtkApplication *app, gpointer ud)
             session_restore();
     }
     gtk_window_present(GTK_WINDOW(g_window));
+    g_idle_add(focus_editor_idle, NULL);
 }
 
 static void on_open(GtkApplication *app, GFile **files, gint n_files,
@@ -6295,6 +6316,7 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
     /* G3.14: apply parsed CLI flags to whichever file is now active. */
     apply_cli_flags_to_current();
     gtk_window_present(GTK_WINDOW(g_window));
+    g_idle_add(focus_editor_idle, NULL);
 }
 
 /* ------------------------------------------------------------------ */

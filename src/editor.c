@@ -92,11 +92,13 @@ static GtkWidget *sci_of_page(int page)
 }
 
 /* Notebook page index for a given sci — its scrolled-window parent is the
- * actual page. */
+ * actual notebook page. (The previous body recursed on itself and always
+ * returned -1, which made right-click select the last tab and broke
+ * pinned-tab reordering / Close Others.) */
 static int sci_page_num(GtkWidget *sci)
 {
     GtkWidget *sw = sci ? gtk_widget_get_parent(sci) : NULL;
-    return sw ? sci_page_num(sw) : -1;
+    return sw ? gtk_notebook_page_num(GTK_NOTEBOOK(s_notebook), sw) : -1;
 }
 
 static void refresh_tab_label(int page);
@@ -1389,6 +1391,23 @@ void editor_set_tab_pinned(GtkWidget *sci, gboolean pinned)
     if (pin) gtk_widget_set_visible(pin, pinned);
     if (btn) gtk_widget_set_visible(btn,
                                     pinned ? FALSE : g_prefs.tab_close_button);
+
+    /* macOS pinCurrentTab: a newly-pinned tab auto-moves to the start,
+     * after the last already-pinned tab. Unpinning leaves it in place. */
+    if (pinned) {
+        GtkNotebook *nb = GTK_NOTEBOOK(s_notebook);
+        int n   = gtk_notebook_get_n_pages(nb);
+        int sel = sci_page_num(sci);
+        int insert_at = 0;
+        for (int i = 0; i < n; i++) {
+            if (i == sel) continue;
+            NppDoc *d = editor_doc_at(i);
+            if (d && d->pinned) insert_at = i + 1;
+        }
+        GtkWidget *child = gtk_notebook_get_nth_page(nb, sel);
+        if (child && insert_at < sel)
+            gtk_notebook_reorder_child(nb, child, insert_at);
+    }
     main_doclist_refresh();
 }
 

@@ -18,7 +18,7 @@ Special built-in commands (no MenuEntryName needed):
 		<Item BuiltIn="PinTab"/>
 		<Item MenuEntryName="File" MenuItemName="Close"/>
 
-		<Item FolderName="Close Multiple Tabs" MenuEntryName="File" MenuItemName="Close All but Active Document"/>
+		<Item FolderName="Close Multiple Tabs" MenuEntryName="File" MenuItemName="Close All But Current"/>
 		<Item FolderName="Close Multiple Tabs" MenuEntryName="File" MenuItemName="Close All But Pinned"/>
 		<Item FolderName="Close Multiple Tabs" MenuEntryName="File" MenuItemName="Close All to the Left"/>
 		<Item FolderName="Close Multiple Tabs" MenuEntryName="File" MenuItemName="Close All to the Right"/>
