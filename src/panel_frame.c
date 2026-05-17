@@ -196,21 +196,18 @@ static GtkWidget *pf_make_pop_image(gboolean popped) {
                "%s/icons/%s/panels/toolbar/%s.png",
                RESOURCES_DIR, theme_subdir, icon_name);
 
-    /* The source PNG is 48px. Pre-downsample it to the exact target size
-     * (48/3 = 16, a clean integer ratio) with the high-quality HYPER
-     * filter, then hand GtkImage a texture already at the final size — so
-     * there is no soft GSK resample at draw time. */
-    GdkPixbuf *full = gdk_pixbuf_new_from_file(path, NULL);
-    if (full) {
-        GdkPixbuf *small = gdk_pixbuf_scale_simple(
-            full, PF_POP_ICON_PX, PF_POP_ICON_PX, GDK_INTERP_HYPER);
-        g_object_unref(full);
-        if (small) {
-            GdkTexture *tex = gdk_texture_new_for_pixbuf(small);
-            g_object_unref(small);
-            GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
-            g_object_unref(tex);
-            gtk_image_set_pixel_size(GTK_IMAGE(img), PF_POP_ICON_PX);
+    /* Match the GTK3 port exactly — its pop icon renders sharp. Scale the
+     * source to the FINAL pixel size up front with
+     * gdk_pixbuf_new_from_file_at_size, then gtk_image_new_from_pixbuf.
+     * The image is created already at the target size, so it is blitted
+     * 1:1 with no draw-time GSK rescale (the soft step our texture +
+     * set_pixel_size approach was doing). */
+    if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(
+            path, PF_POP_ICON_PX, PF_POP_ICON_PX, NULL);
+        if (pb) {
+            GtkWidget *img = gtk_image_new_from_pixbuf(pb);
+            g_object_unref(pb);
             return img;
         }
     }

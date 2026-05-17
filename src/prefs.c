@@ -1436,6 +1436,18 @@ static void on_prefs_response(GtkDialog *dlg, gint r, gpointer d)
     gtk_widget_hide(GTK_WIDGET(dlg));
 }
 
+/* Tab label for the vertical (left-side) prefs notebook strip. The label
+ * fills the tab width and right-aligns its text, so the titles sit flush
+ * against the page content rather than ragged on the left. */
+static GtkWidget *prefs_tab_label(const char *text)
+{
+    GtkWidget *lbl = gtk_label_new(text);
+    gtk_label_set_xalign(GTK_LABEL(lbl), 1.0f);
+    gtk_widget_set_halign(lbl, GTK_ALIGN_FILL);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    return lbl;
+}
+
 void prefs_dialog_show(GtkWidget *parent)
 {
     if (s_prefs_dlg) {
@@ -1460,19 +1472,19 @@ void prefs_dialog_show(GtkWidget *parent)
     /* Page order matches macOS PreferencesWindowController.mm:310-324
      * (the sidebar layout) so users moving between platforms find the
      * same tab in the same slot. */
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_general()),         gtk_label_new("General"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_editor()),          gtk_label_new("Editor"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_indentation()),     gtk_label_new("Indentation"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_tab_bar()),         gtk_label_new("Tab Bar"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_dark_mode()),       gtk_label_new("Dark Mode"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_margins()),         gtk_label_new("Margins"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_new_document()),    gtk_label_new("New Document"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_backup()),          gtk_label_new("Backup"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_auto_completion()), gtk_label_new("Auto-Completion"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_searching()),       gtk_label_new("Searching"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_delimiter()),       gtk_label_new("Delimiter"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_performance()),     gtk_label_new("Performance"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_misc()),            gtk_label_new("MISC."));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_general()),         prefs_tab_label("General"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_editor()),          prefs_tab_label("Editor"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_indentation()),     prefs_tab_label("Indentation"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_tab_bar()),         prefs_tab_label("Tab Bar"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_dark_mode()),       prefs_tab_label("Dark Mode"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_margins()),         prefs_tab_label("Margins"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_new_document()),    prefs_tab_label("New Document"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_backup()),          prefs_tab_label("Backup"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_auto_completion()), prefs_tab_label("Auto-Completion"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_searching()),       prefs_tab_label("Searching"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_delimiter()),       prefs_tab_label("Delimiter"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_performance()),     prefs_tab_label("Performance"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_misc()),            prefs_tab_label("MISC."));
 
     GtkWidget *ca = gtk_dialog_get_content_area(GTK_DIALOG(s_prefs_dlg));
     gtk_container_set_border_width(GTK_CONTAINER(ca), 8);
