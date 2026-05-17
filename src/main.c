@@ -4249,36 +4249,28 @@ static void action_tab_pin_toggle(GSimpleAction *a, GVariant *p, gpointer u) {
     tab_set_pinned(sci, !tab_is_pinned(sci));
 }
 
-static const char *kTabColorClasses[6] = {
-    NULL, "tab-color-1", "tab-color-2", "tab-color-3", "tab-color-4", "tab-color-5"
-};
 static void action_tab_set_color(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)u;
     int slot = g_variant_get_int32(p);   /* 0 = clear, 1..5 = colour */
-    if (slot < 0 || slot > 5) return;
     GtkWidget *sci = current_sci(); if (!sci) return;
-    GtkWidget *label = g_object_get_data(G_OBJECT(sci), "tab-label");
-    if (!label) return;
-    GtkStyleContext *ctx = gtk_widget_get_style_context(label);
-    for (int k = 1; k <= 5; k++)
-        gtk_style_context_remove_class(ctx, kTabColorClasses[k]);
-    if (slot >= 1 && slot <= 5)
-        gtk_style_context_add_class(ctx, kTabColorClasses[slot]);
-    g_object_set_data(G_OBJECT(sci), "npp-tab-color", GINT_TO_POINTER(slot));
+    editor_set_tab_color(sci, slot);     /* NppDoc.color_tag is the truth */
 }
 
 /* Install CSS for tab colours once. */
 static void install_tab_color_css(void) {
     GtkCssProvider *p = gtk_css_provider_new();
     GString *css = g_string_new(
-        /* Per-tab colour overrides. Scoped to the editor tab label and
-         * carrying the .tab-color-N class, so their specificity beats the
-         * default #262626 tab-text rule added below. */
-        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-1 { color: #d0a800; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-2 { color: #2ca52c; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-3 { color: #4080ff; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-4 { color: #ff5555; }\n"
-        "notebook.npp-editor-tabs > header > tabs > tab label.tab-color-5 { color: #a060c0; }\n"
+        /* Per-tab colour: a 3px stripe along the top of the tab, matching
+         * macOS NppTabBar (tabColorForId). The .tab-color-N class is set
+         * by editor_apply_tab_color() on the GtkNotebook `tab` node; an
+         * inset box-shadow paints the stripe without disturbing layout.
+         * Colours are the exact macOS palette (yellow/green/blue/orange/
+         * pink). */
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-1 { box-shadow: inset 0 3px 0 #FCE386; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-2 { box-shadow: inset 0 3px 0 #A9F08C; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-3 { box-shadow: inset 0 3px 0 #7AC9F5; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-4 { box-shadow: inset 0 3px 0 #F5B67A; }\n"
+        "notebook.npp-editor-tabs > header > tabs > tab.tab-color-5 { box-shadow: inset 0 3px 0 #F08CF0; }\n"
         /* Editor tab strip geometry. All selectors are scoped to the
          * editor notebook (.npp-editor-tabs) so Preferences / Plugin Admin
          * / Find-dialog notebooks keep their default theme tabs.

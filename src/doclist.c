@@ -115,12 +115,14 @@ static void apply_to_selection(void (*fn)(NppDoc *)) {
     doclist_refresh();
 }
 
-static void set_color_0(NppDoc *d) { d->color_tag = 0; }
-static void set_color_1(NppDoc *d) { d->color_tag = 1; }
-static void set_color_2(NppDoc *d) { d->color_tag = 2; }
-static void set_color_3(NppDoc *d) { d->color_tag = 3; }
-static void set_color_4(NppDoc *d) { d->color_tag = 4; }
-static void set_color_5(NppDoc *d) { d->color_tag = 5; }
+/* Route through editor.c so the tab's top-stripe updates too
+ * (NppDoc.color_tag is the shared source of truth). */
+static void set_color_0(NppDoc *d) { editor_set_tab_color(d->sci, 0); }
+static void set_color_1(NppDoc *d) { editor_set_tab_color(d->sci, 1); }
+static void set_color_2(NppDoc *d) { editor_set_tab_color(d->sci, 2); }
+static void set_color_3(NppDoc *d) { editor_set_tab_color(d->sci, 3); }
+static void set_color_4(NppDoc *d) { editor_set_tab_color(d->sci, 4); }
+static void set_color_5(NppDoc *d) { editor_set_tab_color(d->sci, 5); }
 /* Route through editor.c so the tab's pin icon / × visibility update too
  * (NppDoc.pinned is the shared source of truth). */
 static void toggle_pin (NppDoc *d) { editor_set_tab_pinned(d->sci, !d->pinned); }

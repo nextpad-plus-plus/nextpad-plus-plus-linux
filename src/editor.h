@@ -67,6 +67,12 @@ void       editor_close_all_quit(GApplication *app);
 gboolean   editor_tab_pinned(GtkWidget *sci);
 void       editor_set_tab_pinned(GtkWidget *sci, gboolean pinned);
 
+/* Tab colour — NppDoc.color_tag (0 = none, 1..5), shared with the
+ * Document List. Draws a 3px top stripe on the tab (macOS NppTabBar). */
+gint       editor_tab_color(GtkWidget *sci);
+void       editor_set_tab_color(GtkWidget *sci, int slot);
+void       editor_apply_tab_color(GtkWidget *sci);
+
 /* Edit operations on current document */
 void editor_undo(void);
 void editor_redo(void);

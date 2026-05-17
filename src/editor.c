@@ -645,11 +645,14 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     if (doc->pinned || !g_prefs.tab_close_button)
         gtk_widget_set_visible(btn, FALSE);
 
-    /* store label + status/pin icons + close button on sci for updates */
+    /* store label + status/pin icons + close button + the box itself
+     * (its GtkNotebook parent is the `tab` CSS node — see
+     * editor_apply_tab_color) on sci for later updates */
     g_object_set_data(G_OBJECT(sci), "tab-label", label);
     g_object_set_data(G_OBJECT(sci), "tab-status-icon", status);
     g_object_set_data(G_OBJECT(sci), "tab-pin-icon", pin);
     g_object_set_data(G_OBJECT(sci), "tab-close-btn", btn);
+    g_object_set_data(G_OBJECT(sci), "tab-box", box);
     return box;
 }
 
@@ -1105,6 +1108,7 @@ void editor_new_doc(void)
     gtk_notebook_append_page(GTK_NOTEBOOK(s_notebook), sw, label);
     gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(s_notebook), sw, TRUE);
     gtk_widget_show_all(s_notebook);
+    editor_apply_tab_color(sci);   /* tab node exists once appended */
     gtk_notebook_set_current_page(GTK_NOTEBOOK(s_notebook), page);
     main_doclist_refresh();
 }
@@ -1160,6 +1164,7 @@ gboolean editor_open_path(const char *path)
         gtk_notebook_append_page(GTK_NOTEBOOK(s_notebook), sw, label);
         gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(s_notebook), sw, TRUE);
         gtk_widget_show_all(s_notebook);
+        editor_apply_tab_color(sci);   /* tab node exists once appended */
         cur = doc;
     }
 
@@ -1384,6 +1389,50 @@ void editor_set_tab_pinned(GtkWidget *sci, gboolean pinned)
     if (pin) gtk_widget_set_visible(pin, pinned);
     if (btn) gtk_widget_set_visible(btn,
                                     pinned ? FALSE : g_prefs.tab_close_button);
+    main_doclist_refresh();
+}
+
+/* ---- Tab colour --------------------------------------------------- *
+ * macOS NppTabBar draws a 3px stripe along the top of the tab in one of
+ * five fixed colours. NppDoc.color_tag (0 = none, 1..5) is the single
+ * source of truth, shared with the Document List. The stripe is CSS:
+ * the class lands on the GtkNotebook `tab` node (the parent of our tab
+ * label box) so install_tab_color_css()'s `tab.tab-color-N` rule hits. */
+gint editor_tab_color(GtkWidget *sci)
+{
+    NppDoc *doc = sci ? doc_of_sci(sci) : NULL;
+    return doc ? doc->color_tag : 0;
+}
+
+void editor_apply_tab_color(GtkWidget *sci)
+{
+    if (!sci) return;
+    NppDoc *doc = doc_of_sci(sci);
+    GtkWidget *box = g_object_get_data(G_OBJECT(sci), "tab-box");
+    if (!doc || !box) return;
+    GtkWidget *tab = gtk_widget_get_parent(box);   /* the `tab` CSS node */
+    if (!tab) return;
+    for (int k = 1; k <= 5; k++) {
+        char cls[16];
+        g_snprintf(cls, sizeof cls, "tab-color-%d", k);
+        gtk_widget_remove_css_class(tab, cls);
+    }
+    if (doc->color_tag >= 1 && doc->color_tag <= 5) {
+        char cls[16];
+        g_snprintf(cls, sizeof cls, "tab-color-%d", doc->color_tag);
+        gtk_widget_add_css_class(tab, cls);
+    }
+}
+
+void editor_set_tab_color(GtkWidget *sci, int slot)
+{
+    if (!sci) return;
+    NppDoc *doc = doc_of_sci(sci);
+    if (!doc) return;
+    if (slot < 0) slot = 0;
+    if (slot > 5) slot = 5;
+    doc->color_tag = slot;
+    editor_apply_tab_color(sci);
     main_doclist_refresh();
 }
 
