@@ -121,7 +121,9 @@ static void set_color_2(NppDoc *d) { d->color_tag = 2; }
 static void set_color_3(NppDoc *d) { d->color_tag = 3; }
 static void set_color_4(NppDoc *d) { d->color_tag = 4; }
 static void set_color_5(NppDoc *d) { d->color_tag = 5; }
-static void toggle_pin (NppDoc *d) { d->pinned    = !d->pinned; }
+/* Route through editor.c so the tab's pin icon / × visibility update too
+ * (NppDoc.pinned is the shared source of truth). */
+static void toggle_pin (NppDoc *d) { editor_set_tab_pinned(d->sci, !d->pinned); }
 
 static void on_color_0(GtkButton *mi, gpointer u){(void)mi;(void)u; apply_to_selection(set_color_0);}
 static void on_color_1(GtkButton *mi, gpointer u){(void)mi;(void)u; apply_to_selection(set_color_1);}

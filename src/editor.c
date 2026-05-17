@@ -383,39 +383,57 @@ static void cb_tabmenu_close(GtkButton *m, gpointer d) {
     int page = sci_page_num(GTK_WIDGET(d));
     editor_close_page(page);
 }
+/* A FALSE return from editor_close_page means the user cancelled a save
+ * prompt — abort the batch. Pinned tabs are skipped up front so they
+ * never trigger that abort (editor_close_page also refuses them). */
 static void cb_tabmenu_close_others(GtkButton *m, gpointer d) {
     (void)m;
     int keep = sci_page_num(GTK_WIDGET(d));
     /* Close right side first so indices don't shift under us. */
-    for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--)
+    for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--) {
+        NppDoc *doc = editor_doc_at(i);
+        if (doc && doc->pinned) continue;
         if (!editor_close_page(i)) return;
-    for (int i = keep - 1; i >= 0; i--)
+    }
+    for (int i = keep - 1; i >= 0; i--) {
+        NppDoc *doc = editor_doc_at(i);
+        if (doc && doc->pinned) continue;
         if (!editor_close_page(i)) return;
+    }
 }
 static void cb_tabmenu_close_left(GtkButton *m, gpointer d) {
     (void)m;
     int keep = sci_page_num(GTK_WIDGET(d));
-    for (int i = keep - 1; i >= 0; i--)
+    for (int i = keep - 1; i >= 0; i--) {
+        NppDoc *doc = editor_doc_at(i);
+        if (doc && doc->pinned) continue;
         if (!editor_close_page(i)) return;
+    }
 }
 static void cb_tabmenu_close_right(GtkButton *m, gpointer d) {
     (void)m;
     int keep = sci_page_num(GTK_WIDGET(d));
-    for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--)
+    for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--) {
+        NppDoc *doc = editor_doc_at(i);
+        if (doc && doc->pinned) continue;
         if (!editor_close_page(i)) return;
+    }
 }
 static void cb_tabmenu_close_unmodified(GtkButton *m, gpointer d) {
     (void)m; (void)d;
     for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i >= 0; i--) {
         NppDoc *doc = editor_doc_at(i);
-        if (doc && !doc->modified) editor_close_page(i);
+        if (doc && !doc->modified && !doc->pinned) editor_close_page(i);
     }
 }
 static void cb_tabmenu_close_all(GtkButton *m, gpointer d) {
     (void)m; (void)d;
     int count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
-    for (int i = count - 1; i >= 0; i--)
+    for (int i = count - 1; i >= 0; i--) {
+        NppDoc *doc = editor_doc_at(i);
+        if (doc && doc->pinned) continue;
         if (!editor_close_page(i)) return;
+    }
 }
 static void cb_tabmenu_copy_path(GtkButton *m, gpointer d) {
     (void)m;
@@ -522,6 +540,29 @@ static void set_tab_status_icon(GtkWidget *img, gboolean modified)
     gtk_image_set_pixel_size(GTK_IMAGE(img), TAB_STATUS_ICON_PX);
 }
 
+/* ---- Tab pin icon ------------------------------------------------- *
+ * macOS NppTabBar draws pinTabButton_pinned.png at kPinSize≈11px to the
+ * left of the close button when a tab is pinned. Pinned tabs hide the ×
+ * and block close. Light mode uses the standard/ set, dark uses dark/. */
+#define TAB_PIN_ICON_PX 12
+
+static void set_tab_pin_icon(GtkWidget *img)
+{
+    gboolean dark = tab_dark_mode();
+    static GdkTexture *cache[2];          /* [dark] */
+    GdkTexture **slot = &cache[dark ? 1 : 0];
+    if (!*slot) {
+        gchar *p = g_strdup_printf(
+            "%s/icons/%s/tabbar/pinTabButton_pinned.png",
+            RESOURCES_DIR, dark ? "dark" : "standard");
+        *slot = gdk_texture_new_from_filename(p, NULL);
+        g_free(p);
+    }
+    if (*slot)
+        gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(*slot));
+    gtk_image_set_pixel_size(GTK_IMAGE(img), TAB_PIN_ICON_PX);
+}
+
 static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
 {
     const char *base = doc->filepath
@@ -590,16 +631,25 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     GtkWidget *status = gtk_image_new();
     set_tab_status_icon(status, doc->modified);
 
+    /* Pin icon, left of the close button — shown only while pinned. */
+    GtkWidget *pin = gtk_image_new();
+    set_tab_pin_icon(pin);
+    gtk_widget_set_visible(pin, doc->pinned);
+
     npp_box_pack(GTK_BOX(box), status, FALSE, 0);
     npp_box_pack(GTK_BOX(box), label, FALSE, 0);
+    npp_box_pack(GTK_BOX(box), pin, FALSE, 0);
     npp_box_pack(GTK_BOX(box), btn, FALSE, 0);
-    /* P3 — tab_close_button: hide the × on each tab when pref disables it. */
-    if (!g_prefs.tab_close_button)
+    /* P3 — tab_close_button: hide the × when the pref disables it; a
+     * pinned tab always hides its × (macOS blocks close on pinned). */
+    if (doc->pinned || !g_prefs.tab_close_button)
         gtk_widget_set_visible(btn, FALSE);
 
-    /* store label + status icon on sci for later updates */
+    /* store label + status/pin icons + close button on sci for updates */
     g_object_set_data(G_OBJECT(sci), "tab-label", label);
     g_object_set_data(G_OBJECT(sci), "tab-status-icon", status);
+    g_object_set_data(G_OBJECT(sci), "tab-pin-icon", pin);
+    g_object_set_data(G_OBJECT(sci), "tab-close-btn", btn);
     return box;
 }
 
@@ -1290,6 +1340,9 @@ gboolean editor_close_page(int page)
     if (!sci) return FALSE;
     NppDoc *doc = doc_of_sci(sci);
 
+    /* Pinned tabs block close (macOS NppTabBar parity) — unpin first. */
+    if (doc && doc->pinned) return FALSE;
+
     if (!ask_save(doc)) return FALSE;
 
     filewatch_stop(doc);
@@ -1308,6 +1361,30 @@ gboolean editor_close_page(int page)
     update_window_title();
     main_doclist_refresh();
     return TRUE;
+}
+
+/* ---- Tab pinning -------------------------------------------------- *
+ * NppDoc.pinned is the single source of truth, shared with the Document
+ * List panel. Pinning shows the pin icon, hides the × close button, and
+ * blocks editor_close_page (macOS NppTabBar parity). */
+gboolean editor_tab_pinned(GtkWidget *sci)
+{
+    NppDoc *doc = sci ? doc_of_sci(sci) : NULL;
+    return doc && doc->pinned;
+}
+
+void editor_set_tab_pinned(GtkWidget *sci, gboolean pinned)
+{
+    if (!sci) return;
+    NppDoc *doc = doc_of_sci(sci);
+    if (!doc || doc->pinned == pinned) return;
+    doc->pinned = pinned;
+    GtkWidget *pin = g_object_get_data(G_OBJECT(sci), "tab-pin-icon");
+    GtkWidget *btn = g_object_get_data(G_OBJECT(sci), "tab-close-btn");
+    if (pin) gtk_widget_set_visible(pin, pinned);
+    if (btn) gtk_widget_set_visible(btn,
+                                    pinned ? FALSE : g_prefs.tab_close_button);
+    main_doclist_refresh();
 }
 
 gboolean editor_save_all(void)

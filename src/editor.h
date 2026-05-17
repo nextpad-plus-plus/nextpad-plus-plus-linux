@@ -62,6 +62,11 @@ gboolean   editor_close_page(int page);            /* -1 = current           */
 gboolean   editor_close_all_but_current(void);
 void       editor_close_all_quit(GApplication *app);
 
+/* Tab pinning — NppDoc.pinned is the single source of truth, shared with
+ * the Document List. A pinned tab hides its × and blocks close. */
+gboolean   editor_tab_pinned(GtkWidget *sci);
+void       editor_set_tab_pinned(GtkWidget *sci, gboolean pinned);
+
 /* Edit operations on current document */
 void editor_undo(void);
 void editor_redo(void);

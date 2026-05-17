@@ -4234,25 +4234,14 @@ gboolean main_large_file_allows(GtkWidget *sci, const char *feature) {
  * have to modify the grafted NppDoc struct in editor.h.
  * ────────────────────────────────────────────────────────────────────── */
 
+/* Pinning is owned by editor.c (NppDoc.pinned) — the macOS pin icon, the
+ * hidden ×, the close block, and the Document List all read that one
+ * field. These thin wrappers keep the rest of main.c unchanged. */
 static gboolean tab_is_pinned(GtkWidget *sci) {
-    return sci && g_object_get_data(G_OBJECT(sci), "npp-pinned") != NULL;
+    return editor_tab_pinned(sci);
 }
 static void tab_set_pinned(GtkWidget *sci, gboolean pin) {
-    if (!sci) return;
-    g_object_set_data(G_OBJECT(sci), "npp-pinned",
-                      pin ? GINT_TO_POINTER(1) : NULL);
-    /* Visual: append/remove "📌 " prefix to the tab label. */
-    GtkWidget *label = g_object_get_data(G_OBJECT(sci), "tab-label");
-    if (label) {
-        const char *cur = gtk_label_get_text(GTK_LABEL(label));
-        if (pin && (!cur || strncmp(cur, "📌 ", 6) != 0)) {
-            char *new_lbl = g_strdup_printf("📌 %s", cur ? cur : "");
-            gtk_label_set_text(GTK_LABEL(label), new_lbl);
-            g_free(new_lbl);
-        } else if (!pin && cur && strncmp(cur, "📌 ", 6) == 0) {
-            gtk_label_set_text(GTK_LABEL(label), cur + 6);
-        }
-    }
+    editor_set_tab_pinned(sci, pin);
 }
 static void action_tab_pin_toggle(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
