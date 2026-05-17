@@ -1052,7 +1052,8 @@ static void appearance_apply_live(void) {
     extern void stylestore_load_theme(const char *path);
     const char *theme_xml = dark
         ? RESOURCES_DIR "/themes/DarkModeDefault.xml"
-        : NULL;  /* NULL → reload Default model + user overrides */
+        : NULL;  /* NULL → pristine light default (stylers.model.xml),
+                  * symmetric with Dark loading DarkModeDefault.xml. */
     stylestore_load_theme(theme_xml);
 
     /* Re-apply to every open editor view. */

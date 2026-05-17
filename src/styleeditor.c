@@ -378,6 +378,10 @@ static void on_theme_changed(GtkComboBox *combo, gpointer data)
     populate_lang_combo(s);
     populate_style_list(s);
     s->changed = TRUE;
+    /* #6 — apply the picked theme to the open editors immediately so the
+     * change is visible without restarting (live preview, like the
+     * per-attribute edits below). */
+    if (s->on_apply) s->on_apply();
 }
 
 static void on_lang_changed(GtkComboBox *combo, gpointer data)

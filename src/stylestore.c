@@ -373,8 +373,13 @@ void stylestore_load_theme(const char *path)
         fix_default_font();
         s_loaded = TRUE;
     } else {
-        /* Reload default model */
-        stylestore_init(NULL);
+        /* "Default" theme = the pristine stylers.model.xml ONLY. NOT via
+         * stylestore_init(), which also overlays the user's stylers.xml —
+         * that overlay would just reproduce whatever was last saved, so
+         * selecting "Default" appeared to do nothing (#6). */
+        parse_file(RESOURCES_DIR "/stylers.model.xml");
+        fix_default_font();
+        s_loaded = TRUE;
     }
 }
 
