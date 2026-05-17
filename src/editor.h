@@ -59,8 +59,17 @@ gboolean   editor_rename(void);                   /* rename current file in-plac
 void       editor_reload_current(void);            /* reload current doc from disk */
 void       editor_reload_as(const char *encoding); /* re-read with forced encoding */
 gboolean   editor_close_page(int page);            /* -1 = current           */
+gboolean   editor_close_sci(GtkWidget *sci);        /* close one exact tab     */
 gboolean   editor_close_all_but_current(void);
 void       editor_close_all_quit(GApplication *app);
+
+/* Split views (#3) — move/clone the focused editor to the secondary
+ * vertical (right) or horizontal (bottom) view; Reset View collapses
+ * both secondaries back into the primary. */
+void       editor_move_to_view(gboolean vertical);
+void       editor_clone_to_view(gboolean vertical);
+void       editor_reset_view(void);
+gboolean   editor_split_active(void);
 
 /* Tab pinning — NppDoc.pinned is the single source of truth, shared with
  * the Document List. A pinned tab hides its × and blocks close. */

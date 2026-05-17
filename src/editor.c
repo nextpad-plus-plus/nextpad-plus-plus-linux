@@ -103,7 +103,9 @@ static GtkWidget *sci_of_page(int page)
 static int sci_page_num(GtkWidget *sci)
 {
     GtkWidget *sw = sci ? gtk_widget_get_parent(sci) : NULL;
-    return sw ? gtk_notebook_page_num(GTK_NOTEBOOK(s_notebook), sw) : -1;
+    GtkWidget *nb = sw  ? gtk_widget_get_parent(sw)  : NULL;
+    return GTK_IS_NOTEBOOK(nb)
+               ? gtk_notebook_page_num(GTK_NOTEBOOK(nb), sw) : -1;
 }
 
 static void refresh_tab_label(int page);
@@ -263,6 +265,17 @@ static gboolean on_sci_zoom_key(GtkEventControllerKey *ctl, guint keyval,
     return FALSE;
 }
 
+/* #3 split views: whichever editor view last held keyboard focus is the
+ * "active" one — current_sci / editor_current_doc resolve against it. */
+static void on_sci_focus_enter(GtkEventControllerFocus *fc, gpointer data)
+{
+    (void)fc;
+    GtkWidget *sci = (GtkWidget *)data;
+    GtkWidget *sw  = sci ? gtk_widget_get_parent(sci) : NULL;
+    GtkWidget *nb  = sw  ? gtk_widget_get_parent(sw)  : NULL;
+    if (GTK_IS_NOTEBOOK(nb)) s_active_notebook = nb;
+}
+
 static void setup_sci(GtkWidget *sci)
 {
     sci_msg(sci, SCI_SETCODEPAGE,     SC_CP_UTF8, 0);
@@ -369,6 +382,12 @@ static void setup_sci(GtkWidget *sci)
         g_signal_connect(zc, "key-pressed", G_CALLBACK(on_sci_zoom_key), NULL);
         gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(zc));
     }
+    {
+        /* #3 — track which split view is active by keyboard focus. */
+        GtkEventController *fc = gtk_event_controller_focus_new();
+        g_signal_connect(fc, "enter", G_CALLBACK(on_sci_focus_enter), sci);
+        gtk_widget_add_controller(sci, fc);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -378,9 +397,8 @@ static void setup_sci(GtkWidget *sci)
 static void on_close_btn_clicked(GtkWidget *btn, gpointer data)
 {
     (void)btn;
-    GtkWidget *sci = (GtkWidget *)data;
-    int page = sci_page_num(sci);
-    editor_close_page(page);
+    /* Close this exact tab, in whichever (primary/secondary) notebook. */
+    editor_close_sci((GtkWidget *)data);
 }
 
 /* G3.6: tab context menu. Close variants honour macOS-port semantics. */
@@ -1092,7 +1110,14 @@ NppDoc *editor_doc_at(int page)
 
 NppDoc *editor_current_doc(void)
 {
-    return editor_doc_at(editor_current_page());
+    /* #3 — resolve against the active split view, not always the primary. */
+    GtkWidget *nbw = s_active_notebook ? s_active_notebook : s_notebook;
+    if (!GTK_IS_NOTEBOOK(nbw)) nbw = s_notebook;
+    GtkNotebook *nb = GTK_NOTEBOOK(nbw);
+    int p = gtk_notebook_get_current_page(nb);
+    if (p < 0) return NULL;
+    GtkWidget *sci = page_to_sci(gtk_notebook_get_nth_page(nb, p));
+    return sci ? doc_of_sci(sci) : NULL;
 }
 
 sptr_t editor_send(unsigned int msg, uptr_t wp, sptr_t lp)
@@ -1358,34 +1383,217 @@ gboolean editor_save_as_dialog(void)
     return saved;
 }
 
-gboolean editor_close_page(int page)
+/* ================================================================== */
+/* Split views (#3) — mirrors macOS _moveEditor / _cloneEditor /        */
+/* resetView. A secondary view (vertical = right, horizontal = bottom)  */
+/* is its own GtkNotebook, created lazily and collapsed when emptied.   */
+/* ================================================================== */
+
+#ifndef SCI_GETDOCPOINTER
+#define SCI_GETDOCPOINTER 2548
+#endif
+#ifndef SCI_SETDOCPOINTER
+#define SCI_SETDOCPOINTER 2549
+#endif
+
+/* Lazily build the secondary notebook and attach it as the split's end
+ * child (an even 50/50 divider). */
+static GtkWidget *editor_ensure_secondary(gboolean vertical)
 {
-    if (page < 0) page = editor_current_page();
-    GtkWidget *sci = sci_of_page(page);
+    GtkWidget **slot  = vertical ? &s_notebook_v : &s_notebook_h;
+    GtkWidget  *paned = vertical ? s_split_v : s_split_h;
+    if (*slot) return *slot;
+    GtkWidget *nb = gtk_notebook_new();
+    gtk_widget_add_css_class(nb, "npp-editor-tabs");
+    gtk_notebook_set_scrollable(GTK_NOTEBOOK(nb), TRUE);
+    gtk_notebook_set_show_border(GTK_NOTEBOOK(nb), FALSE);
+    g_signal_connect(nb, "switch-page", G_CALLBACK(on_switch_page), NULL);
+    *slot = nb;
+    gtk_paned_set_end_child(GTK_PANED(paned), nb);
+    gtk_paned_set_resize_end_child(GTK_PANED(paned), TRUE);
+    int span = vertical ? gtk_widget_get_width(paned)
+                        : gtk_widget_get_height(paned);
+    if (span > 40)
+        gtk_paned_set_position(GTK_PANED(paned), span / 2);
+    return nb;
+}
+
+/* Detach an emptied secondary notebook; its split collapses to the
+ * primary. */
+static void editor_collapse_secondary(gboolean vertical)
+{
+    GtkWidget **slot  = vertical ? &s_notebook_v : &s_notebook_h;
+    GtkWidget  *paned = vertical ? s_split_v : s_split_h;
+    if (!*slot) return;
+    if (s_active_notebook == *slot) s_active_notebook = s_notebook;
+    gtk_paned_set_end_child(GTK_PANED(paned), NULL);
+    *slot = NULL;
+}
+
+/* Reparent a tab (its scrolled-window page) to `dst`, keeping the
+ * custom tab label widget. */
+static void editor_move_page(GtkWidget *sci, GtkNotebook *dst)
+{
+    if (!sci || !dst) return;
+    GtkWidget *sw  = gtk_widget_get_parent(sci);
+    GtkWidget *nbw = sw ? gtk_widget_get_parent(sw) : NULL;
+    if (!GTK_IS_NOTEBOOK(nbw)) return;
+    GtkNotebook *src = GTK_NOTEBOOK(nbw);
+    if (src == dst) return;
+    GtkWidget *label = gtk_notebook_get_tab_label(src, sw);
+    g_object_ref(sw);
+    if (label) g_object_ref(label);
+    gtk_notebook_remove_page(src, gtk_notebook_page_num(src, sw));
+    int np = gtk_notebook_append_page(dst, sw, label);
+    gtk_notebook_set_tab_reorderable(dst, sw, TRUE);
+    gtk_notebook_set_current_page(dst, np);
+    g_object_unref(sw);
+    if (label) g_object_unref(label);
+    editor_apply_tab_color(sci);   /* the `tab` CSS node changed */
+}
+
+/* Close one exact tab, in whichever notebook it lives. */
+gboolean editor_close_sci(GtkWidget *sci)
+{
     if (!sci) return FALSE;
+    GtkWidget *sw  = gtk_widget_get_parent(sci);
+    GtkWidget *nbw = sw ? gtk_widget_get_parent(sw) : NULL;
+    if (!GTK_IS_NOTEBOOK(nbw)) return FALSE;
+    GtkNotebook *nb = GTK_NOTEBOOK(nbw);
     NppDoc *doc = doc_of_sci(sci);
 
     /* Pinned tabs block close (macOS NppTabBar parity) — unpin first. */
     if (doc && doc->pinned) return FALSE;
-
     if (!ask_save(doc)) return FALSE;
 
     filewatch_stop(doc);
     backup_clean(doc);
-    gtk_notebook_remove_page(GTK_NOTEBOOK(s_notebook), page);
+    gtk_notebook_remove_page(nb, gtk_notebook_page_num(nb, sw));
     g_free(doc->filepath);
     g_free(doc->encoding);
     g_free(doc->language);
     g_free(doc->backup_filepath);
     g_free(doc);
 
-    /* keep at least one tab open */
+    /* Collapse a secondary view once its last tab is gone. */
+    if (s_notebook_v && nbw == s_notebook_v &&
+        gtk_notebook_get_n_pages(nb) == 0)
+        editor_collapse_secondary(TRUE);
+    else if (s_notebook_h && nbw == s_notebook_h &&
+             gtk_notebook_get_n_pages(nb) == 0)
+        editor_collapse_secondary(FALSE);
+    /* Keep at least one tab in the primary view. */
     if (gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) == 0)
         editor_new_doc();
 
     update_window_title();
     main_doclist_refresh();
     return TRUE;
+}
+
+gboolean editor_close_page(int page)
+{
+    GtkWidget *sci;
+    if (page < 0) {
+        NppDoc *d = editor_current_doc();
+        sci = d ? d->sci : NULL;
+    } else {
+        sci = sci_of_page(page);    /* primary-notebook index */
+    }
+    return editor_close_sci(sci);
+}
+
+gboolean editor_split_active(void)
+{
+    return s_notebook_v != NULL || s_notebook_h != NULL;
+}
+
+/* macOS _moveEditor: move the focused editor into the secondary view —
+ * or, if it is already there, back to the primary. */
+void editor_move_to_view(gboolean vertical)
+{
+    NppDoc *doc = editor_current_doc();
+    if (!doc || !doc->sci) return;
+    GtkWidget *sci    = doc->sci;
+    GtkWidget *sw     = gtk_widget_get_parent(sci);
+    GtkWidget *cur_nb = sw ? gtk_widget_get_parent(sw) : NULL;
+    GtkWidget *sub    = vertical ? s_notebook_v : s_notebook_h;
+
+    if (cur_nb && cur_nb == sub) {
+        editor_move_page(sci, GTK_NOTEBOOK(s_notebook));
+        if (gtk_notebook_get_n_pages(GTK_NOTEBOOK(sub)) == 0)
+            editor_collapse_secondary(vertical);
+    } else {
+        gboolean primary_emptying =
+            (cur_nb == s_notebook) &&
+            gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) == 1;
+        GtkWidget *dst = editor_ensure_secondary(vertical);
+        editor_move_page(sci, GTK_NOTEBOOK(dst));
+        if (primary_emptying)
+            editor_new_doc();          /* keep one tab in the primary */
+    }
+    gtk_widget_grab_focus(sci);
+    main_doclist_refresh();
+}
+
+/* macOS _cloneEditor: a new tab in the secondary view that SHARES the
+ * Scintilla document — edits in one view appear in the other. */
+void editor_clone_to_view(gboolean vertical)
+{
+    NppDoc *src = editor_current_doc();
+    if (!src || !src->sci) return;
+    GtkWidget *dst = editor_ensure_secondary(vertical);
+
+    NppDoc *doc = g_new0(NppDoc, 1);
+    doc->new_index = next_untitled_index();
+    doc->encoding  = g_strdup(src->encoding ? src->encoding
+                                            : g_prefs.default_encoding);
+    doc->filepath  = src->filepath ? g_strdup(src->filepath) : NULL;
+    doc->language  = src->language ? g_strdup(src->language) : NULL;
+
+    GtkWidget *sci = scintilla_new();
+    doc->sci = sci;
+    g_object_set_data(G_OBJECT(sci), "npp-doc", doc);
+    setup_sci(sci);
+    /* Share the document buffer (Scintilla ref-counts it). */
+    sptr_t docptr = sci_msg(src->sci, SCI_GETDOCPOINTER, 0, 0);
+    sci_msg(sci, SCI_SETDOCPOINTER, 0, docptr);
+    g_signal_connect(sci, "sci-notify", G_CALLBACK(on_sci_notify), NULL);
+    if (doc->language && doc->language[0]) {
+        g_object_set_data_full(G_OBJECT(sci), "npp-lang",
+                               g_strdup(doc->language), g_free);
+        lexer_apply(sci, doc->language);
+    }
+    GtkWidget *label = make_tab_label(doc, sci);
+    GtkWidget *sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), sci);
+    int page = gtk_notebook_append_page(GTK_NOTEBOOK(dst), sw, label);
+    gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(dst), sw, TRUE);
+    gtk_widget_show_all(dst);
+    editor_apply_tab_color(sci);
+    gtk_notebook_set_current_page(GTK_NOTEBOOK(dst), page);
+    gtk_widget_grab_focus(sci);
+    main_doclist_refresh();
+}
+
+/* macOS resetView: move every editor from both secondaries back to the
+ * primary and collapse the split panes. */
+void editor_reset_view(void)
+{
+    for (int pass = 0; pass < 2; pass++) {
+        gboolean vertical = (pass == 0);
+        GtkWidget *nb = vertical ? s_notebook_v : s_notebook_h;
+        if (!nb) continue;
+        while (gtk_notebook_get_n_pages(GTK_NOTEBOOK(nb)) > 0) {
+            GtkWidget *pg  = gtk_notebook_get_nth_page(GTK_NOTEBOOK(nb), 0);
+            GtkWidget *sci = page_to_sci(pg);
+            if (!sci) break;
+            editor_move_page(sci, GTK_NOTEBOOK(s_notebook));
+        }
+        editor_collapse_secondary(vertical);
+    }
+    s_active_notebook = s_notebook;
+    main_doclist_refresh();
 }
 
 /* ---- Tab pinning -------------------------------------------------- *

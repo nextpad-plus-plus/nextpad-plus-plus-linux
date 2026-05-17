@@ -4256,6 +4256,18 @@ static void action_tab_set_color(GSimpleAction *a, GVariant *p, gpointer u) {
     editor_set_tab_color(sci, slot);     /* NppDoc.color_tag is the truth */
 }
 
+/* #3 split views — move/clone the focused editor to a secondary view. */
+static void action_move_vview(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_move_to_view(TRUE); }
+static void action_move_hview(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_move_to_view(FALSE); }
+static void action_clone_vview(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_clone_to_view(TRUE); }
+static void action_clone_hview(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_clone_to_view(FALSE); }
+static void action_reset_view(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_reset_view(); }
+
 /* Install CSS for tab colours once. */
 static void install_tab_color_css(void) {
     GtkCssProvider *p = gtk_css_provider_new();
@@ -4740,6 +4752,11 @@ static const GActionEntry kAppActions[] = {
     /* G20 Tab polish */
     { "tab-pin-toggle",      action_tab_pin_toggle,      NULL, NULL, NULL },
     { "tab-set-color",       action_tab_set_color,       "i",  NULL, NULL },
+    { "move-to-vview",       action_move_vview,          NULL, NULL, NULL },
+    { "clone-to-vview",      action_clone_vview,         NULL, NULL, NULL },
+    { "move-to-hview",       action_move_hview,          NULL, NULL, NULL },
+    { "clone-to-hview",      action_clone_hview,         NULL, NULL, NULL },
+    { "reset-view",          action_reset_view,          NULL, NULL, NULL },
     /* G12.11 On Selection */
     { "sel-open-file",       action_sel_open_file,       NULL, NULL, NULL },
     { "sel-open-folder",     action_sel_open_folder,     NULL, NULL, NULL },
@@ -5408,6 +5425,21 @@ static GMenuModel *build_menu_model(void)
     {
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Monitoring (tail -f)", "app.toggle-monitoring");
+        g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
+        g_object_unref(grp);
+    }
+    /* Section 13: split views (#3 — labels match tabContextMenu.xml so the
+     * tab right-click "Move Document" submenu resolves these). */
+    {
+        GMenu *grp = g_menu_new();
+        GMenu *mv  = g_menu_new();
+        g_menu_append(mv, "Move to Other Vertical View",    "app.move-to-vview");
+        g_menu_append(mv, "Clone to Other Vertical View",   "app.clone-to-vview");
+        g_menu_append(mv, "Move to Other Horizontal View",  "app.move-to-hview");
+        g_menu_append(mv, "Clone to Other Horizontal View", "app.clone-to-hview");
+        g_menu_append(mv, "Reset View",                     "app.reset-view");
+        g_menu_append_submenu(grp, "Split View", G_MENU_MODEL(mv));
+        g_object_unref(mv);
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
