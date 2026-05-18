@@ -1408,24 +1408,35 @@ gboolean editor_save_as_dialog(void)
 
 /* Lazily build the secondary notebook and attach it as the split's end
  * child (an even 50/50 divider). */
-static GtkWidget *editor_ensure_secondary(gboolean vertical)
+/* Create a secondary editor notebook — NOT yet attached to a paned, so it
+ * can be populated before insertion. Attaching an EMPTY notebook to the
+ * paned and then appending a page produces a bad intermediate layout
+ * (the paned briefly allocates the new pane a negative size, which
+ * cascades into "GtkImage width 0 height -9" / "for_size >= -1" in the
+ * tab labels). Populate first, attach last. */
+static GtkWidget *secondary_notebook_new(gboolean vertical)
 {
-    GtkWidget **slot  = vertical ? &s_notebook_v : &s_notebook_h;
-    GtkWidget  *paned = vertical ? s_split_v : s_split_h;
-    if (*slot) return *slot;
     GtkWidget *nb = gtk_notebook_new();
     gtk_widget_add_css_class(nb, "npp-editor-tabs");
     gtk_notebook_set_scrollable(GTK_NOTEBOOK(nb), TRUE);
     gtk_notebook_set_show_border(GTK_NOTEBOOK(nb), FALSE);
     g_signal_connect(nb, "switch-page", G_CALLBACK(on_switch_page), NULL);
-    *slot = nb;
-    gtk_paned_set_end_child(GTK_PANED(paned), nb);
+    *(vertical ? &s_notebook_v : &s_notebook_h) = nb;
+    return nb;
+}
+
+/* Attach an already-populated secondary notebook to its split paned, at
+ * an even 50/50 divider. */
+static void secondary_notebook_attach(GtkWidget *nb, gboolean vertical)
+{
+    GtkWidget *paned = vertical ? s_split_v : s_split_h;
+    gtk_paned_set_shrink_start_child(GTK_PANED(paned), TRUE);
+    gtk_paned_set_shrink_end_child(GTK_PANED(paned), TRUE);
     gtk_paned_set_resize_end_child(GTK_PANED(paned), TRUE);
+    gtk_paned_set_end_child(GTK_PANED(paned), nb);
     int span = vertical ? gtk_widget_get_width(paned)
                         : gtk_widget_get_height(paned);
-    if (span > 40)
-        gtk_paned_set_position(GTK_PANED(paned), span / 2);
-    return nb;
+    gtk_paned_set_position(GTK_PANED(paned), span > 120 ? span / 2 : 240);
 }
 
 /* Detach an emptied secondary notebook; its split collapses to the
@@ -1541,8 +1552,11 @@ void editor_move_to_view(gboolean vertical)
         gboolean primary_emptying =
             (cur_nb == s_notebook) &&
             gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) == 1;
-        GtkWidget *dst = editor_ensure_secondary(vertical);
-        editor_move_page(sci, GTK_NOTEBOOK(dst));
+        gboolean   fresh = (sub == NULL);
+        GtkWidget *dst   = fresh ? secondary_notebook_new(vertical) : sub;
+        editor_move_page(sci, GTK_NOTEBOOK(dst));   /* populate first */
+        if (fresh)
+            secondary_notebook_attach(dst, vertical);   /* attach last */
         if (primary_emptying)
             editor_new_doc();          /* keep one tab in the primary */
     }
@@ -1556,7 +1570,9 @@ void editor_clone_to_view(gboolean vertical)
 {
     NppDoc *src = editor_current_doc();
     if (!src || !src->sci) return;
-    GtkWidget *dst = editor_ensure_secondary(vertical);
+    GtkWidget *existing = vertical ? s_notebook_v : s_notebook_h;
+    gboolean   fresh    = (existing == NULL);
+    GtkWidget *dst      = fresh ? secondary_notebook_new(vertical) : existing;
 
     NppDoc *doc = g_new0(NppDoc, 1);
     doc->new_index = next_untitled_index();
@@ -1583,9 +1599,12 @@ void editor_clone_to_view(gboolean vertical)
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), sci);
     int page = gtk_notebook_append_page(GTK_NOTEBOOK(dst), sw, label);
     gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(dst), sw, TRUE);
-    gtk_widget_show_all(dst);
     editor_apply_tab_color(sci);
     gtk_notebook_set_current_page(GTK_NOTEBOOK(dst), page);
+    /* Attach the populated notebook to the split last (see
+     * secondary_notebook_new). */
+    if (fresh)
+        secondary_notebook_attach(dst, vertical);
     gtk_widget_grab_focus(sci);
     main_doclist_refresh();
 }
