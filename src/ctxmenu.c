@@ -216,7 +216,14 @@ static void on_action_activate(GtkButton *mi, gpointer ud) {
     GtkApplication *app = (GtkApplication *)ud;
     const char *action_name = g_object_get_data(G_OBJECT(mi), "action-name");
     if (!app || !action_name) return;
-    g_action_group_activate_action(G_ACTION_GROUP(app), action_name, NULL);
+    /* The menu model stores prefixed action names ("app.close"); the
+     * application's GActionGroup is keyed by the bare name ("close"), so
+     * strip the "<prefix>." — otherwise the activation silently no-ops
+     * (this is why tab-menu items like "Move to Other Vertical View"
+     * did nothing). */
+    const char *dot = strchr(action_name, '.');
+    g_action_group_activate_action(G_ACTION_GROUP(app),
+                                   dot ? dot + 1 : action_name, NULL);
 }
 
 static void on_builtin_pintab(GtkButton *mi, gpointer ud) {
