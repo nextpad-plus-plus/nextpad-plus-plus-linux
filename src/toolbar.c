@@ -485,7 +485,7 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
      * A thin base line under the toolbar mirrors the line above it. */
     {
         GtkCssProvider *css = gtk_css_provider_new();
-        const char *line = is_dark_mode() ? "#444444" : "#cccccc";
+        const char *line = is_dark_mode() ? "#444444" : "#e1e1e1";
         char buf[512];
         snprintf(buf, sizeof(buf),
             ".npp-toolbar { padding: 2px 4px;"
