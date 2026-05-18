@@ -96,16 +96,23 @@ static GtkWidget *sci_of_page(int page)
     return page_to_sci(gtk_notebook_get_nth_page(GTK_NOTEBOOK(s_notebook), page));
 }
 
-/* Notebook page index for a given sci — its scrolled-window parent is the
- * actual notebook page. (The previous body recursed on itself and always
- * returned -1, which made right-click select the last tab and broke
- * pinned-tab reordering / Close Others.) */
+/* The GtkNotebook a widget lives in. NOT gtk_widget_get_parent twice: in
+ * GTK4 a notebook holds its pages in an internal GtkStack, so the page
+ * child's parent is that stack, and the notebook is the stack's parent
+ * (or higher). Walk up until we hit the notebook. */
+static GtkNotebook *notebook_of(GtkWidget *w)
+{
+    for (GtkWidget *p = w; p; p = gtk_widget_get_parent(p))
+        if (GTK_IS_NOTEBOOK(p)) return GTK_NOTEBOOK(p);
+    return NULL;
+}
+
+/* Notebook page index for a given sci. */
 static int sci_page_num(GtkWidget *sci)
 {
-    GtkWidget *sw = sci ? gtk_widget_get_parent(sci) : NULL;
-    GtkWidget *nb = sw  ? gtk_widget_get_parent(sw)  : NULL;
-    return GTK_IS_NOTEBOOK(nb)
-               ? gtk_notebook_page_num(GTK_NOTEBOOK(nb), sw) : -1;
+    GtkWidget   *sw = sci ? gtk_widget_get_parent(sci) : NULL;
+    GtkNotebook *nb = notebook_of(sci);
+    return (nb && sw) ? gtk_notebook_page_num(nb, sw) : -1;
 }
 
 static void refresh_tab_label(int page);
@@ -271,9 +278,8 @@ static void on_sci_focus_enter(GtkEventControllerFocus *fc, gpointer data)
 {
     (void)fc;
     GtkWidget *sci = (GtkWidget *)data;
-    GtkWidget *sw  = sci ? gtk_widget_get_parent(sci) : NULL;
-    GtkWidget *nb  = sw  ? gtk_widget_get_parent(sw)  : NULL;
-    if (GTK_IS_NOTEBOOK(nb)) s_active_notebook = nb;
+    GtkNotebook *nb = notebook_of(sci);
+    if (nb) s_active_notebook = GTK_WIDGET(nb);
 }
 
 static void setup_sci(GtkWidget *sci)
@@ -494,10 +500,9 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
         /* Select the clicked tab in WHICHEVER notebook it lives in. The
          * old code used s_notebook unconditionally with a possibly-stale
          * index, which selected the last tab when the index was -1. */
-        GtkWidget *sw = gtk_widget_get_parent(sci);
-        GtkWidget *nb = sw ? gtk_widget_get_parent(sw) : NULL;
-        if (GTK_IS_NOTEBOOK(nb) && page >= 0)
-            gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), page);
+        GtkNotebook *nb = notebook_of(sci);
+        if (nb && page >= 0)
+            gtk_notebook_set_current_page(nb, page);
 
         /* P5 — build from tabContextMenu.xml. Fall back to the hardcoded
          * set if the XML produced an empty menu (parser error etc.). */
@@ -1456,11 +1461,9 @@ static void editor_collapse_secondary(gboolean vertical)
 static void editor_move_page(GtkWidget *sci, GtkNotebook *dst)
 {
     if (!sci || !dst) return;
-    GtkWidget *sw  = gtk_widget_get_parent(sci);
-    GtkWidget *nbw = sw ? gtk_widget_get_parent(sw) : NULL;
-    if (!GTK_IS_NOTEBOOK(nbw)) return;
-    GtkNotebook *src = GTK_NOTEBOOK(nbw);
-    if (src == dst) return;
+    GtkWidget   *sw  = gtk_widget_get_parent(sci);
+    GtkNotebook *src = notebook_of(sci);
+    if (!sw || !src || src == dst) return;
     NppDoc *doc = doc_of_sci(sci);
     /* Reparent the scrolled-window page, but build a FRESH tab label in the
      * destination instead of carrying the old one across notebooks —
@@ -1481,10 +1484,10 @@ static void editor_move_page(GtkWidget *sci, GtkNotebook *dst)
 gboolean editor_close_sci(GtkWidget *sci)
 {
     if (!sci) return FALSE;
-    GtkWidget *sw  = gtk_widget_get_parent(sci);
-    GtkWidget *nbw = sw ? gtk_widget_get_parent(sw) : NULL;
-    if (!GTK_IS_NOTEBOOK(nbw)) return FALSE;
-    GtkNotebook *nb = GTK_NOTEBOOK(nbw);
+    GtkWidget   *sw = gtk_widget_get_parent(sci);
+    GtkNotebook *nb = notebook_of(sci);
+    if (!sw || !nb) return FALSE;
+    GtkWidget *nbw = GTK_WIDGET(nb);
     NppDoc *doc = doc_of_sci(sci);
 
     /* Pinned tabs block close (macOS NppTabBar parity) — unpin first. */
@@ -1539,10 +1542,10 @@ void editor_move_to_view(gboolean vertical)
 {
     NppDoc *doc = editor_current_doc();
     if (!doc || !doc->sci) return;
-    GtkWidget *sci    = doc->sci;
-    GtkWidget *sw     = gtk_widget_get_parent(sci);
-    GtkWidget *cur_nb = sw ? gtk_widget_get_parent(sw) : NULL;
-    GtkWidget *sub    = vertical ? s_notebook_v : s_notebook_h;
+    GtkWidget   *sci    = doc->sci;
+    GtkNotebook *cur    = notebook_of(sci);
+    GtkWidget   *cur_nb = cur ? GTK_WIDGET(cur) : NULL;
+    GtkWidget   *sub    = vertical ? s_notebook_v : s_notebook_h;
 
     if (cur_nb && cur_nb == sub) {
         editor_move_page(sci, GTK_NOTEBOOK(s_notebook));
