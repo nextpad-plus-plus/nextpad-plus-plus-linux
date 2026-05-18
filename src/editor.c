@@ -909,6 +909,10 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
     statusbar_update_from_sci(sci);
     statusbar_set_language(lexer_display_name(
         (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang")));
+    /* #4 — tick the active language in the Language menu. */
+    extern void main_sync_language_menu(const char *key);
+    main_sync_language_menu(
+        (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang"));
     update_window_title();
     findreplace_set_sci(sci);
     toolbar_sync_toggles(sci);

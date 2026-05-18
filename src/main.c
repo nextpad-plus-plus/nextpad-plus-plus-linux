@@ -272,6 +272,15 @@ void main_sync_encoding_menu(const char *enc) {
     statusbar_set_encoding(enc ? enc : "UTF-8");
 }
 
+/* #4: sync the Language menu's radio check with the active document's
+ * language (set on every tab switch / file open via on_switch_page). */
+static GSimpleAction *g_lang_action = NULL;
+void main_sync_language_menu(const char *key) {
+    if (!g_lang_action) return;
+    g_simple_action_set_state(g_lang_action,
+                              g_variant_new_string(key ? key : ""));
+}
+
 /* G4: route printing. Stubbed for now. */
 void main_do_print(void) { }
 
@@ -1176,11 +1185,22 @@ static const LangEntry kLangs[] = {
 };
 static const int kLangsCount = (int)(sizeof(kLangs) / sizeof(kLangs[0]));
 
-static void action_set_language(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a; (void)u;
-    const char *key = p ? g_variant_get_string(p, NULL) : NULL;
+/* set-language is a stateful (radio) action: the Language-menu item whose
+ * target equals the current state shows the check mark. change-state is
+ * fired both by a menu pick and by main_sync_language_menu() on tab
+ * switch / file open. */
+static void action_set_language_change(GSimpleAction *a, GVariant *new_state,
+                                        gpointer u) {
+    (void)u;
+    g_simple_action_set_state(a, new_state);
+    const char *key = new_state ? g_variant_get_string(new_state, NULL) : NULL;
     GtkWidget *sci = current_sci();
     if (sci) lexer_apply(sci, (key && *key) ? key : NULL);
+    NppDoc *doc = editor_current_doc();
+    if (doc) {                       /* persist the per-document override */
+        g_free(doc->language);
+        doc->language = g_strdup(key ? key : "");
+    }
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -4547,7 +4567,7 @@ static const GActionEntry kAppActions[] = {
     { "help-manual",        action_help_manual,        NULL, NULL, NULL },
     { "help-about",         action_help_about,         NULL, NULL, NULL },
     /* G11.2 Language */
-    { "set-language",       action_set_language,       "s",  NULL, NULL },
+    /* set-language is registered separately as a stateful action (#4). */
     /* Help / extras */
     { "help-cli-args",      action_help_cli_args,      NULL, NULL, NULL },
     { "view-summary",       action_view_summary,       NULL, NULL, NULL },
@@ -5603,6 +5623,31 @@ static GMenuModel *build_menu_model(void)
         g_menu_append_submenu(lang, "User Defined Language", G_MENU_MODEL(udl));
         g_object_unref(udl);
     }
+    /* #4 — every loaded User Defined Language as a selectable, radio-checked
+     * Language-menu entry (macOS lists them after the UDL submenu, from
+     * ~/.nextpad++/userDefineLangs/). */
+    {
+        extern void udl_load_all(void);
+        extern int  udl_count(void);
+        extern const char *udl_name(int);
+        extern const char *udl_key(int);
+        udl_load_all();
+        int nudl = udl_count();
+        if (nudl > 0) {
+            GMenu *udls = g_menu_new();
+            for (int i = 0; i < nudl; i++) {
+                const char *nm = udl_name(i), *ky = udl_key(i);
+                if (!nm || !ky) continue;
+                GMenuItem *mi = g_menu_item_new(nm, NULL);
+                g_menu_item_set_action_and_target(mi, "app.set-language",
+                                                  "s", ky);
+                g_menu_append_item(udls, mi);
+                g_object_unref(mi);
+            }
+            g_menu_append_section(lang, NULL, G_MENU_MODEL(udls));
+            g_object_unref(udls);
+        }
+    }
     g_menu_append_submenu(bar, "_Language", G_MENU_MODEL(lang));
     g_object_unref(lang);
 
@@ -6218,6 +6263,13 @@ static void on_startup(GtkApplication *app, gpointer ud)
     g_signal_connect(g_enc_action, "change-state",
                      G_CALLBACK(action_set_encoding_change), NULL);
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(g_enc_action));
+
+    /* Stateful set-language action — drives the Language menu radio (#4). */
+    g_lang_action = g_simple_action_new_stateful(
+        "set-language", G_VARIANT_TYPE_STRING, g_variant_new_string(""));
+    g_signal_connect(g_lang_action, "change-state",
+                     G_CALLBACK(action_set_language_change), NULL);
+    g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(g_lang_action));
 
     set_accel(app, "app.new",        "<Primary>n");
     set_accel(app, "app.open",       "<Primary>o");
