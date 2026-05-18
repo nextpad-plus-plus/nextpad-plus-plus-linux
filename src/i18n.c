@@ -442,6 +442,15 @@ void i18n_init(void)
         snprintf(path, sizeof(path), RESOURCES_DIR "/localization/english.xml");
 
     parse_file(path);
+
+    /* Build the macOS-style English->translated map from the same file. */
+    {
+        char *base = g_path_get_basename(path);
+        char *dot  = strrchr(base, '.');
+        if (dot) *dot = '\0';
+        i18n_build_translation(base);
+        g_free(base);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -540,6 +549,7 @@ void i18n_set_language(const char *stem)
         snprintf(path, sizeof(path),
                  RESOURCES_DIR "/localization/english.xml");
     parse_file(path);
+    i18n_build_translation(stem);
 }
 
 const char *i18n_str(const char *key, const char *fallback)
@@ -554,4 +564,237 @@ const char *i18n_mnemonic(const char *key, const char *fallback)
     if (!s_mnemonic) return fallback;
     const char *v = g_hash_table_lookup(s_mnemonic, key);
     return v ? v : fallback;
+}
+
+/* ================================================================== */
+/* macOS-style translation engine (mirrors NppLocalizer)               */
+/*                                                                      */
+/* macOS does not thread abstract keys through the UI code. It pairs    */
+/* english.xml with the target language XML by their shared element     */
+/* ids, builds a map  normalize(English string) -> translated string,   */
+/* and translate: looks up by the English string itself. applyToMain-   */
+/* Menu then walks the menu retranslating each title. We replicate that */
+/* here; i18n_translate_menu() produces a translated copy of a GMenu-   */
+/* Model (GMenuModel is immutable, so we rebuild rather than mutate).    */
+/* ================================================================== */
+
+/* normalize(English) -> translated. Empty/NULL when the language is
+ * English (translation is then the identity). */
+static GHashTable *s_xlate;
+
+/* Strip Windows accelerator markers — "Cu&t" -> "Cut", "A && B" ->
+ * "A & B" (a doubled && is a literal ampersand). Mirrors macOS
+ * stripAccelerators(). */
+static char *xl_strip_accel(const char *s)
+{
+    GString *o = g_string_new(NULL);
+    for (const char *p = s ? s : ""; *p; p++) {
+        if (*p == '&') {
+            if (p[1] == '&') { g_string_append_c(o, '&'); p++; }
+            /* else: lone '&' is a mnemonic marker — drop it */
+        } else {
+            g_string_append_c(o, *p);
+        }
+    }
+    return g_string_free(o, FALSE);
+}
+
+/* Normalise a title for lookup: strip Windows '&' and GTK '_' mnemonics,
+ * fold "..." to "…", drop a trailing " (… )" suffix, trim, lowercase.
+ * Mirrors macOS normalizeForLookup(). */
+static char *xl_normalize(const char *s)
+{
+    char *a = xl_strip_accel(s);
+    GString *b = g_string_new(NULL);
+    for (const char *p = a; *p; p++) {           /* drop GTK mnemonics */
+        if (*p == '_') continue;
+        if (p[0] == '.' && p[1] == '.' && p[2] == '.') {   /* ... -> … */
+            g_string_append(b, "\xE2\x80\xA6");
+            p += 2;
+            continue;
+        }
+        g_string_append_c(b, *p);
+    }
+    g_free(a);
+    /* strip a trailing " (...)" parenthetical */
+    char *last = NULL;
+    for (char *p = b->str; *p; p++)
+        if (p[0] == ' ' && p[1] == '(') last = p;
+    if (last && b->str[b->len - 1] == ')')
+        g_string_truncate(b, (gsize)(last - b->str));
+    char *trimmed = g_strstrip(g_strdup(b->str));
+    g_string_free(b, TRUE);
+    char *low = g_ascii_strdown(trimmed, -1);
+    g_free(trimmed);
+    return low;
+}
+
+/* ---- XML parse: one localization file -> { macOS-scheme key: value } */
+
+typedef struct { GHashTable *out; GPtrArray *stack; } XLParse;
+
+static const char *xl_attr(const char **names, const char **values,
+                           const char *key)
+{
+    for (int i = 0; names[i]; i++)
+        if (strcmp(names[i], key) == 0) return values[i];
+    return NULL;
+}
+
+static void xl_elem_start(GMarkupParseContext *ctx, const char *elem,
+                          const char **anames, const char **avalues,
+                          gpointer user, GError **err)
+{
+    (void)ctx; (void)err;
+    XLParse *p = user;
+    const char *parent = p->stack->len
+        ? g_ptr_array_index(p->stack, p->stack->len - 1) : "";
+
+    if (strcmp(elem, "Native-Langue") == 0) {
+        const char *nm  = xl_attr(anames, avalues, "name");
+        const char *rtl = xl_attr(anames, avalues, "RTL");
+        if (nm)  g_hash_table_insert(p->out, g_strdup("__name__"),
+                                     g_strdup(nm));
+        if (rtl) g_hash_table_insert(p->out, g_strdup("__rtl__"),
+                                     g_ascii_strdown(rtl, -1));
+    } else if (strcmp(elem, "Item") == 0) {
+        const char *name = xl_attr(anames, avalues, "name");
+        char *key = NULL;
+        if (name) {
+            const char *id;
+            if (!strcmp(parent, "Entries") &&
+                (id = xl_attr(anames, avalues, "menuId")))
+                key = g_strconcat("menu:", id, NULL);
+            else if (!strcmp(parent, "SubEntries") &&
+                     (id = xl_attr(anames, avalues, "subMenuId")))
+                key = g_strconcat("submenu:", id, NULL);
+            else if (!strcmp(parent, "Commands") &&
+                     (id = xl_attr(anames, avalues, "id")))
+                key = g_strconcat("cmd:", id, NULL);
+            else if (!strcmp(parent, "TabBar") &&
+                     (id = xl_attr(anames, avalues, "CMDID")))
+                key = g_strconcat("tabbar:", id, NULL);
+            else if ((id = xl_attr(anames, avalues, "id")))
+                key = g_strconcat("dlg:", parent, ":", id, NULL);
+        }
+        if (key)
+            g_hash_table_insert(p->out, key, g_strdup(name));
+    } else if (strcmp(parent, "MiscStrings") == 0) {
+        const char *val = xl_attr(anames, avalues, "value");
+        if (val)
+            g_hash_table_insert(p->out, g_strconcat("misc:", elem, NULL),
+                                g_strdup(val));
+    }
+    g_ptr_array_add(p->stack, g_strdup(elem));
+}
+
+static void xl_elem_end(GMarkupParseContext *ctx, const char *elem,
+                        gpointer user, GError **err)
+{
+    (void)ctx; (void)elem; (void)err;
+    XLParse *p = user;
+    if (p->stack->len)
+        g_ptr_array_remove_index(p->stack, p->stack->len - 1);
+}
+
+static GHashTable *xl_parse_file(const char *path)
+{
+    char *data = NULL; gsize len = 0;
+    if (!g_file_get_contents(path, &data, &len, NULL)) return NULL;
+    XLParse p = {
+        g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free),
+        g_ptr_array_new_with_free_func(g_free)
+    };
+    const GMarkupParser parser = { xl_elem_start, xl_elem_end, NULL, NULL, NULL };
+    GMarkupParseContext *ctx =
+        g_markup_parse_context_new(&parser, 0, &p, NULL);
+    g_markup_parse_context_parse(ctx, data, (gssize)len, NULL);
+    g_markup_parse_context_end_parse(ctx, NULL);
+    g_markup_parse_context_free(ctx);
+    g_free(data);
+    g_ptr_array_free(p.stack, TRUE);
+    return p.out;
+}
+
+void i18n_build_translation(const char *stem)
+{
+    if (s_xlate) g_hash_table_destroy(s_xlate);
+    s_xlate = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+
+    /* English needs no map — translate becomes the identity. */
+    if (!stem || !stem[0] || g_ascii_strcasecmp(stem, "english") == 0)
+        return;
+
+    char ep[1024], tp[1024];
+    snprintf(ep, sizeof(ep), RESOURCES_DIR "/localization/english.xml");
+    snprintf(tp, sizeof(tp), RESOURCES_DIR "/localization/%s.xml", stem);
+    GHashTable *eng = xl_parse_file(ep);
+    GHashTable *tgt = xl_parse_file(tp);
+
+    if (eng && tgt) {
+        GHashTableIter it; gpointer k, v;
+        g_hash_table_iter_init(&it, eng);
+        while (g_hash_table_iter_next(&it, &k, &v)) {
+            const char *key = k;
+            if (key[0] == '_' && key[1] == '_') continue;   /* metadata */
+            const char *tval = g_hash_table_lookup(tgt, key);
+            if (!tval || !tval[0]) continue;
+            char *norm  = xl_normalize((const char *)v);
+            char *trans = xl_strip_accel(tval);
+            g_strstrip(trans);
+            if (norm[0] && trans[0])
+                g_hash_table_insert(s_xlate, norm, trans);   /* takes both */
+            else { g_free(norm); g_free(trans); }
+        }
+    }
+    if (eng) g_hash_table_destroy(eng);
+    if (tgt) g_hash_table_destroy(tgt);
+}
+
+const char *i18n_translate(const char *english)
+{
+    if (!english || !english[0]) return english;
+    if (!s_xlate || g_hash_table_size(s_xlate) == 0) return english;
+    char *norm = xl_normalize(english);
+    const char *t = g_hash_table_lookup(s_xlate, norm);
+    g_free(norm);
+    return t ? t : english;     /* translated value lives in s_xlate */
+}
+
+GMenuModel *i18n_translate_menu(GMenuModel *src)
+{
+    GMenu *dst = g_menu_new();
+    int n = g_menu_model_get_n_items(src);
+    for (int i = 0; i < n; i++) {
+        GMenuItem *item = g_menu_item_new(NULL, NULL);
+
+        GMenuAttributeIter *ai = g_menu_model_iterate_item_attributes(src, i);
+        const char *aname; GVariant *aval;
+        while (g_menu_attribute_iter_get_next(ai, &aname, &aval)) {
+            if (strcmp(aname, "label") == 0 &&
+                g_variant_is_of_type(aval, G_VARIANT_TYPE_STRING)) {
+                const char *eng = g_variant_get_string(aval, NULL);
+                g_menu_item_set_attribute(item, "label", "s",
+                                          i18n_translate(eng));
+            } else {
+                g_menu_item_set_attribute_value(item, aname, aval);
+            }
+            g_variant_unref(aval);
+        }
+        g_object_unref(ai);
+
+        GMenuLinkIter *li = g_menu_model_iterate_item_links(src, i);
+        const char *lname; GMenuModel *lmodel;
+        while (g_menu_link_iter_get_next(li, &lname, &lmodel)) {
+            GMenuModel *tsub = i18n_translate_menu(lmodel);
+            g_menu_item_set_link(item, lname, tsub);
+            g_object_unref(tsub);
+            g_object_unref(lmodel);
+        }
+        g_object_unref(li);
+
+        g_menu_append_item(dst, item);
+        g_object_unref(item);
+    }
+    return G_MENU_MODEL(dst);
 }

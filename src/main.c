@@ -4814,6 +4814,26 @@ static void set_accel(GtkApplication *app, const char *action_detail,
 /* Menu construction                                                   */
 /* ------------------------------------------------------------------ */
 
+/* #7 — the English menu model is kept so the menu bar can be retranslated
+ * live when the UI language changes; g_menubar_widget is the on-screen
+ * GtkPopoverMenuBar. */
+static GMenuModel *g_menu_english;
+static GtkWidget  *g_menubar_widget;
+
+/* Rebuild the menu bar in the current UI language (called after the
+ * language is switched in Preferences). */
+void main_retranslate_menu(void)
+{
+    if (!g_menu_english) return;
+    GMenuModel *t = i18n_translate_menu(g_menu_english);
+    if (g_menubar_widget && GTK_IS_POPOVER_MENU_BAR(g_menubar_widget))
+        gtk_popover_menu_bar_set_menu_model(
+            GTK_POPOVER_MENU_BAR(g_menubar_widget), t);
+    GApplication *app = g_application_get_default();
+    if (app) gtk_application_set_menubar(GTK_APPLICATION(app), t);
+    g_object_unref(t);
+}
+
 static GMenuModel *build_menu_model(void)
 {
     GMenu *bar = g_menu_new();
@@ -6016,6 +6036,7 @@ static void build_main_window(GtkApplication *app)
         GMenuModel *mbmodel = gtk_application_get_menubar(app);
         if (mbmodel) {
             GtkWidget *menubar = gtk_popover_menu_bar_new_from_model(mbmodel);
+            g_menubar_widget = menubar;   /* #7 — for live retranslation */
             npp_box_pack(GTK_BOX(vbox), menubar, FALSE, 0);
         }
         /* Tighten the menu-bar dropdowns 20%. GTK4's default is
@@ -6293,17 +6314,20 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.wikipedia-search",     "<Alt>F3");
     set_accel(app, "app.open-in-new-instance", "<Alt>F6");
 
-    /* Menu bar */
-    GMenuModel *menubar = build_menu_model();
-    gtk_application_set_menubar(app, menubar);
+    /* Menu bar — keep the English model (g_menu_english) for the context-
+     * menu index and for live retranslation; the app menubar itself uses a
+     * translated copy in the current UI language (#7). */
+    g_menu_english = build_menu_model();
+    GMenuModel *translated = i18n_translate_menu(g_menu_english);
+    gtk_application_set_menubar(app, translated);
 
     /* P5 — build the (entry+item → action-name) lookup table for the
-     * XML-driven context menus. Must happen after the menu model is
-     * fully constructed. */
+     * XML-driven context menus, from the ENGLISH model so the lookups
+     * (tabContextMenu.xml uses English item names) keep resolving. */
     extern void ctxmenu_index_from_model(GMenuModel *);
-    ctxmenu_index_from_model(menubar);
+    ctxmenu_index_from_model(g_menu_english);
 
-    g_object_unref(menubar);
+    g_object_unref(translated);
 }
 
 /* Put keyboard focus in the editor at startup / on raise so the user can

@@ -1007,6 +1007,9 @@ static void on_ui_language(GtkComboBox *c, gpointer d)
     g_strlcpy(g_prefs.ui_language, stem, sizeof(g_prefs.ui_language));
     prefs_save();
     i18n_set_language(stem);
+    /* Retranslate the menu bar in place — no restart needed (#7). */
+    extern void main_retranslate_menu(void);
+    main_retranslate_menu();
 }
 
 static GtkWidget *page_general(void)
