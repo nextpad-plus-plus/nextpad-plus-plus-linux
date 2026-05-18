@@ -88,6 +88,14 @@ static gboolean on_float_window_delete(GtkWindow *w, gpointer ud) {
     return TRUE;  /* we destroyed the window via dockback */
 }
 
+/* TRUE if `box` still has at least one visible child. */
+static gboolean box_has_visible_child(GtkWidget *box) {
+    for (GtkWidget *c = gtk_widget_get_first_child(box); c;
+         c = gtk_widget_get_next_sibling(c))
+        if (gtk_widget_get_visible(c)) return TRUE;
+    return FALSE;
+}
+
 void floating_popout(const char *name) {
     FloatingEntry *e = find_entry(name); if (!e || e->float_window) return;
     if (!e->widget || !e->parent) return;
@@ -95,6 +103,11 @@ void floating_popout(const char *name) {
     /* Hold a ref so the widget survives reparenting. */
     g_object_ref(e->widget);
     gtk_container_remove(GTK_CONTAINER(e->parent), e->widget);
+
+    /* If the dock host (a box) is now empty, collapse it so the editor
+     * reclaims the space the detached panel occupied. */
+    if (GTK_IS_BOX(e->parent) && !box_has_visible_child(e->parent))
+        gtk_widget_set_visible(e->parent, FALSE);
 
     GtkWidget *win = gtk_window_new();
     char title[128];
@@ -117,6 +130,10 @@ void floating_dockback(const char *name) {
 
     g_object_ref(e->widget);
     gtk_container_remove(GTK_CONTAINER(e->float_window), e->widget);
+
+    /* Re-show the dock host before re-inserting (popout may have hidden
+     * it once empty). */
+    if (e->parent) gtk_widget_set_visible(e->parent, TRUE);
 
     switch (e->slot) {
     case SLOT_PANED_1:

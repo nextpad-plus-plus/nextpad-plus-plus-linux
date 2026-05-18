@@ -491,7 +491,13 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
     /* Right-click pops the context menu. */
     if (button == 3) {
         int page = sci_page_num(sci);
-        gtk_notebook_set_current_page(GTK_NOTEBOOK(s_notebook), page);
+        /* Select the clicked tab in WHICHEVER notebook it lives in. The
+         * old code used s_notebook unconditionally with a possibly-stale
+         * index, which selected the last tab when the index was -1. */
+        GtkWidget *sw = gtk_widget_get_parent(sci);
+        GtkWidget *nb = sw ? gtk_widget_get_parent(sw) : NULL;
+        if (GTK_IS_NOTEBOOK(nb) && page >= 0)
+            gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), page);
 
         /* P5 — build from tabContextMenu.xml. Fall back to the hardcoded
          * set if the XML produced an empty menu (parser error etc.). */
@@ -1440,15 +1446,19 @@ static void editor_move_page(GtkWidget *sci, GtkNotebook *dst)
     if (!GTK_IS_NOTEBOOK(nbw)) return;
     GtkNotebook *src = GTK_NOTEBOOK(nbw);
     if (src == dst) return;
-    GtkWidget *label = gtk_notebook_get_tab_label(src, sw);
+    NppDoc *doc = doc_of_sci(sci);
+    /* Reparent the scrolled-window page, but build a FRESH tab label in the
+     * destination instead of carrying the old one across notebooks —
+     * reparenting the icon-bearing label box triggers spurious negative-
+     * size measure warnings during the unparented window. */
     g_object_ref(sw);
-    if (label) g_object_ref(label);
     gtk_notebook_remove_page(src, gtk_notebook_page_num(src, sw));
+    GtkWidget *label = doc ? make_tab_label(doc, sci) : NULL;
     int np = gtk_notebook_append_page(dst, sw, label);
     gtk_notebook_set_tab_reorderable(dst, sw, TRUE);
+    gtk_widget_set_visible(GTK_WIDGET(dst), TRUE);
     gtk_notebook_set_current_page(dst, np);
     g_object_unref(sw);
-    if (label) g_object_unref(label);
     editor_apply_tab_color(sci);   /* the `tab` CSS node changed */
 }
 

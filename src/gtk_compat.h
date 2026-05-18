@@ -126,6 +126,16 @@ static inline void npp_container_remove(GtkWidget *parent, GtkWidget *child)
         else if (gtk_paned_get_end_child(GTK_PANED(parent)) == child)
             gtk_paned_set_end_child(GTK_PANED(parent), NULL);
     }
+    /* A single-child container keeps an internal `child` pointer; a bare
+     * gtk_widget_unparent() leaves that pointer dangling, so destroying the
+     * container later double-frees the (reparented) child — detach via the
+     * proper setter. This is the floating-panel dock-back crash fix. */
+    else if (GTK_IS_WINDOW(parent))
+        gtk_window_set_child(GTK_WINDOW(parent), NULL);
+    else if (GTK_IS_SCROLLED_WINDOW(parent))
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), NULL);
+    else if (GTK_IS_FRAME(parent))
+        gtk_frame_set_child(GTK_FRAME(parent), NULL);
     else                              gtk_widget_unparent(child);
 }
 #define gtk_container_remove(p, c)  npp_container_remove(GTK_WIDGET(p), (c))

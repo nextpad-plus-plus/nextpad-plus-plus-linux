@@ -27,6 +27,7 @@
 #include "gtk_compat.h"
 #include "branding.h"
 #include "stylestore.h"
+#include "prefs.h"
 #include "i18n.h"
 #include <string.h>
 #include <stdio.h>
@@ -434,6 +435,25 @@ static void on_response(GtkDialog *dialog, gint resp, gpointer data)
 
     if (resp == GTK_RESPONSE_ACCEPT) {   /* Save and Close */
         stylestore_save_user();
+        /* Persist the active theme name so it survives a restart — macOS
+         * stores kNSDefaultsThemeKey; we store g_prefs.theme_preset, which
+         * main.c re-loads on launch. "" path = the "Default" entry. */
+        int ti = gtk_combo_box_get_active(GTK_COMBO_BOX(s->theme_combo));
+        if (ti >= 0 && ti < (int)s->theme_paths->len) {
+            const char *tp = g_ptr_array_index(s->theme_paths, (guint)ti);
+            if (!tp || !*tp) {
+                g_strlcpy(g_prefs.theme_preset, "Default",
+                          sizeof(g_prefs.theme_preset));
+            } else {
+                char *base = g_path_get_basename(tp);
+                char *dot  = strrchr(base, '.');
+                if (dot) *dot = '\0';
+                g_strlcpy(g_prefs.theme_preset, base,
+                          sizeof(g_prefs.theme_preset));
+                g_free(base);
+            }
+        }
+        prefs_save();
         s->changed = FALSE;
         if (s->on_apply) s->on_apply();
         gtk_widget_hide(GTK_WIDGET(dialog));
