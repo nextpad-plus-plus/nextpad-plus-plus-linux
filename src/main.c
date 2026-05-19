@@ -2254,9 +2254,13 @@ static char *json_string_value(const char *json, const char *key) {
     return g_strndup(p, (gsize)(e - p));
 }
 
+/* Version check targets the public macOS repo — it is the release
+ * source-of-truth (CLAUDE.md) and, unlike the private GTK4 repo, its
+ * releases API is reachable without authentication. Same endpoint the
+ * macOS app uses (AppDelegate kGitHubReleasesAPI). */
 static const char *kReleasesAPI =
     "https://api.github.com/repos/nextpad-plus-plus/"
-    "nextpad-plus-plus-gtk4/releases/latest";
+    "nextpad-plus-plus-macos/releases/latest";
 
 /* The Help section holding the "Check for Updates" item — kept so its
  * status bullet can be refreshed after a check. */
