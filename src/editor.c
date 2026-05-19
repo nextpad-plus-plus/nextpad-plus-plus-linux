@@ -599,6 +599,44 @@ static void set_tab_pin_icon(GtkWidget *img)
     gtk_image_set_pixel_size(GTK_IMAGE(img), TAB_PIN_ICON_PX);
 }
 
+/* ---- Tab close button ---------------------------------------------- *
+ * macOS bakes the hover state into the icon: closeTabButton.png is the
+ * bare ×, closeTabButton_hoverIn.png is the × inside a tight rounded
+ * grey square. We swap the GtkImage on hover and suppress the GTK theme
+ * button background, so the hover highlight is exactly that asset — not
+ * a tall theme rectangle. */
+#define TAB_CLOSE_ICON_PX 14
+
+static GdkTexture *close_texture(gboolean hover)
+{
+    gboolean dark = tab_dark_mode();
+    static GdkTexture *cache[2][2];          /* [dark][hover] */
+    GdkTexture **slot = &cache[dark ? 1 : 0][hover ? 1 : 0];
+    if (!*slot) {
+        gchar *p = g_strdup_printf(
+            "%s/icons/%s/tabbar/%s", RESOURCES_DIR,
+            dark ? "dark" : "standard",
+            hover ? "closeTabButton_hoverIn.png" : "closeTabButton.png");
+        *slot = gdk_texture_new_from_filename(p, NULL);
+        g_free(p);
+    }
+    return *slot;
+}
+
+static void on_close_enter(GtkEventControllerMotion *c, double x, double y,
+                           gpointer img)
+{
+    (void)c; (void)x; (void)y;
+    GdkTexture *t = close_texture(TRUE);
+    if (t) gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(t));
+}
+static void on_close_leave(GtkEventControllerMotion *c, gpointer img)
+{
+    (void)c;
+    GdkTexture *t = close_texture(FALSE);
+    if (t) gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(t));
+}
+
 static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
 {
     const char *base = doc->filepath
@@ -656,24 +694,27 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
      * to its exact text in both make_ and refresh_tab_label. */
     gtk_widget_set_margin_start(label, 7);
     gtk_widget_set_margin_end(label, 5);
-    /* P16 — use macOS tabbar close button icon when available. */
-    GtkWidget *img = NULL;
-    const char *closepath = RESOURCES_DIR "/icons/standard/tabbar/closeTabButton.png";
-    /* Full-res (32px) texture downsampled once by GtkImage at device
-     * resolution — avoids the soft pre-scaled-pixbuf double-resample. */
-    GdkTexture *ctex = gdk_texture_new_from_filename(closepath, NULL);
-    if (ctex) {
-        img = gtk_image_new_from_paintable(GDK_PAINTABLE(ctex));
-        g_object_unref(ctex);
-        gtk_image_set_pixel_size(GTK_IMAGE(img), 14);
+    /* P16 — macOS tabbar close button: bare × normally, swapped to the
+     * hover asset (× + tight rounded grey square) while hovered. */
+    GtkWidget *img = gtk_image_new();
+    {
+        GdkTexture *t = close_texture(FALSE);
+        if (t) gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(t));
+        else   gtk_image_set_from_icon_name(GTK_IMAGE(img),
+                                            "window-close-symbolic");
     }
-    if (!img)
-        img = gtk_image_new_from_icon_name("window-close-symbolic");
+    gtk_image_set_pixel_size(GTK_IMAGE(img), TAB_CLOSE_ICON_PX);
     GtkWidget *btn   = gtk_button_new();
     gtk_button_set_child(GTK_BUTTON(btn), img);
     gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
     gtk_widget_set_focus_on_click(btn, FALSE);
-
+    gtk_widget_set_valign(btn, GTK_ALIGN_CENTER);
+    {
+        GtkEventController *mc = gtk_event_controller_motion_new();
+        g_signal_connect(mc, "enter", G_CALLBACK(on_close_enter), img);
+        g_signal_connect(mc, "leave", G_CALLBACK(on_close_leave), img);
+        gtk_widget_add_controller(btn, GTK_EVENT_CONTROLLER(mc));
+    }
     g_signal_connect(btn, "clicked", G_CALLBACK(on_close_btn_clicked), sci);
 
     /* Save-state floppy icon, left of the title (macOS NppTabBar parity). */

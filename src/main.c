@@ -4334,6 +4334,17 @@ static void install_tab_color_css(void) {
         "  min-width: 0;"
         "  padding: 0;"
         "  margin: 0;"
+        "}\n"
+        /* The close button's hover highlight is baked into the icon
+         * (closeTabButton_hoverIn.png) — suppress the theme's own button
+         * background/shadow so only that tight rounded square shows. */
+        "notebook.npp-editor-tabs > header > tabs > tab button,\n"
+        "notebook.npp-editor-tabs > header > tabs > tab button:hover,\n"
+        "notebook.npp-editor-tabs > header > tabs > tab button:active {"
+        "  background-color: transparent;"
+        "  background-image: none;"
+        "  box-shadow: none;"
+        "  border: none;"
         "}\n");
 
     /* macOS NppTabBar styling — light mode only; dark keeps the Yaru
