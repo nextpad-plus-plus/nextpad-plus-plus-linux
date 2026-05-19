@@ -502,7 +502,7 @@ static void apply_toolbar_css(void)
          * button out-paints the hover colour. */
         dark ?
         ".npp-toolbar button:hover {"
-        " background-image: none; background-color: #2e2e2e; }"
+        " background-image: none; background-color: #212121; }"
         ".npp-toolbar button:checked {"
         " background-image: none; background-color: #232323; }"
         ".npp-toolbar button:active {"
