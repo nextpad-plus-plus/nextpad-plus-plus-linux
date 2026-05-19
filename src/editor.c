@@ -792,6 +792,39 @@ static void refresh_tab_label(int page)
     }
 }
 
+/* Reload every tab's theme-dependent icons (the save-state floppy, the
+ * pin icon, the close ×) after a light/dark appearance switch — the
+ * loaders pick icons/dark vs icons/light from tab_dark_mode(). */
+void editor_refresh_tab_chrome(void)
+{
+    GtkWidget *nbs[3] = { s_notebook, s_notebook_v, s_notebook_h };
+    for (int k = 0; k < 3; k++) {
+        if (!nbs[k]) continue;
+        GtkNotebook *nb = GTK_NOTEBOOK(nbs[k]);
+        int n = gtk_notebook_get_n_pages(nb);
+        for (int i = 0; i < n; i++) {
+            GtkWidget *sci = page_to_sci(gtk_notebook_get_nth_page(nb, i));
+            if (!sci) continue;
+            NppDoc    *doc    = doc_of_sci(sci);
+            GtkWidget *status = g_object_get_data(G_OBJECT(sci),
+                                                  "tab-status-icon");
+            GtkWidget *pin    = g_object_get_data(G_OBJECT(sci),
+                                                  "tab-pin-icon");
+            GtkWidget *btn    = g_object_get_data(G_OBJECT(sci),
+                                                  "tab-close-btn");
+            if (status && doc) set_tab_status_icon(status, doc->modified);
+            if (pin)           set_tab_pin_icon(pin);
+            if (btn) {
+                GtkWidget  *img = gtk_button_get_child(GTK_BUTTON(btn));
+                GdkTexture *t   = close_texture(FALSE);
+                if (img && GTK_IS_IMAGE(img) && t)
+                    gtk_image_set_from_paintable(GTK_IMAGE(img),
+                                                 GDK_PAINTABLE(t));
+            }
+        }
+    }
+}
+
 static void update_window_title(void)
 {
     if (!s_window) return;

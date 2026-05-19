@@ -4448,6 +4448,7 @@ void main_refresh_theme_chrome(void)
 {
     install_tab_color_css();
     toolbar_apply_theme();
+    editor_refresh_tab_chrome();   /* tab floppy / pin / close icons */
 }
 
 static void action_command_palette(GSimpleAction *a, GVariant *p, gpointer u) {

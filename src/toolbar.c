@@ -487,15 +487,27 @@ static void apply_toolbar_css(void)
     static GtkCssProvider *prov = NULL;
     gboolean first = (prov == NULL);
     if (first) prov = gtk_css_provider_new();
-    const char *line = is_dark_mode() ? "#444444" : "#e1e1e1";
-    char buf[512];
+    gboolean dark = is_dark_mode();
+    char buf[1024];
     snprintf(buf, sizeof(buf),
         ".npp-toolbar { padding: 2px 4px;"
         " border-bottom: 1px solid %s; }"
         ".npp-toolbar button { padding: 2px; margin: 0 1px;"
         " min-width: 24px; min-height: 24px; }"
-        ".npp-toolbar separator { margin: 2px 4px; }",
-        line);
+        ".npp-toolbar separator { margin: 2px 4px; }"
+        "%s",
+        dark ? "#444444" : "#e1e1e1",
+        /* Dark-mode button states: hover / toggled-on / pressed.
+         * Ordered hover < checked < active so a pressed or toggled
+         * button out-paints the hover colour. */
+        dark ?
+        ".npp-toolbar button:hover {"
+        " background-image: none; background-color: #2e2e2e; }"
+        ".npp-toolbar button:checked {"
+        " background-image: none; background-color: #232323; }"
+        ".npp-toolbar button:active {"
+        " background-image: none; background-color: #212121; }"
+        : "");
     gtk_css_provider_load_from_data(prov, buf, -1);
     if (first)
         gtk_style_context_add_provider_for_display(
