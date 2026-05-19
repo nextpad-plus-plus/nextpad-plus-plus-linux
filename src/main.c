@@ -2214,6 +2214,190 @@ static void action_edit_popup_ctxmenu(GSimpleAction *a, GVariant *p, gpointer u)
 }
 
 /* Q-fix Help → Debug Info (system + build snapshot for issue reports). */
+/* ── Help ▸ Check for Updates / Install CLI Tool ────────────────────
+ * Ports the two macOS app-menu items (AppDelegate checkForUpdates: and
+ * MainWindowController installCommandLineTool:) into the Linux Help
+ * menu. ────────────────────────────────────────────────────────────── */
+
+/* Simple modal info dialog (GTK4 GtkAlertDialog). */
+static void npp_info_dialog(const char *msg, const char *detail) {
+    GtkAlertDialog *d = gtk_alert_dialog_new("%s", msg);
+    if (detail) gtk_alert_dialog_set_detail(d, detail);
+    gtk_alert_dialog_show(d, g_window ? GTK_WINDOW(g_window) : NULL);
+    g_object_unref(d);
+}
+
+/* Compare two "X.Y.Z" version strings: <0 / 0 / >0. */
+static int version_cmp(const char *a, const char *b) {
+    int a1=0,a2=0,a3=0, b1=0,b2=0,b3=0;
+    sscanf(a ? a : "", "%d.%d.%d", &a1,&a2,&a3);
+    sscanf(b ? b : "", "%d.%d.%d", &b1,&b2,&b3);
+    if (a1 != b1) return a1 < b1 ? -1 : 1;
+    if (a2 != b2) return a2 < b2 ? -1 : 1;
+    if (a3 != b3) return a3 < b3 ? -1 : 1;
+    return 0;
+}
+
+/* Pull a top-level string value for `key` out of a JSON blob. */
+static char *json_string_value(const char *json, const char *key) {
+    char needle[64];
+    snprintf(needle, sizeof needle, "\"%s\"", key);
+    const char *p = json ? strstr(json, needle) : NULL;
+    if (!p) return NULL;
+    p = strchr(p + strlen(needle), ':');
+    if (!p) return NULL;
+    for (p++; *p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'; p++) ;
+    if (*p != '"') return NULL;
+    p++;
+    const char *e = p;
+    while (*e && *e != '"') { if (*e == '\\' && e[1]) e++; e++; }
+    return g_strndup(p, (gsize)(e - p));
+}
+
+static const char *kReleasesAPI =
+    "https://api.github.com/repos/nextpad-plus-plus/"
+    "nextpad-plus-plus-gtk4/releases/latest";
+
+/* "Open Release Page" choice from the update-available dialog. */
+static void on_update_choice(GObject *src, GAsyncResult *res, gpointer u) {
+    char *url = (char *)u;
+    int idx = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(src), res, NULL);
+    if (idx == 0 && url && *url && g_window)
+        gtk_show_uri_on_window(GTK_WINDOW(g_window), url,
+                               GDK_CURRENT_TIME, NULL);
+    g_free(url);
+}
+
+/* curl GET completed — parse tag_name, compare, report. */
+static void on_update_response(GObject *src, GAsyncResult *res, gpointer u) {
+    (void)u;
+    GSubprocess *proc = G_SUBPROCESS(src);
+    char   *out = NULL;
+    GError *err = NULL;
+    gboolean ok = g_subprocess_communicate_utf8_finish(proc, res,
+                                                       &out, NULL, &err);
+    if (!ok || !out || g_subprocess_get_exit_status(proc) != 0) {
+        npp_info_dialog("Unable to Check for Updates",
+            err ? err->message
+                : "Could not reach the update server — check your "
+                  "internet connection.");
+        if (err) g_error_free(err);
+        g_free(out);
+        g_object_unref(proc);
+        return;
+    }
+    char *tag = json_string_value(out, "tag_name");
+    char *url = json_string_value(out, "html_url");
+    const char *latest = tag ? (tag[0] == 'v' ? tag + 1 : tag) : NULL;
+
+    if (!latest || !*latest) {
+        npp_info_dialog("Unable to Check for Updates",
+                        "No published release was found.");
+    } else if (version_cmp(latest, APP_VERSION) > 0) {
+        GtkAlertDialog *d = gtk_alert_dialog_new(
+            "Nextpad++ v%s is available", latest);
+        char detail[160];
+        snprintf(detail, sizeof detail,
+                 "You are running v%s.", APP_VERSION);
+        gtk_alert_dialog_set_detail(d, detail);
+        const char *btns[] = { "Open Release Page", "Later", NULL };
+        gtk_alert_dialog_set_buttons(d, btns);
+        gtk_alert_dialog_set_default_button(d, 0);
+        gtk_alert_dialog_set_cancel_button(d, 1);
+        gtk_alert_dialog_choose(d, g_window ? GTK_WINDOW(g_window) : NULL,
+                                NULL, on_update_choice,
+                                url ? g_strdup(url) : NULL);
+        g_object_unref(d);
+    } else {
+        char detail[128];
+        snprintf(detail, sizeof detail,
+                 "Nextpad++ %s is the latest version.", APP_VERSION);
+        npp_info_dialog("You're Up to Date", detail);
+    }
+    g_free(tag); g_free(url); g_free(out);
+    g_object_unref(proc);
+}
+
+static void action_check_updates(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    GError *err = NULL;
+    GSubprocess *proc = g_subprocess_new(
+        G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+        &err, "curl", "-fsSL",
+        "-A", "nextpad-plus-plus-gtk4",
+        "-H", "Accept: application/vnd.github+json",
+        kReleasesAPI, NULL);
+    if (!proc) {
+        npp_info_dialog("Unable to Check for Updates",
+            err ? err->message
+                : "The 'curl' command is required to check for updates.");
+        if (err) g_error_free(err);
+        return;
+    }
+    g_subprocess_communicate_utf8_async(proc, NULL, NULL,
+                                        on_update_response, NULL);
+}
+
+static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    GError *err = NULL;
+    /* /proc/self/exe is a symlink to the running binary. */
+    char *exe = g_file_read_link("/proc/self/exe", &err);
+    if (!exe) {
+        npp_info_dialog("Installation Failed",
+            err ? err->message
+                : "Could not locate the Nextpad++ executable.");
+        if (err) g_error_free(err);
+        return;
+    }
+    char *bindir = g_build_filename(g_get_home_dir(), ".local", "bin", NULL);
+    g_mkdir_with_parents(bindir, 0755);
+    char *target = g_build_filename(bindir, "nextpad++", NULL);
+    /* A wrapper script (mirrors macOS _makeCLIScriptForApp) so it keeps
+     * working after the app is moved — just re-run the menu item. */
+    char *script = g_strdup_printf(
+        "#!/bin/sh\n"
+        "# nextpad++ — CLI wrapper for Nextpad++ (Linux).\n"
+        "# Auto-generated; re-run Help > Install nextpad++ Command Line\n"
+        "# Tool if the application is moved.\n"
+        "exec \"%s\" \"$@\"\n", exe);
+
+    char *existing = NULL;
+    g_file_get_contents(target, &existing, NULL, NULL);
+    gboolean already = (existing && g_strcmp0(existing, script) == 0);
+    g_free(existing);
+
+    char detail[640];
+    if (already) {
+        snprintf(detail, sizeof detail,
+            "nextpad++ is already installed at:\n%s\n\nUsage:  nextpad++ file.txt",
+            target);
+        npp_info_dialog("Already Installed", detail);
+    } else if (g_file_set_contents(target, script, -1, &err)) {
+        chmod(target, 0755);
+        gboolean on_path = FALSE;
+        const char *pe = g_getenv("PATH");
+        if (pe) {
+            char **dirs = g_strsplit(pe, ":", -1);
+            for (int i = 0; dirs[i]; i++)
+                if (g_strcmp0(dirs[i], bindir) == 0) on_path = TRUE;
+            g_strfreev(dirs);
+        }
+        snprintf(detail, sizeof detail,
+            "Installed the 'nextpad++' command at:\n%s\n\nUsage:  nextpad++ file.txt%s",
+            target,
+            on_path ? ""
+                    : "\n\nNote: ~/.local/bin is not on your PATH — add it "
+                      "to run 'nextpad++' from any terminal.");
+        npp_info_dialog("Command Line Tool Installed", detail);
+    } else {
+        npp_info_dialog("Installation Failed",
+            err ? err->message : "Could not write the wrapper script.");
+        if (err) g_error_free(err);
+    }
+    g_free(exe); g_free(bindir); g_free(target); g_free(script);
+}
+
 static void action_debug_info(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     GString *s = g_string_new(NULL);
@@ -4683,6 +4867,8 @@ static const GActionEntry kAppActions[] = {
     { "udl-collection",      action_udl_collection,      NULL, NULL, NULL },
     { "edit-popup-ctxmenu",  action_edit_popup_ctxmenu,  NULL, NULL, NULL },
     { "debug-info",          action_debug_info,          NULL, NULL, NULL },
+    { "check-updates",       action_check_updates,       NULL, NULL, NULL },
+    { "install-cli",         action_install_cli,         NULL, NULL, NULL },
     /* Q-align Settings → Import submenu. */
     { "import-plugin",       action_import_plugin,       NULL, NULL, NULL },
     { "import-style-theme",  action_import_style_theme,  NULL, NULL, NULL },
@@ -5846,6 +6032,15 @@ static GMenuModel *build_menu_model(void)
     g_menu_append(help, "Online User Manual",      "app.help-manual");
     /* Q-fix Help → Debug Info (macOS parity). */
     g_menu_append(help, "Debug Info…",             "app.debug-info");
+    {
+        /* Ported from the macOS Nextpad++ app menu. */
+        GMenu *upd_grp = g_menu_new();
+        g_menu_append(upd_grp, "Check for Updates…", "app.check-updates");
+        g_menu_append(upd_grp, "Install nextpad++ Command Line Tool…",
+                      "app.install-cli");
+        g_menu_append_section(help, NULL, G_MENU_MODEL(upd_grp));
+        g_object_unref(upd_grp);
+    }
     {
         GMenu *about_grp = g_menu_new();
         g_menu_append(about_grp, "About Nextpad++", "app.help-about");

@@ -10,6 +10,9 @@
 #define BRANDING_H
 
 #define APP_NAME          "Nextpad++"
+/* Release version — single source for the About dialog and the
+ * Help > Check for Updates comparison. */
+#define APP_VERSION       "1.0.6"
 /* User config dir name — matches macOS port: $HOME/.nextpad++ (NOT XDG).
  * Use the npp_user_*() helpers in paths.h instead of building this manually. */
 #define APP_CONFIG_DIR    ".nextpad++"
