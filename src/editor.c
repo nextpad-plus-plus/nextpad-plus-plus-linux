@@ -611,8 +611,10 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
         snprintf(buf, sizeof(buf), "Untitled-%d", doc->new_index);
 
     /* G3.6: a click gesture on the tab box intercepts middle-click (close),
-     * double-click (close) and right-click (context menu). */
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+     * double-click (close) and right-click (context menu).
+     * Box spacing 0 — the floppy↔filename and filename↔× gaps are set as
+     * explicit margins on the label so they stay fixed (macOS NppTabBar). */
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     {
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), 0); /* any button */
@@ -634,15 +636,23 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
         g_free(escaped);
     }
     gtk_label_set_single_line_mode(GTK_LABEL(label), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f);   /* left-aligned text */
     if (name_len <= 30) {
+        /* Size the label to its EXACT text. width_chars over-estimates a
+         * proportional font, so the centred text used to float with a
+         * variable gap before AND after it (the "wide spacing" bug). */
         gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_NONE);
-        gtk_label_set_width_chars(GTK_LABEL(label),     name_len);
-        gtk_label_set_max_width_chars(GTK_LABEL(label), name_len);
+        gtk_label_set_width_chars(GTK_LABEL(label),     -1);
+        gtk_label_set_max_width_chars(GTK_LABEL(label), -1);
     } else {
         gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
         gtk_label_set_width_chars(GTK_LABEL(label),     18);
         gtk_label_set_max_width_chars(GTK_LABEL(label), 30);
     }
+    /* macOS NppTabBar spacing: a fixed 15px between the save-state icon
+     * and the filename, and a tight 4px gap before the pin/close button. */
+    gtk_widget_set_margin_start(label, 15);
+    gtk_widget_set_margin_end(label, 4);
     /* P16 — use macOS tabbar close button icon when available. */
     GtkWidget *img = NULL;
     const char *closepath = RESOURCES_DIR "/icons/standard/tabbar/closeTabButton.png";
