@@ -650,10 +650,12 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
         gtk_label_set_max_width_chars(GTK_LABEL(label), 30);
     }
     /* macOS NppTabBar spacing: ~7px between the save-state icon and the
-     * filename, and a tight ~2px gap before the pin/close button (macOS
-     * draws the close button 2px past the text end). */
+     * filename, and ~5px before the close button — with the 14px button
+     * that puts ~19px between the last character and the button's far
+     * edge (macOS closeGap). The gap is now static: the label is sized
+     * to its exact text in both make_ and refresh_tab_label. */
     gtk_widget_set_margin_start(label, 7);
-    gtk_widget_set_margin_end(label, 2);
+    gtk_widget_set_margin_end(label, 5);
     /* P16 — use macOS tabbar close button icon when available. */
     GtkWidget *img = NULL;
     const char *closepath = RESOURCES_DIR "/icons/standard/tabbar/closeTabButton.png";
@@ -736,9 +738,12 @@ static void refresh_tab_label(int page)
     }
     int len = (int)strlen(buf);
     if (len <= 30) {
+        /* Size to EXACT text — must match make_tab_label(). width_chars =
+         * len over-sizes a proportional font (more for longer names), so
+         * the close button drifted further right the longer the name. */
         gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_NONE);
-        gtk_label_set_width_chars(GTK_LABEL(label),     len);
-        gtk_label_set_max_width_chars(GTK_LABEL(label), len);
+        gtk_label_set_width_chars(GTK_LABEL(label),     -1);
+        gtk_label_set_max_width_chars(GTK_LABEL(label), -1);
     } else {
         gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
         gtk_label_set_width_chars(GTK_LABEL(label),     18);
