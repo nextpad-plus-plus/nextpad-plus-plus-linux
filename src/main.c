@@ -2258,6 +2258,35 @@ static const char *kReleasesAPI =
     "https://api.github.com/repos/nextpad-plus-plus/"
     "nextpad-plus-plus-gtk4/releases/latest";
 
+/* The Help section holding the "Check for Updates" item — kept so its
+ * status bullet can be refreshed after a check. */
+static GMenu *g_updates_section = NULL;
+void main_retranslate_menu(void);   /* defined later in this file */
+
+/* Refresh the "Check for Updates" menu item: bullet icon + label.
+ * state — 0 none, 1 green (up to date), 2 yellow (update available).
+ * Mirrors the macOS status_green/status_yellow menu-item image. */
+static void set_update_badge(int state, const char *label) {
+    if (!g_updates_section) return;
+    GMenuItem *it = g_menu_item_new(label ? label : "Check for Updates…",
+                                    "app.check-updates");
+    if (state) {
+        char path[512];
+        snprintf(path, sizeof path,
+                 RESOURCES_DIR "/icons/standard/status/status_%s.png",
+                 state == 2 ? "yellow" : "green");
+        GFile *f  = g_file_new_for_path(path);
+        GIcon *gi = g_file_icon_new(f);
+        g_menu_item_set_icon(it, gi);
+        g_object_unref(gi);
+        g_object_unref(f);
+    }
+    g_menu_remove(g_updates_section, 0);
+    g_menu_insert_item(g_updates_section, 0, it);
+    g_object_unref(it);
+    main_retranslate_menu();   /* push through the i18n menu copy */
+}
+
 /* "Open Release Page" choice from the update-available dialog. */
 static void on_update_choice(GObject *src, GAsyncResult *res, gpointer u) {
     char *url = (char *)u;
@@ -2268,19 +2297,22 @@ static void on_update_choice(GObject *src, GAsyncResult *res, gpointer u) {
     g_free(url);
 }
 
-/* curl GET completed — parse tag_name, compare, report. */
+/* curl GET completed — parse tag_name, set the bullet, and (when the
+ * user asked) report the result in a dialog. user_data carries the
+ * user-initiated flag; a silent startup check only sets the bullet. */
 static void on_update_response(GObject *src, GAsyncResult *res, gpointer u) {
-    (void)u;
+    gboolean user_initiated = GPOINTER_TO_INT(u);
     GSubprocess *proc = G_SUBPROCESS(src);
     char   *out = NULL;
     GError *err = NULL;
     gboolean ok = g_subprocess_communicate_utf8_finish(proc, res,
                                                        &out, NULL, &err);
     if (!ok || !out || g_subprocess_get_exit_status(proc) != 0) {
-        npp_info_dialog("Unable to Check for Updates",
-            err ? err->message
-                : "Could not reach the update server — check your "
-                  "internet connection.");
+        if (user_initiated)
+            npp_info_dialog("Unable to Check for Updates",
+                err ? err->message
+                    : "Could not reach the update server — check your "
+                      "internet connection.");
         if (err) g_error_free(err);
         g_free(out);
         g_object_unref(proc);
@@ -2291,35 +2323,45 @@ static void on_update_response(GObject *src, GAsyncResult *res, gpointer u) {
     const char *latest = tag ? (tag[0] == 'v' ? tag + 1 : tag) : NULL;
 
     if (!latest || !*latest) {
-        npp_info_dialog("Unable to Check for Updates",
-                        "No published release was found.");
+        if (user_initiated)
+            npp_info_dialog("Unable to Check for Updates",
+                            "No published release was found.");
     } else if (version_cmp(latest, APP_VERSION) > 0) {
-        GtkAlertDialog *d = gtk_alert_dialog_new(
-            "Nextpad++ v%s is available", latest);
-        char detail[160];
-        snprintf(detail, sizeof detail,
-                 "You are running v%s.", APP_VERSION);
-        gtk_alert_dialog_set_detail(d, detail);
-        const char *btns[] = { "Open Release Page", "Later", NULL };
-        gtk_alert_dialog_set_buttons(d, btns);
-        gtk_alert_dialog_set_default_button(d, 0);
-        gtk_alert_dialog_set_cancel_button(d, 1);
-        gtk_alert_dialog_choose(d, g_window ? GTK_WINDOW(g_window) : NULL,
-                                NULL, on_update_choice,
-                                url ? g_strdup(url) : NULL);
-        g_object_unref(d);
+        char label[96];
+        snprintf(label, sizeof label, "Update Available (v%s)", latest);
+        set_update_badge(2, label);                 /* yellow bullet */
+        if (user_initiated) {
+            GtkAlertDialog *d = gtk_alert_dialog_new(
+                "Nextpad++ v%s is available", latest);
+            char detail[160];
+            snprintf(detail, sizeof detail,
+                     "You are running v%s.", APP_VERSION);
+            gtk_alert_dialog_set_detail(d, detail);
+            const char *btns[] = { "Open Release Page", "Later", NULL };
+            gtk_alert_dialog_set_buttons(d, btns);
+            gtk_alert_dialog_set_default_button(d, 0);
+            gtk_alert_dialog_set_cancel_button(d, 1);
+            gtk_alert_dialog_choose(d, g_window ? GTK_WINDOW(g_window) : NULL,
+                                    NULL, on_update_choice,
+                                    url ? g_strdup(url) : NULL);
+            g_object_unref(d);
+        }
     } else {
-        char detail[128];
-        snprintf(detail, sizeof detail,
-                 "Nextpad++ %s is the latest version.", APP_VERSION);
-        npp_info_dialog("You're Up to Date", detail);
+        set_update_badge(1, "Check for Updates…");  /* green bullet */
+        if (user_initiated) {
+            char detail[128];
+            snprintf(detail, sizeof detail,
+                     "Nextpad++ %s is the latest version.", APP_VERSION);
+            npp_info_dialog("You're Up to Date", detail);
+        }
     }
     g_free(tag); g_free(url); g_free(out);
     g_object_unref(proc);
 }
 
-static void action_check_updates(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a;(void)p;(void)u;
+/* Kick off a GitHub releases-API check. user_initiated TRUE shows a
+ * result dialog; FALSE (startup) just refreshes the menu bullet. */
+static void check_for_updates(gboolean user_initiated) {
     GError *err = NULL;
     GSubprocess *proc = g_subprocess_new(
         G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
@@ -2328,14 +2370,31 @@ static void action_check_updates(GSimpleAction *a, GVariant *p, gpointer u) {
         "-H", "Accept: application/vnd.github+json",
         kReleasesAPI, NULL);
     if (!proc) {
-        npp_info_dialog("Unable to Check for Updates",
-            err ? err->message
-                : "The 'curl' command is required to check for updates.");
+        if (user_initiated)
+            npp_info_dialog("Unable to Check for Updates",
+                err ? err->message
+                    : "The 'curl' command is required to check for updates.");
         if (err) g_error_free(err);
         return;
     }
-    g_subprocess_communicate_utf8_async(proc, NULL, NULL,
-                                        on_update_response, NULL);
+    g_subprocess_communicate_utf8_async(proc, NULL, NULL, on_update_response,
+                                        GINT_TO_POINTER(user_initiated));
+}
+
+static void action_check_updates(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    check_for_updates(TRUE);
+}
+
+/* Silent startup check (macOS checkForUpdateUserInitiated:NO) — runs
+ * once, regardless of how many times it is scheduled. */
+static gboolean startup_update_check(gpointer d) {
+    (void)d;
+    static gboolean done = FALSE;
+    if (done) return G_SOURCE_REMOVE;
+    done = TRUE;
+    check_for_updates(FALSE);
+    return G_SOURCE_REMOVE;
 }
 
 static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
@@ -6033,12 +6092,15 @@ static GMenuModel *build_menu_model(void)
     /* Q-fix Help → Debug Info (macOS parity). */
     g_menu_append(help, "Debug Info…",             "app.debug-info");
     {
-        /* Ported from the macOS Nextpad++ app menu. */
+        /* Ported from the macOS Nextpad++ app menu. The section is kept
+         * in g_updates_section so the status bullet on "Check for
+         * Updates" can be refreshed after a check. */
         GMenu *upd_grp = g_menu_new();
         g_menu_append(upd_grp, "Check for Updates…", "app.check-updates");
         g_menu_append(upd_grp, "Install nextpad++ Command Line Tool…",
                       "app.install-cli");
         g_menu_append_section(help, NULL, G_MENU_MODEL(upd_grp));
+        g_updates_section = upd_grp;   /* kept alive by the menu tree */
         g_object_unref(upd_grp);
     }
     {
@@ -6662,6 +6724,7 @@ static void on_activate(GtkApplication *app, gpointer ud)
     }
     gtk_window_present(GTK_WINDOW(g_window));
     g_idle_add(focus_editor_idle, NULL);
+    g_timeout_add(2500, startup_update_check, NULL);
 }
 
 static void on_open(GtkApplication *app, GFile **files, gint n_files,
@@ -6677,6 +6740,7 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
     apply_cli_flags_to_current();
     gtk_window_present(GTK_WINDOW(g_window));
     g_idle_add(focus_editor_idle, NULL);
+    g_timeout_add(2500, startup_update_check, NULL);
 }
 
 /* ------------------------------------------------------------------ */

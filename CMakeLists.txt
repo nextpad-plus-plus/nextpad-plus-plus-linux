@@ -158,9 +158,16 @@ target_include_directories(nextpad_pp PRIVATE
     "${LEX_ROOT}/include"
     ${GTK4_INCLUDE_DIRS} ${ADW_INCLUDE_DIRS}
 )
+# RESOURCES_DIR is baked in at compile time. For a dev build it points at
+# the in-tree resources/. For a packaged build, pass -DNPP_RES_DIR=<path>
+# (e.g. /usr/share/nextpad-plus-plus) so the installed binary finds the
+# resources copied there by the install rules below.
+if(NOT DEFINED NPP_RES_DIR)
+    set(NPP_RES_DIR "${RES}")
+endif()
 target_compile_definitions(nextpad_pp PRIVATE
     GTK
-    RESOURCES_DIR="${RES}"
+    RESOURCES_DIR="${NPP_RES_DIR}"
 )
 target_compile_options(nextpad_pp PRIVATE ${GTK4_CFLAGS_OTHER} ${ADW_CFLAGS_OTHER})
 set_source_files_properties("${SRC}/lexilla_bridge.cpp" PROPERTIES
@@ -185,7 +192,9 @@ include(GNUInstallDirs)
 
 install(TARGETS nextpad_pp RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES "${SCI_SO}" DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(DIRECTORY resources/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nextpad-plus-plus/resources
+# Install the contents of resources/ directly under .../nextpad-plus-plus
+# so the tree matches RESOURCES_DIR (= NPP_RES_DIR) baked into the binary.
+install(DIRECTORY resources/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nextpad-plus-plus
         PATTERN ".git" EXCLUDE)
 
 install(FILES packaging/nextpad-plus-plus.desktop
