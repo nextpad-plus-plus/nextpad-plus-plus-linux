@@ -1107,6 +1107,11 @@ static void appearance_apply_live(void) {
     /* Re-apply to every open editor view. */
     extern void editor_reapply_styles(void);
     editor_reapply_styles();
+
+    /* Reload the tab-strip CSS and the toolbar icons for the new
+     * appearance (toolbar icons come from icons/dark vs icons/light). */
+    extern void main_refresh_theme_chrome(void);
+    main_refresh_theme_chrome();
 }
 
 static void on_dm_auto (GtkToggleButton *b, gpointer d) { (void)d; if (gtk_toggle_button_get_active(b)) { g_prefs.appearance = 0; prefs_save(); appearance_apply_live(); } }

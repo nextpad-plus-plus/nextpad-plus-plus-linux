@@ -4290,7 +4290,11 @@ static void action_reset_view(GSimpleAction *a, GVariant *p, gpointer u)
 
 /* Install CSS for tab colours once. */
 static void install_tab_color_css(void) {
-    GtkCssProvider *p = gtk_css_provider_new();
+    /* Reusable provider — re-running on a light/dark switch restyles the
+     * editor tab strip in place (a fresh provider each call would stack). */
+    static GtkCssProvider *p = NULL;
+    gboolean first_install = (p == NULL);
+    if (first_install) p = gtk_css_provider_new();
     GString *css = g_string_new(
         /* Per-tab colour: a 3px stripe along the top of the tab, matching
          * macOS NppTabBar (tabColorForId). The .tab-color-N class is set
@@ -4395,14 +4399,55 @@ static void install_tab_color_css(void) {
             "  background-color: #ffffff;"
             "  box-shadow: inset 0 3px 0 0 #fda640;"
             "}\n");
+    else
+        /* Dark-mode tab strip — mirrors the light block with dark values
+         * so the tab bar follows the appearance toggle. */
+        g_string_append(css,
+            "notebook.npp-editor-tabs > header {"
+            "  background-color: #2d2d2d;"
+            "  box-shadow: none;"
+            "  border: none;"
+            "}\n"
+            "notebook.npp-editor-tabs > header > tabs {"
+            "  box-shadow: none;"
+            "  border: none;"
+            "}\n"
+            "notebook.npp-editor-tabs > stack {"
+            "  border-top: 1px solid #454545;"
+            "}\n"
+            "notebook.npp-editor-tabs > header > tabs > tab label { color: #d0d0d0; }\n"
+            "notebook.npp-editor-tabs > header > tabs > tab {"
+            "  background-image: linear-gradient(to bottom, #3c3c3c, #333333);"
+            "  border: 1px solid #1f1f1f;"
+            "  border-bottom: none;"
+            "  border-top-left-radius: 3px;"
+            "  border-top-right-radius: 3px;"
+            "}\n"
+            "notebook.npp-editor-tabs > header > tabs > tab:hover {"
+            "  background-image: linear-gradient(to bottom, #484848, #404040);"
+            "}\n"
+            "notebook.npp-editor-tabs > header > tabs > tab:checked {"
+            "  background-image: none;"
+            "  background-color: #1e1e1e;"
+            "  box-shadow: inset 0 3px 0 0 #fda640;"
+            "}\n");
 
     gtk_css_provider_load_from_data(p, css->str, -1);
     g_string_free(css, TRUE);
-    gtk_style_context_add_provider_for_display(
-        gdk_display_get_default(),
-        GTK_STYLE_PROVIDER(p),
-        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(p);
+    if (first_install)
+        gtk_style_context_add_provider_for_display(
+            gdk_display_get_default(),
+            GTK_STYLE_PROVIDER(p),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    /* p is a static singleton kept for the app lifetime — not unref'd. */
+}
+
+/* Re-apply the editor chrome (tab strip CSS + toolbar) after a light/dark
+ * appearance switch — called from prefs.c appearance_apply_live(). */
+void main_refresh_theme_chrome(void)
+{
+    install_tab_color_css();
+    toolbar_apply_theme();
 }
 
 static void action_command_palette(GSimpleAction *a, GVariant *p, gpointer u) {

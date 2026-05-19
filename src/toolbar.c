@@ -53,6 +53,7 @@ static int icon_px(void) {
 /* Module state                                                        */
 /* ------------------------------------------------------------------ */
 static GtkWidget *s_window           = NULL;
+static GtkWidget *s_toolbar          = NULL;  /* the toolbar box, for theme reloads */
 static GtkWidget *s_btn_undo         = NULL;
 static GtkWidget *s_btn_redo         = NULL;
 static GtkWidget *s_btn_save         = NULL;
@@ -148,7 +149,9 @@ static void apply_toolbarconf_visibility(GtkWidget *item, const char *icon_name)
         gtk_widget_set_visible(item, FALSE);
 }
 
-/* Convenience: GtkButton with icon + tooltip. */
+/* Convenience: GtkButton with icon + tooltip. The icon name is stashed on
+ * the widget so toolbar_apply_theme() can reload it from the light/dark
+ * set when the appearance changes. */
 static GtkWidget *make_btn(const char *icon_name, const char *tooltip,
                            GCallback cb, gpointer data)
 {
@@ -156,6 +159,8 @@ static GtkWidget *make_btn(const char *icon_name, const char *tooltip,
     gtk_button_set_child(GTK_BUTTON(item), load_icon(icon_name));
     gtk_button_set_has_frame(GTK_BUTTON(item), FALSE);
     gtk_widget_set_tooltip_text(item, tooltip);
+    g_object_set_data_full(G_OBJECT(item), "npp-icon",
+                           g_strdup(icon_name), g_free);
     if (cb)
         g_signal_connect(item, "clicked", cb, data);
     apply_toolbarconf_visibility(item, icon_name);
@@ -169,6 +174,8 @@ static GtkWidget *make_toggle(const char *icon_name, const char *tooltip,
     gtk_button_set_child(GTK_BUTTON(item), load_icon(icon_name));
     gtk_button_set_has_frame(GTK_BUTTON(item), FALSE);
     gtk_widget_set_tooltip_text(item, tooltip);
+    g_object_set_data_full(G_OBJECT(item), "npp-icon",
+                           g_strdup(icon_name), g_free);
     if (cb)
         g_signal_connect(item, "toggled", cb, data);
     apply_toolbarconf_visibility(item, icon_name);
@@ -327,6 +334,8 @@ static GtkWidget *make_allchars_dropdown(void) {
     /* Main toggle button — same icon + behaviour as the old plain toggle. */
     GtkWidget *toggle = gtk_toggle_button_new();
     gtk_button_set_child(GTK_BUTTON(toggle), load_icon("allChars"));
+    g_object_set_data_full(G_OBJECT(toggle), "npp-icon",
+                           g_strdup("allChars"), g_free);
     gtk_button_set_has_frame(GTK_BUTTON(toggle), FALSE);
     gtk_widget_set_focus_on_click(toggle, FALSE);
     gtk_widget_set_tooltip_text(toggle, "Show All Characters");
@@ -470,9 +479,52 @@ static void on_macro_playn(GtkButton *i, gpointer d)
     macro_playback_n(doc->sci, GTK_WINDOW(s_window));
 }
 
+/* (Re)load the .npp-toolbar CSS — the base line colour follows the
+ * light/dark appearance. Reusable provider so a theme switch restyles in
+ * place instead of stacking. */
+static void apply_toolbar_css(void)
+{
+    static GtkCssProvider *prov = NULL;
+    gboolean first = (prov == NULL);
+    if (first) prov = gtk_css_provider_new();
+    const char *line = is_dark_mode() ? "#444444" : "#e1e1e1";
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        ".npp-toolbar { padding: 2px 4px;"
+        " border-bottom: 1px solid %s; }"
+        ".npp-toolbar button { padding: 2px; margin: 0 1px;"
+        " min-width: 24px; min-height: 24px; }"
+        ".npp-toolbar separator { margin: 2px 4px; }",
+        line);
+    gtk_css_provider_load_from_data(prov, buf, -1);
+    if (first)
+        gtk_style_context_add_provider_for_display(
+            gdk_display_get_default(), GTK_STYLE_PROVIDER(prov),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
+
+/* Reload every toolbar button's icon from the current light/dark set. */
+static void reload_icons_recursive(GtkWidget *w)
+{
+    const char *icon = g_object_get_data(G_OBJECT(w), "npp-icon");
+    if (icon && GTK_IS_BUTTON(w))
+        gtk_button_set_child(GTK_BUTTON(w), load_icon(icon));
+    for (GtkWidget *c = gtk_widget_get_first_child(w); c;
+         c = gtk_widget_get_next_sibling(c))
+        reload_icons_recursive(c);
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
+
+/* Re-apply the toolbar chrome (base line + every icon) after a light/dark
+ * appearance switch. */
+void toolbar_apply_theme(void)
+{
+    apply_toolbar_css();
+    if (s_toolbar) reload_icons_recursive(s_toolbar);
+}
 
 GtkWidget *toolbar_init(GtkWidget *parent_window)
 {
@@ -480,27 +532,9 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
 
     GtkWidget *tb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
     gtk_widget_add_css_class(tb, "npp-toolbar");
+    s_toolbar = tb;
 
-    /* Tight inter-button spacing to match macOS (2 pt gap on macOS).
-     * A thin base line under the toolbar mirrors the line above it. */
-    {
-        GtkCssProvider *css = gtk_css_provider_new();
-        const char *line = is_dark_mode() ? "#444444" : "#e1e1e1";
-        char buf[512];
-        snprintf(buf, sizeof(buf),
-            ".npp-toolbar { padding: 2px 4px;"
-            " border-bottom: 1px solid %s; }"
-            ".npp-toolbar button { padding: 2px; margin: 0 1px;"
-            " min-width: 24px; min-height: 24px; }"
-            ".npp-toolbar separator { margin: 2px 4px; }",
-            line);
-        gtk_css_provider_load_from_data(css, buf, -1);
-        gtk_style_context_add_provider_for_display(
-            gdk_display_get_default(),
-            GTK_STYLE_PROVIDER(css),
-            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-        g_object_unref(css);
-    }
+    apply_toolbar_css();
 
 #define ADD(item) gtk_box_append(GTK_BOX(tb), (item))
 

@@ -15,4 +15,8 @@ void toolbar_sync_panels(void);
 /* Enable/disable macro toolbar buttons based on current recording state. */
 void toolbar_update_macro_buttons(void);
 
+/* Re-apply the toolbar base line + reload every icon from the light/dark
+ * icon set — called when the appearance changes at runtime. */
+void toolbar_apply_theme(void);
+
 #endif /* TOOLBAR_H */
