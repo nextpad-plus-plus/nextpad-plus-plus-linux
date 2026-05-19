@@ -529,6 +529,23 @@ void styleeditor_show(GtkWidget *parent, SEApplyFn on_apply)
     gtk_dialog_set_default_response(GTK_DIALOG(s->dialog), GTK_RESPONSE_ACCEPT);
     gtk_window_set_default_size(GTK_WINDOW(s->dialog), 880, 580);
 
+    /* Nudge the action-area buttons off their default position
+     * (margin-bottom lifts, margin-end pulls left in LTR). */
+    GtkWidget *save_btn =
+        gtk_dialog_get_widget_for_response(GTK_DIALOG(s->dialog),
+                                           GTK_RESPONSE_ACCEPT);
+    if (save_btn) {                       /* Save & Close — 5px up, 10px left */
+        gtk_widget_set_margin_bottom(save_btn, 5);
+        gtk_widget_set_margin_end(save_btn, 10);
+    }
+    GtkWidget *close_btn =
+        gtk_dialog_get_widget_for_response(GTK_DIALOG(s->dialog),
+                                           GTK_RESPONSE_CANCEL);
+    if (close_btn) {                      /* Close — 5px up, 10px left */
+        gtk_widget_set_margin_bottom(close_btn, 5);
+        gtk_widget_set_margin_end(close_btn, 10);
+    }
+
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(s->dialog));
     gtk_container_set_border_width(GTK_CONTAINER(content), 12);
     gtk_box_set_spacing(GTK_BOX(content), 8);

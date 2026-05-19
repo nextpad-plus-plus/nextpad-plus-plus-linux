@@ -1518,6 +1518,17 @@ void prefs_dialog_show(GtkWidget *parent)
         NULL);
     gtk_window_set_default_size(GTK_WINDOW(s_prefs_dlg), 600, 500);
 
+    /* Nudge the Close button 5px up and 10px left of its default
+     * action-area position (margin-bottom lifts it, margin-end pulls
+     * it left in LTR). */
+    GtkWidget *close_btn =
+        gtk_dialog_get_widget_for_response(GTK_DIALOG(s_prefs_dlg),
+                                           GTK_RESPONSE_CLOSE);
+    if (close_btn) {
+        gtk_widget_set_margin_bottom(close_btn, 5);
+        gtk_widget_set_margin_end(close_btn, 10);
+    }
+
     GtkWidget *nb = gtk_notebook_new();
     /* Vertical tab strip down the left edge — there are 13 pages, which
      * overflow a horizontal strip; a left-side list matches the macOS

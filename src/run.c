@@ -228,6 +228,20 @@ void run_dialog(GtkWindow *parent, const char *filepath)
     gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
     gtk_window_set_default_size(GTK_WINDOW(dlg), 520, -1);
 
+    /* Nudge the action-area buttons off their default position. */
+    GtkWidget *cancel_btn =
+        gtk_dialog_get_widget_for_response(GTK_DIALOG(dlg), GTK_RESPONSE_CANCEL);
+    if (cancel_btn) {                     /* Cancel — 2px up, 10px left */
+        gtk_widget_set_margin_bottom(cancel_btn, 2);
+        gtk_widget_set_margin_end(cancel_btn, 10);
+    }
+    GtkWidget *run_btn =
+        gtk_dialog_get_widget_for_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
+    if (run_btn) {                        /* Run — 2px up, 7px left */
+        gtk_widget_set_margin_bottom(run_btn, 2);
+        gtk_widget_set_margin_end(run_btn, 7);
+    }
+
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
     GtkWidget *grid = gtk_grid_new();
     gtk_grid_set_column_spacing(GTK_GRID(grid), 8);

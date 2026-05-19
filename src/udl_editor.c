@@ -989,6 +989,14 @@ void udl_editor_show(GtkWindow *parent) {
         "_Close", GTK_RESPONSE_CLOSE, NULL);
     gtk_window_set_default_size(GTK_WINDOW(dlg), 760, 600);
 
+    /* Nudge the Close button 5px up and 5px left of its default spot. */
+    GtkWidget *close_btn =
+        gtk_dialog_get_widget_for_response(GTK_DIALOG(dlg), GTK_RESPONSE_CLOSE);
+    if (close_btn) {
+        gtk_widget_set_margin_bottom(close_btn, 5);
+        gtk_widget_set_margin_end(close_btn, 5);
+    }
+
     GtkWidget *root = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
     gtk_container_set_border_width(GTK_CONTAINER(root), 8);
 
