@@ -774,8 +774,21 @@ GMenuModel *i18n_translate_menu(GMenuModel *src)
             if (strcmp(aname, "label") == 0 &&
                 g_variant_is_of_type(aval, G_VARIANT_TYPE_STRING)) {
                 const char *eng = g_variant_get_string(aval, NULL);
-                g_menu_item_set_attribute(item, "label", "s",
-                                          i18n_translate(eng));
+                /* Preserve a leading status-bullet emoji (Check for
+                 * Updates) — translate the text after it, not the
+                 * decorated whole, which is not a catalog key. */
+                const char *bullet = NULL;
+                if (g_str_has_prefix(eng, "🟢 "))      bullet = "🟢 ";
+                else if (g_str_has_prefix(eng, "🟡 ")) bullet = "🟡 ";
+                if (bullet) {
+                    char *t = g_strconcat(bullet,
+                                  i18n_translate(eng + strlen(bullet)), NULL);
+                    g_menu_item_set_attribute(item, "label", "s", t);
+                    g_free(t);
+                } else {
+                    g_menu_item_set_attribute(item, "label", "s",
+                                              i18n_translate(eng));
+                }
             } else {
                 g_menu_item_set_attribute_value(item, aname, aval);
             }

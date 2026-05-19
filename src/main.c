@@ -1063,16 +1063,18 @@ static void action_reopen_closed(GSimpleAction *a, GVariant *p, gpointer u) {
 
 static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    /* P16 — use the bundled macOS logo (logo150px) for the About dialog. */
-    GdkPixbuf *logo = NULL;
+    /* P16 — bundled macOS logo (logo150px). GTK4's "logo" property is a
+     * GdkPaintable, not a GdkPixbuf — load it as a GdkTexture (which is
+     * a GdkPaintable) or g_object_set rejects it with a type error. */
+    GdkTexture *logo = NULL;
     const char *logo_path = RESOURCES_DIR "/icons/standard/about/logo150px.png";
     if (g_file_test(logo_path, G_FILE_TEST_EXISTS))
-        logo = gdk_pixbuf_new_from_file(logo_path, NULL);
+        logo = gdk_texture_new_from_filename(logo_path, NULL);
     gtk_show_about_dialog(GTK_WINDOW(g_window),
         "program-name", APP_NAME,
-        "version",      "1.0.6",
+        "version",      APP_VERSION,
         "comments",     "A native Linux port of Notepad++ — multi-tab text editor "
-                        "with Scintilla + Lexilla. GTK3 + libgnustep-free C11.",
+                        "with Scintilla + Lexilla. GTK4 + libadwaita, C11.",
         "website",      "https://nextpad.org",
         "website-label","nextpad.org",
         "copyright",    "© 2026 Andrey Letov + Andrea Coi (Linux port grafts from notetux-plus-plus)",
@@ -2267,24 +2269,21 @@ static const char *kReleasesAPI =
 static GMenu *g_updates_section = NULL;
 void main_retranslate_menu(void);   /* defined later in this file */
 
-/* Refresh the "Check for Updates" menu item: bullet icon + label.
+/* Refresh the "Check for Updates" menu item with a status bullet.
  * state — 0 none, 1 green (up to date), 2 yellow (update available).
- * Mirrors the macOS status_green/status_yellow menu-item image. */
+ * The bullet is a coloured-circle emoji prefixed to the label —
+ * GtkPopoverMenuBar renders it in colour via the emoji font.
+ * (g_menu_item_set_icon is NOT used: a GIcon on a popover-menu item
+ * crashes GTK's menu renderer with a GdkPixbuf/GdkPaintable type
+ * mismatch. i18n_translate_menu preserves the leading bullet.) */
 static void set_update_badge(int state, const char *label) {
     if (!g_updates_section) return;
-    GMenuItem *it = g_menu_item_new(label ? label : "Check for Updates…",
-                                    "app.check-updates");
-    if (state) {
-        char path[512];
-        snprintf(path, sizeof path,
-                 RESOURCES_DIR "/icons/standard/status/status_%s.png",
-                 state == 2 ? "yellow" : "green");
-        GFile *f  = g_file_new_for_path(path);
-        GIcon *gi = g_file_icon_new(f);
-        g_menu_item_set_icon(it, gi);
-        g_object_unref(gi);
-        g_object_unref(f);
-    }
+    const char *base = label ? label : "Check for Updates…";
+    char *full = (state == 2) ? g_strconcat("🟡 ", base, NULL)
+               : (state == 1) ? g_strconcat("🟢 ", base, NULL)
+               :                g_strdup(base);
+    GMenuItem *it = g_menu_item_new(full, "app.check-updates");
+    g_free(full);
     g_menu_remove(g_updates_section, 0);
     g_menu_insert_item(g_updates_section, 0, it);
     g_object_unref(it);
