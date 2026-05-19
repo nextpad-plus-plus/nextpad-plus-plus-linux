@@ -649,10 +649,11 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
         gtk_label_set_width_chars(GTK_LABEL(label),     18);
         gtk_label_set_max_width_chars(GTK_LABEL(label), 30);
     }
-    /* macOS NppTabBar spacing: a fixed 15px between the save-state icon
-     * and the filename, and a tight 4px gap before the pin/close button. */
-    gtk_widget_set_margin_start(label, 15);
-    gtk_widget_set_margin_end(label, 4);
+    /* macOS NppTabBar spacing: ~7px between the save-state icon and the
+     * filename, and a tight ~2px gap before the pin/close button (macOS
+     * draws the close button 2px past the text end). */
+    gtk_widget_set_margin_start(label, 7);
+    gtk_widget_set_margin_end(label, 2);
     /* P16 — use macOS tabbar close button icon when available. */
     GtkWidget *img = NULL;
     const char *closepath = RESOURCES_DIR "/icons/standard/tabbar/closeTabButton.png";
