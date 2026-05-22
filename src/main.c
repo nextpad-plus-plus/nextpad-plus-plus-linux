@@ -4741,6 +4741,33 @@ static void action_command_palette(GSimpleAction *a, GVariant *p, gpointer u) {
     gtk_widget_grab_focus(g_cmd_search);
 }
 
+/* Edit ▸ Delete (macOS parity) — clear the selection / forward-delete. */
+static void action_delete(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    sci_send(SCI_CLEAR, 0, 0);
+}
+
+/* Generic stub for macOS menu items with no Linux backend yet. These
+ * actions are registered so the menu items exist (full-fidelity layout)
+ * but are disabled (greyed) right after registration — see
+ * disable_stub_actions(). The body never runs while disabled. */
+static void action_menu_stub(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+}
+
+/* macOS items not yet wired on Linux — greyed so they mirror the macOS
+ * menu layout without pretending to work. */
+static const char *kStubActions[] = {
+    "close-all-but-pinned",     /* File ▸ Close Multiple Documents      */
+    "change-search-engine",     /* Edit ▸ On Selection                  */
+    "clear-readonly",           /* Edit ▸ Read-Only in Nextpad++        */
+    "lock-file", "unlock-file", /* Edit ▸ Locked Attribute (macOS)      */
+    "ac-hint-prev", "ac-hint-next", /* Edit ▸ Auto-Completion           */
+    "tab-move-start", "tab-move-end",                /* View ▸ Tab       */
+    "tab-move-forward", "tab-move-backward",         /* View ▸ Tab       */
+    "search-result-next", "search-result-prev",     /* Search           */
+};
+
 static const GActionEntry kAppActions[] = {
     /* File */
     { "new",            action_new,            NULL, NULL, NULL },
@@ -5126,6 +5153,21 @@ static const GActionEntry kAppActions[] = {
     { "panel-popout",          action_panel_popout,             "s",  NULL, NULL },
     { "panel-dockback",        action_panel_dockback,           "s",  NULL, NULL },
     { "panel-toggle-floating", action_panel_toggle,             "s",  NULL, NULL },
+    /* macOS-parity menu sweep */
+    { "delete",                action_delete,                   NULL, NULL, NULL },
+    { "close-all-but-pinned",  action_menu_stub,                NULL, NULL, NULL },
+    { "change-search-engine",  action_menu_stub,                NULL, NULL, NULL },
+    { "clear-readonly",        action_menu_stub,                NULL, NULL, NULL },
+    { "lock-file",             action_menu_stub,                NULL, NULL, NULL },
+    { "unlock-file",           action_menu_stub,                NULL, NULL, NULL },
+    { "ac-hint-prev",          action_menu_stub,                NULL, NULL, NULL },
+    { "ac-hint-next",          action_menu_stub,                NULL, NULL, NULL },
+    { "tab-move-start",        action_menu_stub,                NULL, NULL, NULL },
+    { "tab-move-end",          action_menu_stub,                NULL, NULL, NULL },
+    { "tab-move-forward",      action_menu_stub,                NULL, NULL, NULL },
+    { "tab-move-backward",     action_menu_stub,                NULL, NULL, NULL },
+    { "search-result-next",    action_menu_stub,                NULL, NULL, NULL },
+    { "search-result-prev",    action_menu_stub,                NULL, NULL, NULL },
 };
 
 /* Convenience: app.<name> action + accelerator. */
@@ -5163,53 +5205,57 @@ static GMenuModel *build_menu_model(void)
 {
     GMenu *bar = g_menu_new();
 
-    /* File */
+    /* File — sequence + dividers mirror macOS MenuBuilder.mm:235-277. */
     GMenu *file = g_menu_new();
-    g_menu_append(file, "New",          "app.new");
-    g_menu_append(file, "Open…",        "app.open");
-    g_menu_append(file, "Open Folder as Workspace…", "app.open-workspace");
-    /* Q-fix: Open Containing Folder split into Files/Terminal submenu (macOS parity). */
     {
+        GMenu *top = g_menu_new();
+        g_menu_append(top, "New",   "app.new");
+        g_menu_append(top, "Open…", "app.open");
+        /* Open Recent — global so main_recent_file_add can rebuild it. */
+        g_recent_menu = g_menu_new();
+        g_menu_append_submenu(top, "Open Recent", G_MENU_MODEL(g_recent_menu));
+        rebuild_recent_menu();
+        /* Open Containing Folder ▸ (macOS "Finder" → "Files" on Linux). */
         GMenu *ocf = g_menu_new();
         g_menu_append(ocf, "Files",    "app.open-containing-files");
         g_menu_append(ocf, "Terminal", "app.open-containing-terminal");
-        g_menu_append_submenu(file, "Open Containing Folder", G_MENU_MODEL(ocf));
+        g_menu_append_submenu(top, "Open Containing Folder", G_MENU_MODEL(ocf));
         g_object_unref(ocf);
+        g_menu_append(top, "Open in Default Viewer",    "app.open-default-viewer");
+        g_menu_append(top, "Open Folder as Workspace…", "app.open-workspace");
+        g_menu_append_section(file, NULL, G_MENU_MODEL(top));
+        g_object_unref(top);
     }
-    g_menu_append(file, "Open in Default Viewer",    "app.open-default-viewer");
-    /* Q-align: "View Current File In" moved from File to View menu
-     * (macOS 5-view_menu.png places it at the top of View, not in File). */
-    /* Recent submenu — kept as module global so main_recent_file_add can
-     * rebuild it on every open/save. */
-    g_recent_menu = g_menu_new();
-    g_menu_append_submenu(file, "Open Recent", G_MENU_MODEL(g_recent_menu));
-    rebuild_recent_menu();
-    g_menu_append(file, "Reload from Disk", "app.reload");
+    {
+        GMenu *reload = g_menu_new();
+        g_menu_append(reload, "Reload from Disk", "app.reload");
+        g_menu_append_section(file, NULL, G_MENU_MODEL(reload));
+        g_object_unref(reload);
+    }
     {
         GMenu *save_group = g_menu_new();
-        g_menu_append(save_group, "Save",         "app.save");
-        g_menu_append(save_group, "Save As…",     "app.save-as");
+        g_menu_append(save_group, "Save",          "app.save");
+        g_menu_append(save_group, "Save As…",      "app.save-as");
         g_menu_append(save_group, "Save a Copy As…","app.save-copy-as");
-        g_menu_append(save_group, "Save All",     "app.save-all");
-        g_menu_append(save_group, "Rename…",      "app.rename");
+        g_menu_append(save_group, "Save All",      "app.save-all");
+        g_menu_append(save_group, "Rename…",       "app.rename");
         g_menu_append_section(file, NULL, G_MENU_MODEL(save_group));
         g_object_unref(save_group);
     }
     {
         GMenu *close_group = g_menu_new();
-        g_menu_append(close_group, "Close",                "app.close");
-        g_menu_append(close_group, "Close All",            "app.close-all");
-        /* Q-fix: macOS Close Multiple Documents submenu (5 items). */
+        g_menu_append(close_group, "Close",     "app.close");
+        g_menu_append(close_group, "Close All", "app.close-all");
         GMenu *closem = g_menu_new();
-        g_menu_append(closem, "Close All But Current",     "app.close-others");
-        g_menu_append(closem, "Close All to the Left",     "app.close-to-left");
-        g_menu_append(closem, "Close All to the Right",    "app.close-to-right");
-        g_menu_append(closem, "Close All Unchanged",       "app.close-unchanged");
+        g_menu_append(closem, "Close All But Current",  "app.close-others");
+        g_menu_append(closem, "Close All to the Left",  "app.close-to-left");
+        g_menu_append(closem, "Close All to the Right", "app.close-to-right");
+        g_menu_append(closem, "Close All Unchanged",    "app.close-unchanged");
+        g_menu_append(closem, "Close All But Pinned",   "app.close-all-but-pinned");
         g_menu_append_submenu(close_group, "Close Multiple Documents",
                               G_MENU_MODEL(closem));
         g_object_unref(closem);
-        g_menu_append(close_group, "Reopen Closed Tab",    "app.reopen-closed");
-        g_menu_append(close_group, "Move to Trash",        "app.move-to-trash");
+        g_menu_append(close_group, "Move to Trash", "app.move-to-trash");
         g_menu_append_section(file, NULL, G_MENU_MODEL(close_group));
         g_object_unref(close_group);
     }
@@ -5222,16 +5268,10 @@ static GMenuModel *build_menu_model(void)
     }
     {
         GMenu *print_group = g_menu_new();
-        g_menu_append(print_group, "Print…", "app.print");
+        g_menu_append(print_group, "Print…",    "app.print");
         g_menu_append(print_group, "Print Now", "app.print-now");
         g_menu_append_section(file, NULL, G_MENU_MODEL(print_group));
         g_object_unref(print_group);
-    }
-    {
-        GMenu *quit_group = g_menu_new();
-        g_menu_append(quit_group, "Quit", "app.quit");
-        g_menu_append_section(file, NULL, G_MENU_MODEL(quit_group));
-        g_object_unref(quit_group);
     }
     g_menu_append_submenu(bar, "_File", G_MENU_MODEL(file));
     g_object_unref(file);
@@ -5246,15 +5286,12 @@ static GMenuModel *build_menu_model(void)
         g_object_unref(grp);
     }
     {
+        /* macOS keeps Cut…Begin/End Select in one section, incl. Delete. */
         GMenu *grp = g_menu_new();
-        g_menu_append(grp, "Cut",   "app.cut");
-        g_menu_append(grp, "Copy",  "app.copy");
-        g_menu_append(grp, "Paste", "app.paste");
-        g_menu_append_section(edit, NULL, G_MENU_MODEL(grp));
-        g_object_unref(grp);
-    }
-    {
-        GMenu *grp = g_menu_new();
+        g_menu_append(grp, "Cut",    "app.cut");
+        g_menu_append(grp, "Copy",   "app.copy");
+        g_menu_append(grp, "Paste",  "app.paste");
+        g_menu_append(grp, "Delete", "app.delete");
         g_menu_append(grp, "Select All", "app.select-all");
         g_menu_append(grp, "Begin/End Select",                "app.begin-end-select");
         g_menu_append(grp, "Begin/End Select in Column Mode", "app.begin-end-select-column");
@@ -5268,22 +5305,28 @@ static GMenuModel *build_menu_model(void)
         /* Insert */
         {
             GMenu *insert = g_menu_new();
-            g_menu_append(insert, "Date/Time (Short)",       "app.insert-dt-short");
-            g_menu_append(insert, "Date/Time (Long)",        "app.insert-dt-long");
-            g_menu_append(insert, "Date/Time (Custom Format…)", "app.insert-dt-custom");
-            g_menu_append(insert, "Blank Line Above Current","app.insert-blank-above");
-            g_menu_append(insert, "Blank Line Below Current","app.insert-blank-below");
+            g_menu_append(insert, "Insert Date/Time (Short)",          "app.insert-dt-short");
+            g_menu_append(insert, "Insert Date/Time (Long)",           "app.insert-dt-long");
+            g_menu_append(insert, "Insert Date/Time (Custom Format…)", "app.insert-dt-custom");
+            GMenu *insert_bl = g_menu_new();
+            g_menu_append(insert_bl, "Insert Blank Line Above Current","app.insert-blank-above");
+            g_menu_append(insert_bl, "Insert Blank Line Below Current","app.insert-blank-below");
+            g_menu_append_section(insert, NULL, G_MENU_MODEL(insert_bl));
+            g_object_unref(insert_bl);
             g_menu_append_submenu(submenus, "Insert", G_MENU_MODEL(insert));
             g_object_unref(insert);
         }
         /* Copy to Clipboard */
         {
             GMenu *cp = g_menu_new();
-            g_menu_append(cp, "Copy Full File Path",  "app.copy-full-path");
-            g_menu_append(cp, "Copy File Name",       "app.copy-file-name");
-            g_menu_append(cp, "Copy Directory Path",  "app.copy-dir-path");
-            g_menu_append(cp, "Copy All File Names",  "app.copy-all-names");
-            g_menu_append(cp, "Copy All File Paths",  "app.copy-all-paths");
+            g_menu_append(cp, "Copy Full File Path",         "app.copy-full-path");
+            g_menu_append(cp, "Copy File Name",              "app.copy-file-name");
+            g_menu_append(cp, "Copy Current Directory Path", "app.copy-dir-path");
+            GMenu *cp_all = g_menu_new();
+            g_menu_append(cp_all, "Copy All File Names",  "app.copy-all-names");
+            g_menu_append(cp_all, "Copy All File Paths",  "app.copy-all-paths");
+            g_menu_append_section(cp, NULL, G_MENU_MODEL(cp_all));
+            g_object_unref(cp_all);
             g_menu_append_submenu(submenus, "Copy to Clipboard", G_MENU_MODEL(cp));
             g_object_unref(cp);
         }
@@ -5312,32 +5355,62 @@ static GMenuModel *build_menu_model(void)
         /* Line Operations */
         {
             GMenu *lo = g_menu_new();
-            g_menu_append(lo, "Duplicate Line",          "app.line-duplicate");
-            g_menu_append(lo, "Delete Line",             "app.line-delete");
-            g_menu_append(lo, "Move Line Up",            "app.line-move-up");
-            g_menu_append(lo, "Move Line Down",          "app.line-move-down");
-            g_menu_append(lo, "Split Lines",             "app.line-split");
-            g_menu_append(lo, "Join Lines",              "app.line-join");
             {
-                GMenu *sort = g_menu_new();
-                g_menu_append(sort, "Ascending",                  "app.sort-asc");
-                g_menu_append(sort, "Descending",                 "app.sort-desc");
-                g_menu_append(sort, "Ascending Case-Insensitive", "app.sort-asc-ci");
-                g_menu_append(sort, "By Length (Shortest First)", "app.sort-by-length");
-                g_menu_append(sort, "By Length (Longest First)",  "app.sort-by-length-desc");
-                g_menu_append(sort, "Randomly",                    "app.sort-random");
-                g_menu_append(sort, "Reverse Order",                "app.lines-reverse");
-                g_menu_append(sort, "Integer Ascending",            "app.sort-int-asc");
-                g_menu_append(sort, "Integer Descending",           "app.sort-int-desc");
-                g_menu_append(sort, "Decimal Comma Ascending",      "app.sort-dec-comma-asc");
-                g_menu_append(sort, "Decimal Comma Descending",     "app.sort-dec-comma-desc");
-                g_menu_append(sort, "Decimal Dot Ascending",        "app.sort-dec-dot-asc");
-                g_menu_append(sort, "Decimal Dot Descending",       "app.sort-dec-dot-desc");
-                g_menu_append_submenu(lo, "Sort Lines", G_MENU_MODEL(sort));
-                g_object_unref(sort);
+                GMenu *lo1 = g_menu_new();
+                g_menu_append(lo1, "Duplicate Line", "app.line-duplicate");
+                g_menu_append(lo1, "Delete Line",    "app.line-delete");
+                g_menu_append(lo1, "Move Line Up",   "app.line-move-up");
+                g_menu_append(lo1, "Move Line Down", "app.line-move-down");
+                g_menu_append_section(lo, NULL, G_MENU_MODEL(lo1));
+                g_object_unref(lo1);
             }
-            g_menu_append(lo, "Remove Duplicate Lines",            "app.remove-duplicates");
-            g_menu_append(lo, "Remove Consecutive Duplicate Lines","app.remove-consec-dups");
+            {
+                GMenu *lo2 = g_menu_new();
+                g_menu_append(lo2, "Split Lines", "app.line-split");
+                g_menu_append(lo2, "Join Lines",  "app.line-join");
+                g_menu_append_section(lo, NULL, G_MENU_MODEL(lo2));
+                g_object_unref(lo2);
+            }
+            {
+                GMenu *lo3 = g_menu_new();
+                GMenu *sort = g_menu_new();
+                GMenu *s1 = g_menu_new();
+                g_menu_append(s1, "Ascending",                   "app.sort-asc");
+                g_menu_append(s1, "Descending",                  "app.sort-desc");
+                g_menu_append(s1, "Ascending (case-insensitive)","app.sort-asc-ci");
+                g_menu_append_section(sort, NULL, G_MENU_MODEL(s1));
+                g_object_unref(s1);
+                GMenu *s2 = g_menu_new();
+                g_menu_append(s2, "By Length (Shortest First)", "app.sort-by-length");
+                g_menu_append(s2, "By Length (Longest First)",  "app.sort-by-length-desc");
+                g_menu_append_section(sort, NULL, G_MENU_MODEL(s2));
+                g_object_unref(s2);
+                GMenu *s3 = g_menu_new();
+                g_menu_append(s3, "Randomly",      "app.sort-random");
+                g_menu_append(s3, "Reverse Order", "app.lines-reverse");
+                g_menu_append_section(sort, NULL, G_MENU_MODEL(s3));
+                g_object_unref(s3);
+                GMenu *s4 = g_menu_new();
+                g_menu_append(s4, "Integer Ascending",        "app.sort-int-asc");
+                g_menu_append(s4, "Integer Descending",       "app.sort-int-desc");
+                g_menu_append(s4, "Decimal Comma Ascending",  "app.sort-dec-comma-asc");
+                g_menu_append(s4, "Decimal Comma Descending", "app.sort-dec-comma-desc");
+                g_menu_append(s4, "Decimal Dot Ascending",    "app.sort-dec-dot-asc");
+                g_menu_append(s4, "Decimal Dot Descending",   "app.sort-dec-dot-desc");
+                g_menu_append_section(sort, NULL, G_MENU_MODEL(s4));
+                g_object_unref(s4);
+                g_menu_append_submenu(lo3, "Sort Lines", G_MENU_MODEL(sort));
+                g_object_unref(sort);
+                g_menu_append_section(lo, NULL, G_MENU_MODEL(lo3));
+                g_object_unref(lo3);
+            }
+            {
+                GMenu *lo4 = g_menu_new();
+                g_menu_append(lo4, "Remove Duplicate Lines",            "app.remove-duplicates");
+                g_menu_append(lo4, "Remove Consecutive Duplicate Lines","app.remove-consec-dups");
+                g_menu_append_section(lo, NULL, G_MENU_MODEL(lo4));
+                g_object_unref(lo4);
+            }
             g_menu_append_submenu(submenus, "Line Operations", G_MENU_MODEL(lo));
             g_object_unref(lo);
         }
@@ -5355,12 +5428,16 @@ static GMenuModel *build_menu_model(void)
         /* Auto-Completion */
         {
             GMenu *ac = g_menu_new();
-            g_menu_append(ac, "Function Completion",       "app.ac-function");
-            g_menu_append(ac, "Word Completion",           "app.ac-word");
-            g_menu_append(ac, "Function Parameters Hint",  "app.ac-function-hint");
-            g_menu_append(ac, "Hide Parameters Hint",      "app.ac-function-hint-stop");
-            g_menu_append(ac, "Path Completion",           "app.ac-path");
-            g_menu_append(ac, "Finish/Select Item",        "app.ac-select");
+            GMenu *ac1 = g_menu_new();
+            g_menu_append(ac1, "Function Completion",             "app.ac-function");
+            g_menu_append(ac1, "Word Completion",                 "app.ac-word");
+            g_menu_append(ac1, "Function Parameters Hint",        "app.ac-function-hint");
+            g_menu_append(ac1, "Function Parameters Previous Hint","app.ac-hint-prev");
+            g_menu_append(ac1, "Function Parameters Next Hint",   "app.ac-hint-next");
+            g_menu_append(ac1, "Path Completion",                 "app.ac-path");
+            g_menu_append_section(ac, NULL, G_MENU_MODEL(ac1));
+            g_object_unref(ac1);
+            g_menu_append(ac, "Finish or Select Autocomplete Item", "app.ac-select");
             g_menu_append_submenu(submenus, "Auto-Completion", G_MENU_MODEL(ac));
             g_object_unref(ac);
         }
@@ -5399,20 +5476,36 @@ static GMenuModel *build_menu_model(void)
         /* Paste Special */
         {
             GMenu *ps = g_menu_new();
-            g_menu_append(ps, "Copy Binary Content",  "app.copy-binary");
-            g_menu_append(ps, "Paste Binary Content", "app.paste-binary");
-            g_menu_append(ps, "Paste HTML Content",   "app.paste-html");
-            g_menu_append(ps, "Paste RTF Content",    "app.paste-rtf");
+            GMenu *ps1 = g_menu_new();
+            g_menu_append(ps1, "Copy Binary Content",  "app.copy-binary");
+            g_menu_append(ps1, "Paste Binary Content", "app.paste-binary");
+            g_menu_append_section(ps, NULL, G_MENU_MODEL(ps1));
+            g_object_unref(ps1);
+            GMenu *ps2 = g_menu_new();
+            g_menu_append(ps2, "Paste HTML Content",   "app.paste-html");
+            g_menu_append(ps2, "Paste RTF Content",    "app.paste-rtf");
+            g_menu_append_section(ps, NULL, G_MENU_MODEL(ps2));
+            g_object_unref(ps2);
             g_menu_append_submenu(submenus, "Paste Special", G_MENU_MODEL(ps));
             g_object_unref(ps);
         }
         /* On Selection */
         {
             GMenu *onsel = g_menu_new();
-            g_menu_append(onsel, "Open File",                "app.sel-open-file");
-            g_menu_append(onsel, "Open Containing Folder",   "app.sel-open-folder");
-            g_menu_append(onsel, "Search on Internet",       "app.sel-search-internet");
-            g_menu_append(onsel, "Redact Selection",         "app.sel-redact");
+            GMenu *os1 = g_menu_new();
+            g_menu_append(os1, "Open File",              "app.sel-open-file");
+            g_menu_append(os1, "Open Containing Folder", "app.sel-open-folder");
+            g_menu_append_section(onsel, NULL, G_MENU_MODEL(os1));
+            g_object_unref(os1);
+            GMenu *os2 = g_menu_new();
+            g_menu_append(os2, "Redact Selection", "app.sel-redact");
+            g_menu_append_section(onsel, NULL, G_MENU_MODEL(os2));
+            g_object_unref(os2);
+            GMenu *os3 = g_menu_new();
+            g_menu_append(os3, "Search on Internet",    "app.sel-search-internet");
+            g_menu_append(os3, "Change Search Engine…", "app.change-search-engine");
+            g_menu_append_section(onsel, NULL, G_MENU_MODEL(os3));
+            g_object_unref(os3);
             g_menu_append_submenu(submenus, "On Selection", G_MENU_MODEL(onsel));
             g_object_unref(onsel);
         }
@@ -5424,7 +5517,7 @@ static GMenuModel *build_menu_model(void)
     {
         GMenu *mssec = g_menu_new();
         GMenu *msa = g_menu_new();
-        g_menu_append(msa, "Ignore Case & Ignore Whole Word", "app.msa-ignore");
+        g_menu_append(msa, "Ignore Case & Whole Word", "app.msa-ignore");
         g_menu_append(msa, "Match Case Only",                  "app.msa-case");
         g_menu_append(msa, "Whole Word Only",                  "app.msa-word");
         g_menu_append(msa, "Match Case & Whole Word",          "app.msa-case-word");
@@ -5432,7 +5525,7 @@ static GMenuModel *build_menu_model(void)
         g_object_unref(msa);
 
         GMenu *msn = g_menu_new();
-        g_menu_append(msn, "Ignore Case & Ignore Whole Word", "app.msn-ignore");
+        g_menu_append(msn, "Ignore Case & Whole Word", "app.msn-ignore");
         g_menu_append(msn, "Match Case Only",                  "app.msn-case");
         g_menu_append(msn, "Whole Word Only",                  "app.msn-word");
         g_menu_append(msn, "Match Case & Whole Word",          "app.msn-case-word");
@@ -5444,197 +5537,215 @@ static GMenuModel *build_menu_model(void)
         g_menu_append_section(edit, NULL, G_MENU_MODEL(mssec));
         g_object_unref(mssec);
     }
-    /* Column Mode / Column Editor */
+    /* Column Mode / Editor / Character Panel / Clipboard History — one
+     * section (macOS MenuBuilder.mm:469-472). */
     {
         GMenu *modes = g_menu_new();
-        g_menu_append(modes, "Column Mode…",         "app.column-mode");
-        g_menu_append(modes, "Column Editor…",       "app.column-editor");
+        g_menu_append(modes, "Column Mode…",      "app.column-mode");
+        g_menu_append(modes, "Column Editor…",    "app.column-editor");
+        g_menu_append(modes, "Character Panel",   "app.toggle-charpanel");
+        g_menu_append(modes, "Clipboard History", "app.toggle-cliphistory");
         g_menu_append_section(edit, NULL, G_MENU_MODEL(modes));
         g_object_unref(modes);
     }
-    /* Character Panel / Clipboard History */
+    /* Read-Only ▸ + Locked Attribute (macOS) ▸ (MenuBuilder.mm:475-482). */
     {
-        GMenu *panels = g_menu_new();
-        g_menu_append(panels, "Character Panel",   "app.toggle-charpanel");
-        g_menu_append(panels, "Clipboard History", "app.toggle-cliphistory");
-        g_menu_append_section(edit, NULL, G_MENU_MODEL(panels));
-        g_object_unref(panels);
-    }
-    /* Read-Only in Nextpad++ */
-    {
+        GMenu *rosec = g_menu_new();
         GMenu *ro = g_menu_new();
-        g_menu_append(ro, "Read-Only in " APP_NAME, "app.toggle-readonly");
-        g_menu_append_section(edit, NULL, G_MENU_MODEL(ro));
+        g_menu_append(ro, "Toggle Read-Only",     "app.toggle-readonly");
+        g_menu_append(ro, "Clear Read-Only Flag", "app.clear-readonly");
+        g_menu_append_submenu(rosec, "Read-Only in " APP_NAME, G_MENU_MODEL(ro));
         g_object_unref(ro);
+        GMenu *locked = g_menu_new();
+        g_menu_append(locked, "Lock",   "app.lock-file");
+        g_menu_append(locked, "Unlock", "app.unlock-file");
+        g_menu_append_submenu(rosec, "Locked Attribute (macOS)", G_MENU_MODEL(locked));
+        g_object_unref(locked);
+        g_menu_append_section(edit, NULL, G_MENU_MODEL(rosec));
+        g_object_unref(rosec);
     }
 
     g_menu_append_submenu(bar, "_Edit", G_MENU_MODEL(edit));
     g_object_unref(edit);
 
-    /* Search */
+    /* Search — sequence + dividers mirror macOS MenuBuilder.mm:490-617. */
     GMenu *search = g_menu_new();
-    {
+    {   /* Find / Find in Files */
         GMenu *g = g_menu_new();
-        g_menu_append(g, "Find…",         "app.find");
-        g_menu_append(g, "Replace…",      "app.replace");
-        g_menu_append(g, "Find in Files…","app.find-in-files");
+        g_menu_append(g, "Find…",          "app.find");
+        g_menu_append(g, "Find in Files…", "app.find-in-files");
         g_menu_append_section(search, NULL, G_MENU_MODEL(g));
         g_object_unref(g);
     }
-    {
+    {   /* Find Next/Prev · Select-and-Find · Find (Volatile) */
         GMenu *g = g_menu_new();
         g_menu_append(g, "Find Next",                "app.find-next");
         g_menu_append(g, "Find Previous",            "app.find-prev");
-        g_menu_append(g, "Find All in Current Doc",  "app.find-all-current");
-        g_menu_append(g, "Find All in Open Docs",    "app.find-all-all-docs");
-        g_menu_append(g, "Replace in Selection…",    "app.replace-in-selection");
+        g_menu_append(g, "Select and Find Next",     "app.select-find-next");
+        g_menu_append(g, "Select and Find Previous", "app.select-find-prev");
+        g_menu_append(g, "Find (Volatile) Next",     "app.find-volatile-next");
+        g_menu_append(g, "Find (Volatile) Previous", "app.find-volatile-prev");
         g_menu_append_section(search, NULL, G_MENU_MODEL(g));
         g_object_unref(g);
     }
-    {
+    {   /* Replace / Incremental Search */
         GMenu *g = g_menu_new();
-        g_menu_append(g, "Go to Line…",            "app.goto-line");
-        g_menu_append(g, "Go to Matching Brace",   "app.goto-matching-brace");
-        g_menu_append(g, "Select All In Brackets", "app.select-in-brackets");
-        g_menu_append(g, "Incremental Search…",    "app.incremental-search");
+        g_menu_append(g, "Replace…",           "app.replace");
+        g_menu_append(g, "Incremental Search", "app.incremental-search");
         g_menu_append_section(search, NULL, G_MENU_MODEL(g));
         g_object_unref(g);
     }
-    {
-        /* Q4/Q5 — Bookmark submenu matches macOS MenuBuilder.mm (11 items). */
-        GMenu *bm = g_menu_new();
-        g_menu_append(bm, "Toggle Bookmark",                "app.bookmark-toggle");
-        g_menu_append(bm, "Next Bookmark",                  "app.bookmark-next");
-        g_menu_append(bm, "Previous Bookmark",              "app.bookmark-prev");
-        g_menu_append(bm, "Clear All Bookmarks",            "app.bookmark-clear-all");
-        /* Separator */
-        GMenu *bm_line_ops = g_menu_new();
-        g_menu_append(bm_line_ops, "Cut Bookmarked Lines",  "app.bookmark-cut-lines");
-        g_menu_append(bm_line_ops, "Copy Bookmarked Lines", "app.bookmark-copy-lines");
-        g_menu_append(bm_line_ops, "Paste to (Replace) Bookmarked Lines",
-                                                            "app.bookmark-paste-lines");
-        g_menu_append(bm_line_ops, "Remove Bookmarked Lines", "app.bookmark-remove-lines");
-        g_menu_append(bm_line_ops, "Remove Non-Bookmarked Lines",
-                                                            "app.bookmark-remove-unmarked");
-        g_menu_append(bm_line_ops, "Inverse Bookmark",      "app.bookmark-inverse");
-        g_menu_append_section(bm, NULL, G_MENU_MODEL(bm_line_ops));
-        g_object_unref(bm_line_ops);
-        g_menu_append_submenu(search, "Bookmark", G_MENU_MODEL(bm));
-        g_object_unref(bm);
+    {   /* Search Results window + result navigation */
+        GMenu *g = g_menu_new();
+        g_menu_append(g, "Search Results Window",  "app.show-search-results");
+        g_menu_append(g, "Next Search Result",     "app.search-result-next");
+        g_menu_append(g, "Previous Search Result", "app.search-result-prev");
+        g_menu_append_section(search, NULL, G_MENU_MODEL(g));
+        g_object_unref(g);
     }
-    {
-        /* G13 Mark All / Clear Mark (5 colours) */
-        GMenu *ma = g_menu_new();
-        g_menu_append(ma, "Mark All — 1 (yellow)", "app.mark-all-1");
-        g_menu_append(ma, "Mark All — 2 (green)",  "app.mark-all-2");
-        g_menu_append(ma, "Mark All — 3 (blue)",   "app.mark-all-3");
-        g_menu_append(ma, "Mark All — 4 (red)",    "app.mark-all-4");
-        g_menu_append(ma, "Mark All — 5 (purple)", "app.mark-all-5");
-        g_menu_append_submenu(search, "Mark All Occurrences", G_MENU_MODEL(ma));
-        g_object_unref(ma);
-        GMenu *cm = g_menu_new();
-        g_menu_append(cm, "Clear Style 1", "app.clear-mark-1");
-        g_menu_append(cm, "Clear Style 2", "app.clear-mark-2");
-        g_menu_append(cm, "Clear Style 3", "app.clear-mark-3");
-        g_menu_append(cm, "Clear Style 4", "app.clear-mark-4");
-        g_menu_append(cm, "Clear Style 5", "app.clear-mark-5");
-        g_menu_append(cm, "Clear All Styles", "app.clear-all-marks");
-        g_menu_append_submenu(search, "Clear Mark Style", G_MENU_MODEL(cm));
-        g_object_unref(cm);
-
-        /* Q-fix: Style One Token submenu (5 colours per macOS). */
-        GMenu *st = g_menu_new();
-        g_menu_append(st, "Style One — 1 (yellow)", "app.style-one-1");
-        g_menu_append(st, "Style One — 2 (green)",  "app.style-one-2");
-        g_menu_append(st, "Style One — 3 (blue)",   "app.style-one-3");
-        g_menu_append(st, "Style One — 4 (red)",    "app.style-one-4");
-        g_menu_append(st, "Style One — 5 (purple)", "app.style-one-5");
-        g_menu_append_submenu(search, "Style One Token", G_MENU_MODEL(st));
-        g_object_unref(st);
-
-        /* Q-fix: Copy Styled Text submenu (5 colours per macOS). */
-        GMenu *cs = g_menu_new();
-        g_menu_append(cs, "Copy Styled — 1 (yellow)", "app.copy-styled-1");
-        g_menu_append(cs, "Copy Styled — 2 (green)",  "app.copy-styled-2");
-        g_menu_append(cs, "Copy Styled — 3 (blue)",   "app.copy-styled-3");
-        g_menu_append(cs, "Copy Styled — 4 (red)",    "app.copy-styled-4");
-        g_menu_append(cs, "Copy Styled — 5 (purple)", "app.copy-styled-5");
-        g_menu_append_submenu(search, "Copy Styled Text", G_MENU_MODEL(cs));
-        g_object_unref(cs);
-
-        /* Q-fix: Jump Up/Down across any styled token. */
-        g_menu_append(search, "Jump to Next Styled Token",     "app.jump-styled-next");
-        g_menu_append(search, "Jump to Previous Styled Token", "app.jump-styled-prev");
-
-        /* Q-align macOS: Select and Find Next/Previous (4-search_menu.png). */
-        g_menu_append(search, "Select and Find Next",     "app.select-find-next");
-        g_menu_append(search, "Select and Find Previous", "app.select-find-prev");
-        /* Q-fix: Find (Volatile) Next/Previous — instant search without dialog. */
-        g_menu_append(search, "Find (Volatile) Next",     "app.find-volatile-next");
-        g_menu_append(search, "Find (Volatile) Previous", "app.find-volatile-prev");
-
-        /* Q-fix: Change History submenu. changehistory.c is grafted and
-         * marks unsaved (marker 0) + saved (marker 1) lines. */
+    {   /* Go to · Matching Brace · brackets · Mark */
+        GMenu *g = g_menu_new();
+        g_menu_append(g, "Go to…",                            "app.goto-line");
+        g_menu_append(g, "Go to Matching Brace",              "app.goto-matching-brace");
+        g_menu_append(g, "Select All In-between {} [] or ()", "app.select-in-brackets");
+        g_menu_append(g, "Mark…",                             "app.show-mark-dialog");
+        g_menu_append_section(search, NULL, G_MENU_MODEL(g));
+        g_object_unref(g);
+    }
+    {   /* Submenu group: Change History · Style/Clear/Copy · Jump · Bookmark */
+        GMenu *subs = g_menu_new();
         GMenu *ch = g_menu_new();
         g_menu_append(ch, "Go to Next Change",     "app.change-next");
         g_menu_append(ch, "Go to Previous Change", "app.change-prev");
         g_menu_append(ch, "Clear All Changes",     "app.change-clear");
-        g_menu_append_submenu(search, "Change History", G_MENU_MODEL(ch));
+        g_menu_append_submenu(subs, "Change History", G_MENU_MODEL(ch));
         g_object_unref(ch);
 
-        /* Q-fix: Find Characters in Range — macOS Search menu. */
-        g_menu_append(search, "Find Characters in Range…", "app.find-chars-in-range");
-        /* Q-align: macOS Mark dialog + Search Results Window. */
-        g_menu_append(search, "Mark…",                  "app.show-mark-dialog");
-        g_menu_append(search, "Search Results Window",  "app.show-search-results");
+        GMenu *sa = g_menu_new();
+        g_menu_append(sa, "Using 1st Style", "app.mark-all-1");
+        g_menu_append(sa, "Using 2nd Style", "app.mark-all-2");
+        g_menu_append(sa, "Using 3rd Style", "app.mark-all-3");
+        g_menu_append(sa, "Using 4th Style", "app.mark-all-4");
+        g_menu_append(sa, "Using 5th Style", "app.mark-all-5");
+        g_menu_append_submenu(subs, "Style All Occurrences of Token", G_MENU_MODEL(sa));
+        g_object_unref(sa);
+
+        GMenu *so = g_menu_new();
+        g_menu_append(so, "Using 1st Style", "app.style-one-1");
+        g_menu_append(so, "Using 2nd Style", "app.style-one-2");
+        g_menu_append(so, "Using 3rd Style", "app.style-one-3");
+        g_menu_append(so, "Using 4th Style", "app.style-one-4");
+        g_menu_append(so, "Using 5th Style", "app.style-one-5");
+        g_menu_append_submenu(subs, "Style One Token", G_MENU_MODEL(so));
+        g_object_unref(so);
+
+        GMenu *cl = g_menu_new();
+        GMenu *cl1 = g_menu_new();
+        g_menu_append(cl1, "Clear 1st Style", "app.clear-mark-1");
+        g_menu_append(cl1, "Clear 2nd Style", "app.clear-mark-2");
+        g_menu_append(cl1, "Clear 3rd Style", "app.clear-mark-3");
+        g_menu_append(cl1, "Clear 4th Style", "app.clear-mark-4");
+        g_menu_append(cl1, "Clear 5th Style", "app.clear-mark-5");
+        g_menu_append_section(cl, NULL, G_MENU_MODEL(cl1));
+        g_object_unref(cl1);
+        g_menu_append(cl, "Clear All Styles", "app.clear-all-marks");
+        g_menu_append_submenu(subs, "Clear Style", G_MENU_MODEL(cl));
+        g_object_unref(cl);
+
+        GMenu *ju = g_menu_new();
+        g_menu_append(ju, "Next Styled Token Above", "app.jump-styled-prev");
+        g_menu_append(ju, "Next Bookmark Above",     "app.bookmark-prev");
+        g_menu_append_submenu(subs, "Jump Up", G_MENU_MODEL(ju));
+        g_object_unref(ju);
+
+        GMenu *jd = g_menu_new();
+        g_menu_append(jd, "Next Styled Token Below", "app.jump-styled-next");
+        g_menu_append(jd, "Next Bookmark Below",     "app.bookmark-next");
+        g_menu_append_submenu(subs, "Jump Down", G_MENU_MODEL(jd));
+        g_object_unref(jd);
+
+        GMenu *cs = g_menu_new();
+        g_menu_append(cs, "Copy 1st Style Text", "app.copy-styled-1");
+        g_menu_append(cs, "Copy 2nd Style Text", "app.copy-styled-2");
+        g_menu_append(cs, "Copy 3rd Style Text", "app.copy-styled-3");
+        g_menu_append(cs, "Copy 4th Style Text", "app.copy-styled-4");
+        g_menu_append(cs, "Copy 5th Style Text", "app.copy-styled-5");
+        g_menu_append_submenu(subs, "Copy Styled Text", G_MENU_MODEL(cs));
+        g_object_unref(cs);
+
+        GMenu *bm = g_menu_new();
+        g_menu_append(bm, "Toggle Bookmark",     "app.bookmark-toggle");
+        g_menu_append(bm, "Next Bookmark",       "app.bookmark-next");
+        g_menu_append(bm, "Previous Bookmark",   "app.bookmark-prev");
+        g_menu_append(bm, "Clear All Bookmarks", "app.bookmark-clear-all");
+        GMenu *bm2 = g_menu_new();
+        g_menu_append(bm2, "Cut Bookmarked Lines",  "app.bookmark-cut-lines");
+        g_menu_append(bm2, "Copy Bookmarked Lines", "app.bookmark-copy-lines");
+        g_menu_append(bm2, "Paste to (Replace) Bookmarked Lines", "app.bookmark-paste-lines");
+        g_menu_append(bm2, "Remove Bookmarked Lines", "app.bookmark-remove-lines");
+        g_menu_append(bm2, "Remove Non-Bookmarked Lines", "app.bookmark-remove-unmarked");
+        g_menu_append(bm2, "Inverse Bookmark", "app.bookmark-inverse");
+        g_menu_append_section(bm, NULL, G_MENU_MODEL(bm2));
+        g_object_unref(bm2);
+        g_menu_append_submenu(subs, "Bookmark", G_MENU_MODEL(bm));
+        g_object_unref(bm);
+
+        g_menu_append_section(search, NULL, G_MENU_MODEL(subs));
+        g_object_unref(subs);
+    }
+    {   /* Find Characters in Range */
+        GMenu *g = g_menu_new();
+        g_menu_append(g, "Find Characters in Range…", "app.find-chars-in-range");
+        g_menu_append_section(search, NULL, G_MENU_MODEL(g));
+        g_object_unref(g);
     }
     g_menu_append_submenu(bar, "_Search", G_MENU_MODEL(search));
     g_object_unref(search);
 
-    /* View */
-    /* View menu — order matches macOS 5-view_menu.png exactly. */
+    /* View — sequence + dividers mirror macOS MenuBuilder.mm:625-786. */
     GMenu *view = g_menu_new();
-    /* Section 1: Command Palette */
-    {
+    {   /* Command Palette */
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Command Palette…", "app.command-palette");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 2: Always on Top / Enter Full Screen / Post-it / Distraction Free */
-    {
+    {   /* Always on Top / Full Screen / Post-It / Distraction Free */
         GMenu *grp = g_menu_new();
-        g_menu_append(grp, "Always on Top",        "app.always-on-top");
-        g_menu_append(grp, "Enter Full Screen",    "app.fullscreen");
-        g_menu_append(grp, "Post-it",              "app.post-it");
-        g_menu_append(grp, "Distraction Free Mode","app.distraction-free");
+        g_menu_append(grp, "Always on Top",          "app.always-on-top");
+        g_menu_append(grp, "Toggle Full Screen Mode","app.fullscreen");
+        g_menu_append(grp, "Post-It",                "app.post-it");
+        g_menu_append(grp, "Distraction Free Mode",  "app.distraction-free");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 3: View Current File In */
-    {
+    {   /* View Current File in */
         GMenu *grp = g_menu_new();
         GMenu *vif = g_menu_new();
         g_menu_append(vif, "Firefox",         "app.view-in-firefox");
         g_menu_append(vif, "Chrome",          "app.view-in-chrome");
         g_menu_append(vif, "Chromium",        "app.view-in-chromium");
         g_menu_append(vif, "Default Browser", "app.view-in-default");
-        g_menu_append_submenu(grp, "View Current File In", G_MENU_MODEL(vif));
+        g_menu_append_submenu(grp, "View Current File in", G_MENU_MODEL(vif));
         g_object_unref(vif);
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 4: Show Symbol / Zoom / Move/Clone Current Document / Tab */
-    {
+    {   /* Show Symbol / Zoom / Move-Clone / Tab + Word Wrap / Focus / Hide
+         * Lines — all one section (macOS keeps no divider before Word Wrap). */
         GMenu *grp = g_menu_new();
         /* Show Symbol */
         GMenu *show = g_menu_new();
-        g_menu_append(show, "Show Whitespace / TAB", "app.show-ws");
-        g_menu_append(show, "Show End of Line",      "app.show-eol");
-        g_menu_append(show, "Show All Characters",   "app.show-all-chars");
-        g_menu_append(show, "Show Indent Guides",    "app.show-indent-guide");
-        g_menu_append(show, "Show Line Numbers",     "app.show-line-numbers");
-        g_menu_append(show, "Show Wrap Symbol",      "app.show-wrap-symbol");
+        g_menu_append(show, "Show White Space and TAB", "app.show-ws");
+        g_menu_append(show, "Show End of Line",         "app.show-eol");
+        g_menu_append(show, "Show All Characters",      "app.show-all-chars");
+        g_menu_append(show, "Show Indent Guide",        "app.show-indent-guide");
+        g_menu_append(show, "Show Line Numbers",        "app.show-line-numbers");
+        g_menu_append(show, "Show Wrap Symbol",         "app.show-wrap-symbol");
+        GMenu *show2 = g_menu_new();
+        g_menu_append(show2, "Hide Line Marks (Bookmarks)", "app.hide-line-marks");
+        g_menu_append_section(show, NULL, G_MENU_MODEL(show2));
+        g_object_unref(show2);
         g_menu_append_submenu(grp, "Show Symbol", G_MENU_MODEL(show));
         g_object_unref(show);
         /* Zoom */
@@ -5644,65 +5755,83 @@ static GMenuModel *build_menu_model(void)
         g_menu_append(zoom, "Restore Default Zoom", "app.zoom-reset");
         g_menu_append_submenu(grp, "Zoom", G_MENU_MODEL(zoom));
         g_object_unref(zoom);
-        /* Move/Clone Current Document */
+        /* Move/Clone Current Document — real, distinct actions + dividers. */
         GMenu *mc = g_menu_new();
-        g_menu_append(mc, "Move to Other Vertical View",   "app.split-clone");
-        g_menu_append(mc, "Clone to Other Vertical View",  "app.split-clone");
-        g_menu_append(mc, "Move to Other Horizontal View", "app.split-clone");
-        g_menu_append(mc, "Clone to Other Horizontal View","app.split-clone");
-        g_menu_append(mc, "Reset View",                    "app.split-close");
+        GMenu *mcv = g_menu_new();
+        g_menu_append(mcv, "Move to Other Vertical View",  "app.move-to-vview");
+        g_menu_append(mcv, "Clone to Other Vertical View", "app.clone-to-vview");
+        g_menu_append_section(mc, NULL, G_MENU_MODEL(mcv));
+        g_object_unref(mcv);
+        GMenu *mch = g_menu_new();
+        g_menu_append(mch, "Move to Other Horizontal View",  "app.move-to-hview");
+        g_menu_append(mch, "Clone to Other Horizontal View", "app.clone-to-hview");
+        g_menu_append_section(mc, NULL, G_MENU_MODEL(mch));
+        g_object_unref(mch);
+        GMenu *mcr = g_menu_new();
+        g_menu_append(mcr, "Reset View", "app.reset-view");
+        g_menu_append_section(mc, NULL, G_MENU_MODEL(mcr));
+        g_object_unref(mcr);
         g_menu_append_submenu(grp, "Move/Clone Current Document", G_MENU_MODEL(mc));
         g_object_unref(mc);
-        /* Tab (singular per macOS) */
+        /* Tab */
         GMenu *tabs = g_menu_new();
-        g_menu_append(tabs, "Next Tab",     "app.tab-next");
-        g_menu_append(tabs, "Previous Tab", "app.tab-prev");
-        g_menu_append(tabs, "First Tab",    "app.tab-first");
-        g_menu_append(tabs, "Last Tab",     "app.tab-last");
+        GMenu *tnum = g_menu_new();
         for (int i = 1; i <= 9; i++) {
             char label[16]; g_snprintf(label, sizeof(label), "%d%s Tab",
                 i, i == 1 ? "st" : i == 2 ? "nd" : i == 3 ? "rd" : "th");
             GMenuItem *mi = g_menu_item_new(label, NULL);
             g_menu_item_set_action_and_target(mi, "app.tab-goto", "i", i);
-            g_menu_append_item(tabs, mi);
+            g_menu_append_item(tnum, mi);
             g_object_unref(mi);
         }
-        GMenu *sort = g_menu_new();
-        g_menu_append(sort, "By File Name (A–Z)",  "app.sort-tabs-name-asc");
-        g_menu_append(sort, "By File Name (Z–A)",  "app.sort-tabs-name-desc");
-        g_menu_append(sort, "By File Type (A–Z)",  "app.sort-tabs-ext-asc");
-        g_menu_append(sort, "By File Type (Z–A)",  "app.sort-tabs-ext-desc");
-        g_menu_append(sort, "By Full Path (A–Z)",  "app.sort-tabs-path-asc");
-        g_menu_append(sort, "By Full Path (Z–A)",  "app.sort-tabs-path-desc");
-        g_menu_append_submenu(tabs, "Sort Tabs", G_MENU_MODEL(sort));
-        g_object_unref(sort);
-        g_menu_append(tabs, "Toggle Tab Bar Wrap", "app.toggle-tab-bar-wrap");
+        g_menu_append_section(tabs, NULL, G_MENU_MODEL(tnum));
+        g_object_unref(tnum);
+        GMenu *tnav = g_menu_new();
+        g_menu_append(tnav, "First Tab",    "app.tab-first");
+        g_menu_append(tnav, "Last Tab",     "app.tab-last");
+        g_menu_append(tnav, "Wrap tabs to multiple lines", "app.toggle-tab-bar-wrap");
+        g_menu_append(tnav, "Next Tab",     "app.tab-next");
+        g_menu_append(tnav, "Previous Tab", "app.tab-prev");
+        g_menu_append_section(tabs, NULL, G_MENU_MODEL(tnav));
+        g_object_unref(tnav);
+        GMenu *tmov = g_menu_new();
+        g_menu_append(tmov, "Move to Start",     "app.tab-move-start");
+        g_menu_append(tmov, "Move to End",       "app.tab-move-end");
+        g_menu_append(tmov, "Move Tab Forward",  "app.tab-move-forward");
+        g_menu_append(tmov, "Move Tab Backward", "app.tab-move-backward");
+        g_menu_append_section(tabs, NULL, G_MENU_MODEL(tmov));
+        g_object_unref(tmov);
+        GMenu *tcol = g_menu_new();
+        for (int i = 1; i <= 5; i++) {
+            char label[16]; g_snprintf(label, sizeof(label), "Apply Color %d", i);
+            GMenuItem *mi = g_menu_item_new(label, NULL);
+            g_menu_item_set_action_and_target(mi, "app.tab-set-color", "i", i);
+            g_menu_append_item(tcol, mi);
+            g_object_unref(mi);
+        }
+        {
+            GMenuItem *mi = g_menu_item_new("Remove Color", NULL);
+            g_menu_item_set_action_and_target(mi, "app.tab-set-color", "i", 0);
+            g_menu_append_item(tcol, mi);
+            g_object_unref(mi);
+        }
+        g_menu_append_section(tabs, NULL, G_MENU_MODEL(tcol));
+        g_object_unref(tcol);
         g_menu_append_submenu(grp, "Tab", G_MENU_MODEL(tabs));
         g_object_unref(tabs);
+        /* Flat items in the same section (no divider before Word Wrap). */
+        g_menu_append(grp, "Word Wrap",             "app.word-wrap");
+        g_menu_append(grp, "Focus on Another View", "app.focus-other-view");
+        g_menu_append(grp, "Hide Lines",            "app.hide-lines");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 5: Word Wrap / Focus on Another View / Hide Lines */
-    {
+    {   /* Fold All / Unfold All / Fold-Unfold Current / Fold-Unfold Level */
         GMenu *grp = g_menu_new();
-        g_menu_append(grp, "Word Wrap",                "app.word-wrap");
-        g_menu_append(grp, "Focus on Another View",    "app.focus-other-view");
-        GMenu *hide = g_menu_new();
-        g_menu_append(hide, "Hide Selected Lines", "app.hide-lines");
-        g_menu_append(hide, "Show All Lines",      "app.show-lines");
-        g_menu_append_submenu(grp, "Hide Lines", G_MENU_MODEL(hide));
-        g_object_unref(hide);
-        g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
-        g_object_unref(grp);
-    }
-    /* Section 6: Fold All / Unfold All / Fold Current Level / Unfold Current Level
-     *            / Fold Level / Unfold Level */
-    {
-        GMenu *grp = g_menu_new();
-        g_menu_append(grp, "Fold All",              "app.fold-all");
-        g_menu_append(grp, "Unfold All",            "app.unfold-all");
-        g_menu_append(grp, "Fold Current Level",    "app.fold-current-level");
-        g_menu_append(grp, "Unfold Current Level",  "app.unfold-current-level");
+        g_menu_append(grp, "Fold All",             "app.fold-all");
+        g_menu_append(grp, "Unfold All",           "app.unfold-all");
+        g_menu_append(grp, "Fold Current Level",   "app.fold-current-level");
+        g_menu_append(grp, "Unfold Current Level", "app.unfold-current-level");
         GMenu *fl = g_menu_new();
         for (int i = 1; i <= 8; i++) {
             char label[16], action[32];
@@ -5724,71 +5853,48 @@ static GMenuModel *build_menu_model(void)
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 7: Summary */
-    {
+    {   /* Summary */
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Summary…", "app.view-summary");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 8: Project Panels / Document Map / Document List / Function List
-     * macOS View menu shows "Project Panels" as a single toggle action (no
-     * submenu — matches screenshot 5-view_menu.png). */
-    {
+    {   /* Panels — incl. Git */
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Project Panels", "app.toggle-project");
         g_menu_append(grp, "Document Map",   "app.toggle-docmap");
         g_menu_append(grp, "Document List",  "app.toggle-doclist");
         g_menu_append(grp, "Function List",  "app.toggle-funclist");
+        g_menu_append(grp, "Git",            "app.toggle-gitpanel");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 9: Spell Check */
-    {
+    {   /* Spell Check */
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Spell Check", "app.toggle-spell-check");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 10: Sync scrolling */
-    {
+    {   /* Sync scrolling */
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Synchronize Vertical Scrolling",   "app.sync-scroll-v");
         g_menu_append(grp, "Synchronize Horizontal Scrolling", "app.sync-scroll-h");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 11: Text Direction RTL / LTR */
-    {
+    {   /* Text Direction */
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Text Direction RTL", "app.text-dir-rtl");
         g_menu_append(grp, "Text Direction LTR", "app.text-dir-ltr");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 12: Monitoring */
-    {
+    {   /* Monitoring */
         GMenu *grp = g_menu_new();
         g_menu_append(grp, "Monitoring (tail -f)", "app.toggle-monitoring");
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
     }
-    /* Section 13: split views (#3 — labels match tabContextMenu.xml so the
-     * tab right-click "Move Document" submenu resolves these). */
-    {
-        GMenu *grp = g_menu_new();
-        GMenu *mv  = g_menu_new();
-        g_menu_append(mv, "Move to Other Vertical View",    "app.move-to-vview");
-        g_menu_append(mv, "Clone to Other Vertical View",   "app.clone-to-vview");
-        g_menu_append(mv, "Move to Other Horizontal View",  "app.move-to-hview");
-        g_menu_append(mv, "Clone to Other Horizontal View", "app.clone-to-hview");
-        g_menu_append(mv, "Reset View",                     "app.reset-view");
-        g_menu_append_submenu(grp, "Split View", G_MENU_MODEL(mv));
-        g_object_unref(mv);
-        g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
-        g_object_unref(grp);
-    }
-
     g_menu_append_submenu(bar, "_View", G_MENU_MODEL(view));
     g_object_unref(view);
 
@@ -5841,39 +5947,14 @@ static GMenuModel *build_menu_model(void)
         g_menu_append_submenu(enc_menu, "Character sets", G_MENU_MODEL(cs));
         g_object_unref(cs);
     }
-    /* Reload-with-<encoding> — macOS Encoding menu surfaces both
-     * Reload-with and Convert-to. Reload-with re-reads bytes from disk
-     * forcing an encoding (no transcoding), Convert-to mutates the
-     * in-memory buffer through iconv. */
-    {
-        GMenu *rl = g_menu_new();
-        static const struct { const char *label; const char *target; } rl_rows[] = {
-            { "ANSI",          "Windows-1252"  },
-            { "UTF-8",         "UTF-8"         },
-            { "UTF-8 BOM",     "UTF-8 BOM"     },
-            { "UTF-16 LE BOM", "UTF-16 LE BOM" },
-            { "UTF-16 BE BOM", "UTF-16 BE BOM" },
-        };
-        for (size_t i = 0; i < G_N_ELEMENTS(rl_rows); i++) {
-            GMenuItem *mi = g_menu_item_new(rl_rows[i].label, NULL);
-            g_menu_item_set_action_and_target(mi, "app.reload-as", "s",
-                                              rl_rows[i].target);
-            g_menu_append_item(rl, mi);
-            g_object_unref(mi);
-        }
-        g_menu_append_submenu(enc_menu, "Reload with encoding",
-                              G_MENU_MODEL(rl));
-        g_object_unref(rl);
-    }
-    /* Convert To group, inlined as a section (matches macOS encMenu layout
-     * after the addSep at line 816). */
+    /* Convert To group (macOS encMenu after the divider at line 816). */
     {
         GMenu *cv = g_menu_new();
-        g_menu_append(cv, "Convert to ANSI",            "app.convert-to-ansi");
-        g_menu_append(cv, "Convert to UTF-8",           "app.convert-to-utf8");
-        g_menu_append(cv, "Convert to UTF-8-BOM",       "app.convert-to-utf8-bom");
-        g_menu_append(cv, "Convert to UTF-16 LE BOM",   "app.convert-to-utf16-le");
-        g_menu_append(cv, "Convert to UTF-16 BE BOM",   "app.convert-to-utf16-be");
+        g_menu_append(cv, "Convert to ANSI",          "app.convert-to-ansi");
+        g_menu_append(cv, "Convert to UTF-8",         "app.convert-to-utf8");
+        g_menu_append(cv, "Convert to UTF-8-BOM",     "app.convert-to-utf8-bom");
+        g_menu_append(cv, "Convert to UTF-16 BE BOM", "app.convert-to-utf16-be");
+        g_menu_append(cv, "Convert to UTF-16 LE BOM", "app.convert-to-utf16-le");
         g_menu_append_section(enc_menu, NULL, G_MENU_MODEL(cv));
         g_object_unref(cv);
     }
@@ -5966,16 +6047,30 @@ static GMenuModel *build_menu_model(void)
          * Style Configurator, Shortcut Mapper, separator, Import submenu,
          * separator, Edit Popup ContextMenu. */
         GMenu *settings = g_menu_new();
-        g_menu_append(settings, "Preferences…",          "app.preferences");
-        g_menu_append(settings, "Style Configurator…",   "app.style-editor");
-        g_menu_append(settings, "Shortcut Mapper…",      "app.shortcut-map");
-        /* Import submenu (matches macOS — placeholders today). */
-        GMenu *import = g_menu_new();
-        g_menu_append(import, "Import Plugin(s)…",       "app.import-plugin");
-        g_menu_append(import, "Import Style Theme(s)…",  "app.import-style-theme");
-        g_menu_append_submenu(settings, "Import", G_MENU_MODEL(import));
-        g_object_unref(import);
-        g_menu_append(settings, "Edit Popup ContextMenu","app.edit-popup-ctxmenu");
+        {
+            GMenu *g = g_menu_new();
+            g_menu_append(g, "Preferences…",        "app.preferences");
+            g_menu_append(g, "Style Configurator…", "app.style-editor");
+            g_menu_append(g, "Shortcut Mapper…",    "app.shortcut-map");
+            g_menu_append_section(settings, NULL, G_MENU_MODEL(g));
+            g_object_unref(g);
+        }
+        {
+            GMenu *imp_sec = g_menu_new();
+            GMenu *import = g_menu_new();
+            g_menu_append(import, "Import Plugin(s)…",      "app.import-plugin");
+            g_menu_append(import, "Import Style Theme(s)…", "app.import-style-theme");
+            g_menu_append_submenu(imp_sec, "Import", G_MENU_MODEL(import));
+            g_object_unref(import);
+            g_menu_append_section(settings, NULL, G_MENU_MODEL(imp_sec));
+            g_object_unref(imp_sec);
+        }
+        {
+            GMenu *g = g_menu_new();
+            g_menu_append(g, "Edit Popup ContextMenu", "app.edit-popup-ctxmenu");
+            g_menu_append_section(settings, NULL, G_MENU_MODEL(g));
+            g_object_unref(g);
+        }
         g_menu_append_submenu(bar, "_Settings", G_MENU_MODEL(settings));
         g_object_unref(settings);
     }
@@ -6000,9 +6095,9 @@ static GMenuModel *build_menu_model(void)
                                          "app.hash-sha256-files", "app.hash-sha512-files" };
     for (int i = 0; i < 4; i++) {
         GMenu *h = g_menu_new();
-        g_menu_append(h, "Generate (Selection or All)", hash_actions_dlg[i]);
-        g_menu_append(h, "Generate to Clipboard",       hash_actions_clip[i]);
-        g_menu_append(h, "Generate from Files…",        hash_actions_files[i]);
+        g_menu_append(h, "Generate",                               hash_actions_dlg[i]);
+        g_menu_append(h, "Generate from Files…",                   hash_actions_files[i]);
+        g_menu_append(h, "Generate from Selection into Clipboard", hash_actions_clip[i]);
         g_menu_append_submenu(tools, hash_names[i], G_MENU_MODEL(h));
         g_object_unref(h);
     }
@@ -6013,28 +6108,36 @@ static GMenuModel *build_menu_model(void)
     GMenu *macro = g_menu_new();
     {
         GMenu *g = g_menu_new();
-        g_menu_append(g, "Start Recording", "app.macro-start");
-        g_menu_append(g, "Stop Recording",  "app.macro-stop");
+        g_menu_append(g, "Start Recording",             "app.macro-start");
+        g_menu_append(g, "Stop Recording",              "app.macro-stop");
+        g_menu_append(g, "Playback",                    "app.macro-play");
+        g_menu_append(g, "Save Current Recorded Macro…","app.macro-save-as");
         g_menu_append_section(macro, NULL, G_MENU_MODEL(g));
         g_object_unref(g);
     }
     {
         GMenu *g = g_menu_new();
-        g_menu_append(g, "Playback",            "app.macro-play");
         g_menu_append(g, "Run a Macro Multiple Times…", "app.macro-play-n");
-        g_menu_append(g, "Save Current Recorded Macro…", "app.macro-save-as");
         g_menu_append_section(macro, NULL, G_MENU_MODEL(g));
         g_object_unref(g);
     }
-    /* Q-align macOS Macro → Trim Trailing Space and Save. */
-    g_menu_append(macro, "Trim Trailing Space and Save", "app.trim-and-save");
-    /* Q-align macOS: Modify Shortcut/Delete Macro… */
-    g_menu_append(macro, "Modify Shortcut/Delete Macro…", "app.modify-shortcut-macro");
-    /* Q-fix: dynamic named-macro list at the bottom of the Macro menu.
-     * rebuild_macro_menu() is called on first build + after every save. */
+    {
+        GMenu *g = g_menu_new();
+        g_menu_append(g, "Trim Trailing Space and Save", "app.trim-and-save");
+        g_menu_append_section(macro, NULL, G_MENU_MODEL(g));
+        g_object_unref(g);
+    }
+    /* Dynamic named-macro list — sits after "Trim Trailing Space and Save"
+     * (macOS tag 9901); rebuilt on first build + after every save. */
     g_named_macros_menu = g_menu_new();
     g_menu_append_section(macro, NULL, G_MENU_MODEL(g_named_macros_menu));
     rebuild_macro_menu();
+    {
+        GMenu *g = g_menu_new();
+        g_menu_append(g, "Modify Shortcut/Delete Macro…", "app.modify-shortcut-macro");
+        g_menu_append_section(macro, NULL, G_MENU_MODEL(g));
+        g_object_unref(g);
+    }
     g_menu_append_submenu(bar, "_Macro", G_MENU_MODEL(macro));
     g_object_unref(macro);
 
@@ -6081,8 +6184,13 @@ static GMenuModel *build_menu_model(void)
         g_menu_append_submenu(plugins, "Converter", G_MENU_MODEL(conv));
         g_object_unref(conv);
     }
-    g_menu_append(plugins, "Plugins Admin…", "app.plugins-admin");
-    g_menu_append(plugins, "Open Plugins Folder…", "app.open-plugins-folder");
+    {
+        GMenu *g = g_menu_new();
+        g_menu_append(g, "Plugins Admin…",       "app.plugins-admin");
+        g_menu_append(g, "Open Plugins Folder…", "app.open-plugins-folder");
+        g_menu_append_section(plugins, NULL, G_MENU_MODEL(g));
+        g_object_unref(g);
+    }
     g_menu_append_submenu(bar, "_Plugins", G_MENU_MODEL(plugins));
     g_object_unref(plugins);
 
@@ -6572,6 +6680,13 @@ static void on_startup(GtkApplication *app, gpointer ud)
     /* Actions + accelerators */
     g_action_map_add_action_entries(G_ACTION_MAP(app), kAppActions,
                                     G_N_ELEMENTS(kAppActions), NULL);
+
+    /* Grey out the macOS-parity items that have no Linux backend yet. */
+    for (size_t i = 0; i < G_N_ELEMENTS(kStubActions); i++) {
+        GAction *act = g_action_map_lookup_action(G_ACTION_MAP(app),
+                                                  kStubActions[i]);
+        if (act) g_simple_action_set_enabled(G_SIMPLE_ACTION(act), FALSE);
+    }
 
     /* Stateful set-encoding action. */
     g_enc_action = g_simple_action_new_stateful(
