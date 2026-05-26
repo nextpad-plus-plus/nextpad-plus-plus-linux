@@ -11,6 +11,10 @@ struct NppMenu {
     GtkWidget *root_popover;  /* topmost popover — popped down on any item */
     NppMenu   *root;          /* the top-level menu (root->root == root) */
     GSList    *subs;          /* root only: every child NppMenu, for cleanup */
+    /* Hover-to-open state — per menu level, so nested submenus work too. */
+    NppMenu   *open_sub;      /* the child submenu currently popped up */
+    NppMenu   *pending_sub;   /* the one waiting for the hover timer to fire */
+    guint      hover_timer;   /* g_timeout id, 0 when idle */
 };
 
 static NppMenu *alloc_menu(void)
@@ -87,6 +91,73 @@ NppMenu *npp_menu_new(void)
     return m;
 }
 
+/* ---- Hover-to-open submenu plumbing ----------------------------------
+ * Each row gets a GtkEventControllerMotion. On enter:
+ *   - cancel any pending hover timer on the parent menu;
+ *   - if a different submenu is currently open, popdown it;
+ *   - if this row is itself a submenu trigger, schedule a delayed popup.
+ * Standard menu behaviour, matching the GtkPopoverMenu menubar with
+ * GTK_POPOVER_MENU_NESTED. Timer runs at 200 ms — same delay GTK uses
+ * for modelbutton submenu open. */
+typedef struct { NppMenu *parent; NppMenu *sub; } HoverInfo;
+
+static gboolean hover_open_timer(gpointer data) {
+    NppMenu *m = data;
+    m->hover_timer = 0;
+    NppMenu *pending = m->pending_sub;
+    m->pending_sub = NULL;
+    if (!pending) return G_SOURCE_REMOVE;
+    gtk_popover_popup(GTK_POPOVER(pending->popover));
+    m->open_sub = pending;
+    return G_SOURCE_REMOVE;
+}
+
+static void cancel_hover_timer(NppMenu *m) {
+    if (m->hover_timer) {
+        g_source_remove(m->hover_timer);
+        m->hover_timer = 0;
+    }
+    m->pending_sub = NULL;
+}
+
+static void on_row_enter(GtkEventControllerMotion *ctl, double x, double y,
+                         gpointer ud)
+{
+    (void)ctl; (void)x; (void)y;
+    HoverInfo *info = ud;
+    NppMenu *m   = info->parent;
+    NppMenu *sub = info->sub;
+
+    /* Re-entering the same submenu trigger that's already open — keep it. */
+    if (sub && m->open_sub == sub) {
+        cancel_hover_timer(m);
+        return;
+    }
+
+    cancel_hover_timer(m);
+
+    /* Close any other open submenu when moving to a different row. */
+    if (m->open_sub && m->open_sub != sub) {
+        gtk_popover_popdown(GTK_POPOVER(m->open_sub->popover));
+        m->open_sub = NULL;
+    }
+
+    if (sub) {
+        m->pending_sub = sub;
+        m->hover_timer = g_timeout_add(200, hover_open_timer, m);
+    }
+}
+
+static void attach_hover(GtkWidget *row, NppMenu *parent, NppMenu *sub) {
+    HoverInfo *info = g_new0(HoverInfo, 1);
+    info->parent = parent;
+    info->sub    = sub;
+    GtkEventController *motion = gtk_event_controller_motion_new();
+    g_object_set_data_full(G_OBJECT(motion), "hover-info", info, g_free);
+    g_signal_connect(motion, "enter", G_CALLBACK(on_row_enter), info);
+    gtk_widget_add_controller(row, motion);
+}
+
 GtkWidget *npp_menu_box(NppMenu *m) { return m->box; }
 
 GtkWidget *npp_menu_add(NppMenu *m, const char *label,
@@ -99,6 +170,8 @@ GtkWidget *npp_menu_add(NppMenu *m, const char *label,
     if (cb) g_signal_connect(b, "clicked", cb, data);
     g_signal_connect_swapped(b, "clicked",
                              G_CALLBACK(gtk_popover_popdown), m->root_popover);
+    /* Hovering a regular row closes any open submenu in this menu. */
+    attach_hover(b, m, NULL);
     gtk_box_append(GTK_BOX(m->box), b);
     return b;
 }
@@ -166,6 +239,10 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     g_signal_connect_swapped(btn, "clicked",
                              G_CALLBACK(gtk_popover_popup), sub->popover);
 
+    /* Hover-to-open: enter schedules the popup after the 200 ms delay,
+     * matching the GtkPopoverMenu menubar's nested-submenu behaviour. */
+    attach_hover(btn, m, sub);
+
     gtk_box_append(GTK_BOX(m->box), btn);
     return sub;
 }
@@ -182,8 +259,12 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
 static gboolean teardown(gpointer data)
 {
     NppMenu *root = data;
+    /* Cancel any pending hover-open timers so nothing fires after free.
+     * Both the root and every level of submenu can have one armed. */
+    cancel_hover_timer(root);
     for (GSList *l = root->subs; l; l = l->next) {
         NppMenu *sub = l->data;
+        cancel_hover_timer(sub);
         if (sub->popover && gtk_widget_get_parent(sub->popover))
             gtk_widget_unparent(sub->popover);
     }
