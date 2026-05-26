@@ -278,7 +278,8 @@ static void ensure_ctxmenu_css(void) {
     if (installed) return;
     installed = TRUE;
     const char *css =
-        "popover.menu modelbutton > image { min-width: 0; min-height: 0; }";
+        "popover.menu modelbutton > image { min-width: 0; min-height: 0; padding: 0; }"
+        "popover.menu modelbutton { min-height: 22px; }";
     GtkCssProvider *p = gtk_css_provider_new();
     gtk_css_provider_load_from_string(p, css);
     gtk_style_context_add_provider_for_display(gdk_display_get_default(),
@@ -527,16 +528,28 @@ static void on_popover_closed(GtkPopover *pop, gpointer ud) {
     g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, popup_teardown, ud, NULL);
 }
 
-void ctxmenu_popup_at(CtxMenu *m, GtkWidget *anchor, double x, double y) {
-    if (!m || !anchor) { ctxmenu_free(m); return; }
+/* Build + show the popover synchronously. Called from a g_idle so the
+ * originating right-click event has finished propagating before the
+ * popover's autohide grab engages — otherwise that same button release
+ * is treated as an "outside click" and dismisses the menu instantly. */
+typedef struct {
+    CtxMenu   *m;
+    GtkWidget *anchor;
+    double     x, y;
+} PopupRequest;
+
+static void do_popup_now(PopupRequest *r) {
+    CtxMenu *m = r->m;
+    GtkWidget *anchor = r->anchor;
+    double x = r->x, y = r->y;
 
     /* If the click target is a non-standard custom widget (Scintilla's
-     * editor view in particular), its input handling can swallow the
-     * outside-click that GtkPopover relies on for autohide — meaning
-     * the menu never closes. Walk up one level to the standard GTK
-     * container that wraps it (a GtkScrolledWindow for the editor, a
-     * GtkBox for tab labels) and parent the popover there; translate
-     * the click coordinates into the new parent's space. */
+     * editor view in particular), its input handling swallows the
+     * outside-click that GtkPopover relies on for autohide — the menu
+     * never closes. Walk up one level to the standard GTK container
+     * (GtkScrolledWindow wrapping the editor, the tab-strip's GtkBox
+     * for tab labels) and parent the popover there; translate the
+     * click coordinates with gtk_widget_compute_point. */
     GtkWidget *parent = gtk_widget_get_parent(anchor);
     if (parent) {
         graphene_point_t in  = GRAPHENE_POINT_INIT((float)x, (float)y);
@@ -559,8 +572,8 @@ void ctxmenu_popup_at(CtxMenu *m, GtkWidget *anchor, double x, double y) {
     unclamp_scrolled_windows(popover);
     /* Attach registered custom children. gtk_popover_menu_add_child only
      * resolves slots at the top level of the menu (not items inside a
-     * submenu), so colour swatches use Pango markup in the label instead;
-     * this loop is for top-level customs like spell-check suggestions. */
+     * submenu), so colour swatches are emoji in the label instead; this
+     * loop is for top-level customs like spell-check suggestions. */
     for (guint i = 0; i < m->customs->len; i++) {
         CtxCustom *c = m->customs->pdata[i];
         gtk_popover_menu_add_child(GTK_POPOVER_MENU(popover),
@@ -576,6 +589,28 @@ void ctxmenu_popup_at(CtxMenu *m, GtkWidget *anchor, double x, double y) {
     g_signal_connect(popover, "closed", G_CALLBACK(on_popover_closed), p);
 
     gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+static gboolean popup_request_cb(gpointer ud) {
+    PopupRequest *r = ud;
+    if (gtk_widget_get_realized(r->anchor))
+        do_popup_now(r);
+    else
+        ctxmenu_free(r->m);
+    g_object_unref(r->anchor);
+    g_free(r);
+    return G_SOURCE_REMOVE;
+}
+
+void ctxmenu_popup_at(CtxMenu *m, GtkWidget *anchor, double x, double y) {
+    if (!m || !anchor) { ctxmenu_free(m); return; }
+    PopupRequest *r = g_new0(PopupRequest, 1);
+    r->m      = m;
+    r->anchor = g_object_ref(anchor);
+    r->x      = x;
+    r->y      = y;
+    /* Defer to idle so the originating click event finishes propagating. */
+    g_idle_add(popup_request_cb, r);
 }
 
 /* ============================== Public builders ============================== */
