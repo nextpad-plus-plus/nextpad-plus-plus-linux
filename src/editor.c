@@ -236,14 +236,13 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
     (void)n_press; (void)d;
     GtkWidget *w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
     /* P5 — editor context menu from contextMenu.xml, with spell-check
-     * suggestions prepended when the click is over a misspelled word. */
+     * suggestions prepended when the click is over a misspelled word.
+     * Shown as a GtkPopoverMenu so it inherits hover, hover-to-open
+     * submenus, and the menubar's spacing. */
     GtkApplication *app = (GtkApplication *)g_application_get_default();
-    NppMenu *menu = npp_menu_new();
-    /* Spell suggestions first (no-op if not over a misspelled word). */
+    CtxMenu *menu = ctxmenu_build_scintilla(app);
     spell_populate_context_menu(w, menu, (int)x, (int)y);
-    /* Then the XML-driven items. */
-    ctxmenu_append_scintilla(menu, app);
-    npp_menu_popup_at(menu, w, x, y);
+    ctxmenu_popup_at(menu, w, x, y);
 }
 
 /* Editor zoom — Ctrl +/-/0 on the focused editor. A key controller (not a
@@ -407,72 +406,9 @@ static void on_close_btn_clicked(GtkWidget *btn, gpointer data)
     editor_close_sci((GtkWidget *)data);
 }
 
-/* G3.6: tab context menu. Close variants honour macOS-port semantics. */
-
-static void cb_tabmenu_close(GtkButton *m, gpointer d) {
-    (void)m;
-    int page = sci_page_num(GTK_WIDGET(d));
-    editor_close_page(page);
-}
-/* A FALSE return from editor_close_page means the user cancelled a save
- * prompt — abort the batch. Pinned tabs are skipped up front so they
- * never trigger that abort (editor_close_page also refuses them). */
-static void cb_tabmenu_close_others(GtkButton *m, gpointer d) {
-    (void)m;
-    int keep = sci_page_num(GTK_WIDGET(d));
-    /* Close right side first so indices don't shift under us. */
-    for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--) {
-        NppDoc *doc = editor_doc_at(i);
-        if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
-    }
-    for (int i = keep - 1; i >= 0; i--) {
-        NppDoc *doc = editor_doc_at(i);
-        if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
-    }
-}
-static void cb_tabmenu_close_left(GtkButton *m, gpointer d) {
-    (void)m;
-    int keep = sci_page_num(GTK_WIDGET(d));
-    for (int i = keep - 1; i >= 0; i--) {
-        NppDoc *doc = editor_doc_at(i);
-        if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
-    }
-}
-static void cb_tabmenu_close_right(GtkButton *m, gpointer d) {
-    (void)m;
-    int keep = sci_page_num(GTK_WIDGET(d));
-    for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--) {
-        NppDoc *doc = editor_doc_at(i);
-        if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
-    }
-}
-static void cb_tabmenu_close_unmodified(GtkButton *m, gpointer d) {
-    (void)m; (void)d;
-    for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i >= 0; i--) {
-        NppDoc *doc = editor_doc_at(i);
-        if (doc && !doc->modified && !doc->pinned) editor_close_page(i);
-    }
-}
-static void cb_tabmenu_close_all(GtkButton *m, gpointer d) {
-    (void)m; (void)d;
-    int count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
-    for (int i = count - 1; i >= 0; i--) {
-        NppDoc *doc = editor_doc_at(i);
-        if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
-    }
-}
-static void cb_tabmenu_copy_path(GtkButton *m, gpointer d) {
-    (void)m;
-    GtkWidget *sci = GTK_WIDGET(d);
-    NppDoc *doc = (NppDoc *)g_object_get_data(G_OBJECT(sci), "npp-doc");
-    if (!doc || !doc->filepath) return;
-    npp_clipboard_set_text(doc->filepath);
-}
+/* Tab right-click is now built from tabContextMenu.xml via CtxMenu —
+ * the per-action callbacks that used to live here have been removed
+ * since the XML wires to the same GActions the menubar uses. */
 
 static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
                                 double x, double y, gpointer d)
@@ -504,40 +440,14 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
         if (nb && page >= 0)
             gtk_notebook_set_current_page(nb, page);
 
-        /* P5 — build from tabContextMenu.xml. Fall back to the hardcoded
-         * set if the XML produced an empty menu (parser error etc.). */
+        /* P5 — build from tabContextMenu.xml and pop as a GtkPopoverMenu
+         * (hover-to-open submenus, hover highlight, model-button spacing
+         * — same widget the menubar uses). */
         GtkApplication *app = (GtkApplication *)g_application_get_default();
-        NppMenu *menu = npp_menu_new();
-        int n = ctxmenu_append_tab(menu, app);
-
-        if (n == 0) {
-            NppDoc *doc = (NppDoc *)g_object_get_data(G_OBJECT(sci), "npp-doc");
-            gboolean has_path = (doc && doc->filepath != NULL);
-            struct { const char *label; void *cb; gboolean enabled; } items[] = {
-                { "Close",                 cb_tabmenu_close,              TRUE },
-                { "Close Others",          cb_tabmenu_close_others,
-                  gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) > 1 },
-                { "Close All to the Left", cb_tabmenu_close_left,         page > 0 },
-                { "Close All to the Right",cb_tabmenu_close_right,
-                  page < gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1 },
-                { NULL, NULL, FALSE },
-                { "Close Unmodified",      cb_tabmenu_close_unmodified,   TRUE },
-                { "Close All",             cb_tabmenu_close_all,          TRUE },
-                { NULL, NULL, FALSE },
-                { "Copy Path",             cb_tabmenu_copy_path,          has_path },
-            };
-            for (size_t i = 0; i < G_N_ELEMENTS(items); i++) {
-                if (items[i].label) {
-                    GtkWidget *mi = npp_menu_add(menu, items[i].label,
-                                                 G_CALLBACK(items[i].cb), sci);
-                    gtk_widget_set_sensitive(mi, items[i].enabled);
-                } else {
-                    npp_menu_add_separator(menu);
-                }
-            }
-        }
-        npp_menu_popup_at(menu,
-            gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)), x, y);
+        CtxMenu *menu = ctxmenu_build_tab(app);
+        ctxmenu_popup_at(menu,
+            gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)),
+            x, y);
     }
 }
 

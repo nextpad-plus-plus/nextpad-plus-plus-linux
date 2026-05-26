@@ -315,16 +315,53 @@ static void sugg_ctx_free(gpointer data)
     g_free(ctx);
 }
 
-void spell_populate_context_menu(GtkWidget *w, NppMenu *menu, int x, int y)
-{
-    if (!s_available || !s_enabled) return;
+/* connect_after handler — close the enclosing popover after the click
+ * handler has run. */
+static void spell_popdown_ancestor(GtkButton *btn, gpointer ud) {
+    (void)ud;
+    GtkWidget *p = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
+    if (p) gtk_popover_popdown(GTK_POPOVER(p));
+}
 
-    /* Find document position under the click */
+/* Build a click-handling flat GtkButton styled like a popover-menu row
+ * (same "model" + "npp-ctx-row" classes the colour-swatch items use, so
+ * spacing matches). */
+static GtkWidget *make_menu_row_button(const char *label_text,
+                                       GCallback cb, gpointer ud)
+{
+    GtkWidget *btn = gtk_button_new();
+    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
+    gtk_widget_add_css_class(btn, "model");
+    gtk_widget_add_css_class(btn, "npp-ctx-row");
+    GtkWidget *lab = gtk_label_new(label_text);
+    gtk_label_set_xalign(GTK_LABEL(lab), 0.0);
+    gtk_widget_set_hexpand(lab, TRUE);
+    gtk_button_set_child(GTK_BUTTON(btn), lab);
+    if (cb) g_signal_connect(btn, "clicked", cb, ud);
+    /* All menu rows pop the popover down after the action runs. */
+    g_signal_connect_after(btn, "clicked",
+                           G_CALLBACK(spell_popdown_ancestor), NULL);
+    return btn;
+}
+
+/* Append a custom-child GMenu item that points at `slot` into `section`. */
+static void append_custom_item(GMenu *section, const char *slot) {
+    GMenuItem *gi = g_menu_item_new(NULL, NULL);
+    g_menu_item_set_attribute(gi, "custom", "s", slot);
+    g_menu_append_item(section, gi);
+    g_object_unref(gi);
+}
+
+void spell_populate_context_menu(GtkWidget *w, CtxMenu *menu, int x, int y)
+{
+    if (!s_available || !s_enabled || !menu) return;
+
+    /* Find document position under the click. */
     Sci_Position click_pos = (Sci_Position)sci(w, SCI_POSITIONFROMPOINTCLOSE,
                                                (uptr_t)x, (sptr_t)y);
     if (click_pos < 0) return;
 
-    /* Check whether that position is inside a spell indicator */
+    /* Only act when the click is inside a spell indicator. */
     sci(w, SCI_SETINDICATORCURRENT, SPELL_INDICATOR, 0);
     Sci_Position val = (Sci_Position)sci(w, SCI_INDICATORVALUEAT,
                                          SPELL_INDICATOR, (sptr_t)click_pos);
@@ -345,39 +382,51 @@ void spell_populate_context_menu(GtkWidget *w, NppMenu *menu, int x, int y)
     sci(w, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
     word[wlen] = '\0';
 
-    /* Build suggestions */
+    /* Suggestion list. */
     size_t  n_sugg = 0;
     char  **suggs  = p_dict_suggest(s_dict, word, (ssize_t)wlen, &n_sugg);
 
     SuggCtx *ctx = g_new0(SuggCtx, 1);
     ctx->sci  = w;
-    ctx->word = word; /* ownership transferred */
-    /* ctx is freed with the menu's widget tree when the popup closes. */
-    g_object_set_data_full(G_OBJECT(npp_menu_box(menu)), "spell-ctx", ctx,
-                           (GDestroyNotify)sugg_ctx_free);
+    ctx->word = word;          /* ownership transferred */
+    ctxmenu_attach_data(menu, ctx, sugg_ctx_free);
 
-    /* Header label (non-clickable). */
+    /* Build a section the spell items live in; insert it at the top
+     * of the CtxMenu root so suggestions appear above the XML items. */
+    GMenu *sec = g_menu_new();
+
+    /* Header (no action → naturally inactive / greyed). */
     char header[128];
     snprintf(header, sizeof(header), "Spell: \"%s\"", ctx->word);
-    GtkWidget *hdr = npp_menu_add(menu, header, NULL, NULL);
-    gtk_widget_set_sensitive(hdr, FALSE);
-    npp_menu_add_separator(menu);
+    GMenuItem *hdr = g_menu_item_new(header, NULL);
+    g_menu_append_item(sec, hdr);
+    g_object_unref(hdr);
 
-    /* Suggestion items (up to 8). */
+    /* Up to 8 suggestion rows as custom-child GtkButtons. */
     int limit = (int)n_sugg < 8 ? (int)n_sugg : 8;
     for (int i = 0; i < limit; i++) {
-        GtkWidget *mi = npp_menu_add(menu, suggs[i],
-                                     G_CALLBACK(on_suggestion_activate), ctx);
+        GtkWidget *btn = make_menu_row_button(suggs[i],
+            G_CALLBACK(on_suggestion_activate), ctx);
         uptr_t *pos_storage = g_new(uptr_t, 1);
         *pos_storage = (uptr_t)click_pos;
-        g_object_set_data_full(G_OBJECT(mi), "spell-pos", pos_storage, g_free);
+        g_object_set_data_full(G_OBJECT(btn), "spell-pos",
+                               pos_storage, g_free);
+        const char *slot = ctxmenu_register_custom(menu, btn);
+        append_custom_item(sec, slot);
     }
-
     if (suggs)
         p_dict_free_string_list(s_dict, suggs);
 
-    /* "Ignore" and "Add to Dictionary", then a separator before the rest. */
-    npp_menu_add(menu, "Ignore Word",       G_CALLBACK(on_ignore_word), ctx);
-    npp_menu_add(menu, "Add to Dictionary", G_CALLBACK(on_add_to_dict), ctx);
-    npp_menu_add_separator(menu);
+    /* Ignore / Add to Dictionary rows. */
+    GtkWidget *btn_ig = make_menu_row_button("Ignore Word",
+        G_CALLBACK(on_ignore_word), ctx);
+    append_custom_item(sec, ctxmenu_register_custom(menu, btn_ig));
+
+    GtkWidget *btn_ad = make_menu_row_button("Add to Dictionary",
+        G_CALLBACK(on_add_to_dict), ctx);
+    append_custom_item(sec, ctxmenu_register_custom(menu, btn_ad));
+
+    /* Splice the spell section in at index 0 so it appears at the top. */
+    g_menu_insert_section(ctxmenu_root(menu), 0, NULL, G_MENU_MODEL(sec));
+    g_object_unref(sec);
 }

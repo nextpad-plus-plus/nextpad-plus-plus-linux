@@ -1,38 +1,60 @@
 /*
- * ctxmenu.h — XML-driven editor + tab context menus.
+ * ctxmenu.h — XML-driven editor + tab right-click menus.
  *
- * Mirrors macOS port's behavior of reading ~/.nextpad++/contextMenu.xml
- * and ~/.nextpad++/tabContextMenu.xml (or tabContextMenu_example.xml).
+ * The menus are produced as GMenuModels and shown via GtkPopoverMenu so
+ * they inherit all the real-menu behaviour from GTK (hover highlight,
+ * hover-to-open submenus, side-arrow disclosure, kbd nav, left-aligned
+ * rows, identical spacing/padding to the GtkPopoverMenuBar menus). For
+ * items that need custom rendering — Apply Color N (coloured square) and
+ * spell-check suggestions — we use GtkPopoverMenu's custom-child slots:
+ * the GMenu item carries a "custom" attribute naming a slot, and the
+ * builder registers a GtkWidget for that slot before popping the popover.
  *
- * Each <Item> in the XML references a command from the menu bar by
- * (MenuEntryName, MenuItemName). We walk the live GMenuModel once to
- * build a (entry+item → action-name) hashtable, then translate the XML
- * tree into a runtime GtkMenu.
+ * Mirrors macOS MainWindowController._buildEditorContextMenuFromXML and
+ * NppTabBar._buildTabContextMenuFromXML.
  */
 #ifndef CTXMENU_H
 #define CTXMENU_H
 
 #include <gtk/gtk.h>
 #include <gio/gio.h>
-#include "npp_menu.h"
 
-/* Build the lookup index from the live menu model. Call after the menu
- * bar is fully built and before either append function is first called. */
+/* Opaque builder — own its GMenu, its custom-child widget list, and a
+ * destruction list for caller-owned data (e.g. spell suggestion ctx).
+ * Lives until the popover closes; ctxmenu_popup_at takes ownership. */
+typedef struct CtxMenu CtxMenu;
+
+/* Build the (top-menu, optional-submenu, item-label) → action-name lookup
+ * table from the live English menubar model. Call once after the menubar
+ * is built and before the first context menu is shown. */
 void ctxmenu_index_from_model(GMenuModel *model);
 
-/* Append the editor (Scintilla) right-click items onto `menu`.
- * Returns the number of action items added. */
-int ctxmenu_append_scintilla(NppMenu *menu, GtkApplication *app);
+/* Build a CtxMenu for the editor (Scintilla) right-click from
+ * ~/.nextpad++/contextMenu.xml (bundled fallback). */
+CtxMenu *ctxmenu_build_scintilla(GtkApplication *app);
 
-/* Append the tab right-click items onto `menu`. Returns the count added
- * (0 → the XML produced nothing; caller should use its fallback set). */
-int ctxmenu_append_tab(NppMenu *menu, GtkApplication *app);
+/* Build a CtxMenu for the tab right-click from
+ * ~/.nextpad++/tabContextMenu.xml (bundled fallback). */
+CtxMenu *ctxmenu_build_tab(GtkApplication *app);
 
-/* Built-in tab actions (referenced by <Item BuiltIn="…"/>). The caller
- * wires these handlers to the corresponding GtkMenuItem. */
-typedef enum {
-    CTXMENU_BUILTIN_NONE,
-    CTXMENU_BUILTIN_PINTAB
-} CtxMenuBuiltin;
+/* Show as a GtkPopoverMenu anchored at (x,y) in widget coords.
+ * Takes ownership of `m` (it is freed when the popover closes). */
+void ctxmenu_popup_at(CtxMenu *m, GtkWidget *anchor, double x, double y);
+
+/* ---- Helpers for callers that need to splice extra items in (spell). */
+
+/* The root GMenu — caller may insert sections at the front (e.g. spell
+ * suggestions go above the XML-defined items). */
+GMenu *ctxmenu_root(CtxMenu *m);
+
+/* Register a floating GtkWidget as a custom-child of the popover. Returns
+ * a slot-id string (owned by the CtxMenu) the caller sets on a GMenuItem
+ * via g_menu_item_set_attribute(it, "custom", "s", slot). The widget is
+ * adopted at popup time. */
+const char *ctxmenu_register_custom(CtxMenu *m, GtkWidget *floating);
+
+/* Attach a piece of caller-owned data whose `free` runs when the
+ * CtxMenu is destroyed. */
+void ctxmenu_attach_data(CtxMenu *m, gpointer data, GDestroyNotify free);
 
 #endif /* CTXMENU_H */
