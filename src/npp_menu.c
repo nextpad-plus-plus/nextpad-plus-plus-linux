@@ -200,6 +200,14 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     sub->root         = m->root;
     m->root->subs     = g_slist_prepend(m->root->subs, sub);
 
+    /* Only the root popover gets an autohide grab. If the submenu also
+     * grabs (default for GtkPopover), an outside click is consumed by
+     * its grab — the submenu closes but the root stays up ("sticky
+     * menu — ESC works but clicking outside doesn't"). With autohide
+     * off, the root's grab cleanly catches the outside click; the
+     * cascade in on_closed unparents this submenu transitively. */
+    gtk_popover_set_autohide(GTK_POPOVER(sub->popover), FALSE);
+
     /* Plain GtkButton — not GtkMenuButton — because GtkMenuButton
      * instantiates an internal GtkImage for its arrow placeholder in
      * init() and keeps a reference to it even after
@@ -247,20 +255,30 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     return sub;
 }
 
-/* Teardown is deferred out of the "closed" emission. Each submenu's
- * popover is manually parented to its GtkButton row (we use a plain
- * GtkButton, not GtkMenuButton, so nothing else owns that parent
- * link). We MUST unparent every submenu popover before letting the
- * root tear down: when gtk_widget_unparent(root->popover) cascades and
- * frees the row buttons, GTK4 finalizes each button — and if a button
- * still has the submenu GtkPopover as a child, GTK logs
+/* Synchronous teardown out of "closed". The original deferred-via-idle
+ * version caused two bugs the user kept hitting:
+ *
+ *   (a) "menu sometimes doesn't open when I right-click again" — the
+ *       previous popover is still parented to the Scintilla widget
+ *       while the next right-click tries to map a new one. On Wayland
+ *       the xdg-popup grab refuses or the popup never realizes.
+ *   (b) Teardown running on idle could chase the user's next click and
+ *       race with the gesture handler.
+ *
+ * Running unparent inside the "closed" emission is safe: closed fires
+ * AFTER the popdown animation completes, and GTK isn't iterating
+ * children at that point.
+ *
+ * Each submenu's popover is manually parented to its GtkButton row
+ * (plain GtkButton — nothing else owns the parent link), so we MUST
+ * unparent every submenu popover before letting the root tear down,
+ * otherwise the cascade-free of the row buttons logs
  *     Finalizing GtkButton, but it still has children left: GtkPopover
- * Then the NppMenu structs (sub-menu metadata only) get freed. */
-static gboolean teardown(gpointer data)
+ * The NppMenu structs (sub-menu metadata only) are freed last. */
+static void on_closed(GtkPopover *p, gpointer data)
 {
+    (void)p;
     NppMenu *root = data;
-    /* Cancel any pending hover-open timers so nothing fires after free.
-     * Both the root and every level of submenu can have one armed. */
     cancel_hover_timer(root);
     for (GSList *l = root->subs; l; l = l->next) {
         NppMenu *sub = l->data;
@@ -271,13 +289,6 @@ static gboolean teardown(gpointer data)
     gtk_widget_unparent(root->popover);
     g_slist_free_full(root->subs, g_free);
     g_free(root);
-    return G_SOURCE_REMOVE;
-}
-
-static void on_closed(GtkPopover *p, gpointer data)
-{
-    (void)p;
-    g_idle_add(teardown, data);
 }
 
 void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
