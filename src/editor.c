@@ -378,7 +378,12 @@ static void setup_sci(GtkWidget *sci)
     {
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), GDK_BUTTON_SECONDARY);
-        g_signal_connect(gc, "pressed", G_CALLBACK(on_sci_button_press), NULL);
+        /* Show the menu on "released" not "pressed": if we fire on the
+         * press, the matching button release is still pending in the
+         * queue when the popover's autohide grab activates and it
+         * dismisses the popover as an outside-click ("blink and
+         * vanish"). By the time "released" fires both events are done. */
+        g_signal_connect(gc, "released", G_CALLBACK(on_sci_button_press), NULL);
         gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(gc));
     }
     {
@@ -566,7 +571,12 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     {
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), 0); /* any button */
-        g_signal_connect(gc, "pressed", G_CALLBACK(on_tab_button_press), sci);
+        /* "released" so the right-click context menu (in this handler)
+         * isn't dismissed by its own pending button-release; see
+         * comment on the editor's gesture for the full rationale.
+         * Middle-click / double-click close still work correctly on
+         * release. */
+        g_signal_connect(gc, "released", G_CALLBACK(on_tab_button_press), sci);
         gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(gc));
     }
     /* Tab labels: 10pt absolute — kept absolute so the size is stable
