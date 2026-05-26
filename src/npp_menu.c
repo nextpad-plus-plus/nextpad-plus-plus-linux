@@ -29,8 +29,40 @@ static GtkWidget *make_popover(GtkWidget *child)
     return p;
 }
 
+/* Install the right-click menu CSS once. Two jobs:
+ *   - Match the GtkPopoverMenu modelbutton spacing/padding the App
+ *     menubar uses, so right-click menus feel identical.
+ *   - Clamp min-width/height on the GtkMenuButton's internal arrow
+ *     placeholder image to 0 — even after gtk_menu_button_set_child(),
+ *     GTK4 still measures that hidden GtkImage and sometimes passes a
+ *     negative for_size, producing the 'GtkImage width 0 height -9'
+ *     warning every time a submenu animates open. The CSS makes the
+ *     measure floor at 0 so for_size can't go negative. */
+static void ensure_npp_menu_css(void) {
+    static gboolean installed = FALSE;
+    if (installed) return;
+    installed = TRUE;
+    const char *css =
+        ".npp-popup-menu { padding: 4px 0; }"
+        ".npp-popup-menu > button,"
+        ".npp-popup-menu > menubutton > button {"
+        "  padding: 6px 12px;"
+        "  min-height: 24px;"
+        "}"
+        ".npp-popup-menu menubutton image {"
+        "  min-width: 0;"
+        "  min-height: 0;"
+        "}";
+    GtkCssProvider *p = gtk_css_provider_new();
+    gtk_css_provider_load_from_string(p, css);
+    gtk_style_context_add_provider_for_display(gdk_display_get_default(),
+        GTK_STYLE_PROVIDER(p), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(p);
+}
+
 NppMenu *npp_menu_new(void)
 {
+    ensure_npp_menu_css();
     NppMenu *m = alloc_menu();
     m->popover = make_popover(m->box);
     m->root_popover = m->popover;
