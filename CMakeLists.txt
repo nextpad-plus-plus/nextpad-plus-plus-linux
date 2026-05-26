@@ -195,7 +195,10 @@ install(FILES "${SCI_SO}" DESTINATION ${CMAKE_INSTALL_LIBDIR})
 # Install the contents of resources/ directly under .../nextpad-plus-plus
 # so the tree matches RESOURCES_DIR (= NPP_RES_DIR) baked into the binary.
 install(DIRECTORY resources/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nextpad-plus-plus
-        PATTERN ".git" EXCLUDE)
+        PATTERN ".git" EXCLUDE
+        # The hicolor tree is installed separately under share/icons/hicolor
+        # for the system icon theme; don't duplicate it here.
+        PATTERN "icons/hicolor" EXCLUDE)
 
 install(FILES packaging/nextpad-plus-plus.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
@@ -205,8 +208,11 @@ install(FILES packaging/org.nextpad.NextpadPP.metainfo.xml
 install(FILES packaging/nextpad-plus-plus.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
-if(EXISTS "${RES}/icons/standard/app/Nextpad-1024.png")
-    install(FILES "${RES}/icons/standard/app/Nextpad-1024.png"
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps
-            RENAME nextpad-plus-plus.png)
-endif()
+# Application icon — the freedesktop hicolor tree under
+# resources/icons/hicolor/<size>/apps/nextpad-plus-plus.png is shipped as
+# the system icon theme entry. The .desktop file references the bare
+# name 'nextpad-plus-plus'; the dock / app picker resolves it through
+# hicolor at the right size.
+install(DIRECTORY resources/icons/hicolor/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor
+        FILES_MATCHING PATTERN "nextpad-plus-plus.*")
