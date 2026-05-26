@@ -255,25 +255,6 @@ static void free_items(GArray *a) {
 /* Build a GtkMenu from a parsed item list                            */
 /* ------------------------------------------------------------------ */
 
-static void on_action_activate(GtkButton *mi, gpointer ud) {
-    GtkApplication *app = (GtkApplication *)ud;
-    const char *action_name = g_object_get_data(G_OBJECT(mi), "action-name");
-    if (!app || !action_name) return;
-    /* GMenu stores prefixed names ("app.close"); the GActionGroup is keyed
-     * by the bare name — strip the prefix or activation no-ops. */
-    const char *dot = strchr(action_name, '.');
-    g_action_group_activate_action(G_ACTION_GROUP(app),
-                                   dot ? dot + 1 : action_name, NULL);
-}
-
-static void on_builtin_pintab(GtkButton *mi, gpointer ud) {
-    (void)mi;
-    GtkApplication *app = (GtkApplication *)ud;
-    if (app)
-        g_action_group_activate_action(G_ACTION_GROUP(app),
-                                       "tab-pin-toggle", NULL);
-}
-
 /* Tab-colour items use parameterised "tab-set-color" (0 = clear, 1..5). */
 static int tab_color_slot(const char *item) {
     if (!item) return -1;
@@ -284,14 +265,6 @@ static int tab_color_slot(const char *item) {
     return -1;
 }
 
-static void on_apply_color(GtkButton *mi, gpointer ud) {
-    GtkApplication *app = (GtkApplication *)ud;
-    int slot = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mi), "color-slot"));
-    if (app)
-        g_action_group_activate_action(G_ACTION_GROUP(app), "tab-set-color",
-                                       g_variant_new_int32(slot));
-}
-
 /* Resolve a display string through the i18n catalog — exactly how macOS
  * runs FolderName / ItemNameAs / item titles through NppLocalizer before
  * adding them to the menu. Returns the input unchanged when no catalog
@@ -300,9 +273,17 @@ static const char *xlate(const char *s) {
     return (s && *s) ? i18n_translate(s) : (s ? s : "");
 }
 
+/* Resolve the menubar-indexed action name ("app.cut") into the full
+ * "app.foo" form GMenuModel wants. lookup_action already returns the
+ * prefixed form, so this is just a NULL-safe pass-through. */
+static const char *full_action(const char *bare_or_prefixed) {
+    return bare_or_prefixed;
+}
+
 /* Append the parsed item list onto `menu`. Returns the number of action
  * items added (0 → the XML produced nothing usable). */
 static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
+    (void)app;
     if (!items) return 0;
     int count = 0;
     /* Folder submenus keyed by FolderName (original, untranslated) so
@@ -331,11 +312,11 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
         int color_slot = -1;
 
         if (it->builtin && !g_ascii_strcasecmp(it->builtin, "PinTab")) {
-            action = "tab-pin-toggle";
+            action = "app.tab-pin-toggle";
             label  = it->display_name ? it->display_name : "Pin Tab";
         }
         else if ((color_slot = tab_color_slot(it->menu_item)) >= 0) {
-            action = "tab-set-color";
+            /* Handled below via npp_menu_add_action_target. */
             label  = it->display_name ? it->display_name : it->menu_item;
         }
         else if (it->menu_entry && it->menu_item) {
@@ -344,16 +325,11 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
             label  = it->display_name ? it->display_name : it->menu_item;
         }
         else if (it->plugin_entry && it->plugin_item) {
-            /* macOS approach (MainWindowController.mm:192-213): walk the
-             * menubar's Plugins menu, find the plugin's submenu by name,
-             * then the command by name, and reuse the existing menu
-             * item's action. Our GMenuModel indexer already records
-             * ("Plugins", <PluginEntryName>, <PluginCommandItemName>)
-             * keys for everything in the live menubar, so a normal
-             * lookup_action call resolves the same way. If the plugin
-             * isn't represented in the menubar (not bundled and no .so
-             * loader has injected it), the lookup misses and we skip —
-             * matching macOS's silent-skip-when-unavailable. */
+            /* macOS approach (MainWindowController.mm:192-213): the
+             * Plugins menu is the source of truth; lookup_action finds
+             * the (Plugins, PluginEntryName, PluginCommandItemName) key
+             * in our GMenuModel index. Silent skip when the plugin
+             * isn't bundled, matching macOS. */
             action = lookup_action("Plugins", it->plugin_entry, it->plugin_item);
             label  = it->display_name ? it->display_name : it->plugin_item;
         }
@@ -362,14 +338,9 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
             continue;
         }
 
-        if (!action || !label) continue;
-
-        gboolean is_pin    = it->builtin &&
-                             !g_ascii_strcasecmp(it->builtin, "PinTab");
-        gboolean is_color  = (color_slot >= 0);
-        GCallback cb = is_pin    ? G_CALLBACK(on_builtin_pintab)
-                     : is_color  ? G_CALLBACK(on_apply_color)
-                                  : G_CALLBACK(on_action_activate);
+        gboolean is_color = (color_slot >= 0);
+        if (!is_color && !action) continue;
+        if (!label) continue;
 
         /* Folder grouping — translate the folder title (macOS xlate)
          * the first time we instantiate it so the user sees it in their
@@ -384,12 +355,13 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
             target = fld;
         }
 
-        GtkWidget *mi = npp_menu_add(target, xlate(label), cb, app);
-        g_object_set_data_full(G_OBJECT(mi), "action-name",
-                               g_strdup(action), g_free);
-        if (is_color)
-            g_object_set_data(G_OBJECT(mi), "color-slot",
-                              GINT_TO_POINTER(color_slot));
+        if (is_color) {
+            npp_menu_add_action_target(target, xlate(label),
+                                       "app.tab-set-color",
+                                       g_variant_new_int32(color_slot));
+        } else {
+            npp_menu_add_action(target, xlate(label), full_action(action));
+        }
         count++;
     }
     g_hash_table_destroy(folders);

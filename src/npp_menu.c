@@ -1,312 +1,304 @@
 /*
- * npp_menu.c — GTK4 popup / context-menu compatibility layer.
- * See npp_menu.h for the rationale and API.
+ * npp_menu.c — GtkPopoverMenu-backed context menu.
+ *
+ * See npp_menu.h for the why. This file is the runtime: each NppMenu
+ * owns a GMenu (model) plus, for the root menu only, a transient
+ * GSimpleActionGroup that backs every callback-style item. Sections in
+ * the GMenu render as separator-delimited groups. Sub-menus are nested
+ * GMenuModels; the popover widget is built once, lazily, when the menu
+ * is popped up.
  */
-#include "npp_menu.h"
-#include "gtk_compat.h"
 
+#include "npp_menu.h"
+#include <glib.h>
+#include <gio/gio.h>
+#include <gtk/gtk.h>
+
+/* ------------------------------------------------------------------ */
+/* Per-NppMenu state                                                   */
+/* ------------------------------------------------------------------ */
 struct NppMenu {
-    GtkWidget *popover;       /* this menu's GtkPopover */
-    GtkWidget *box;           /* vertical GtkBox of rows */
-    GtkWidget *root_popover;  /* topmost popover — popped down on any item */
-    NppMenu   *root;          /* the top-level menu (root->root == root) */
-    GSList    *subs;          /* root only: every child NppMenu, for cleanup */
-    /* Hover-to-open state — per menu level, so nested submenus work too. */
-    NppMenu   *open_sub;      /* the child submenu currently popped up */
-    NppMenu   *pending_sub;   /* the one waiting for the hover timer to fire */
-    guint      hover_timer;   /* g_timeout id, 0 when idle */
+    /* This menu's model (a GMenu that contains 1+ sections). Submenus
+     * point to their own GMenu via g_menu_append_submenu in the parent. */
+    GMenu              *model;
+    /* Current open section — separator starts a new one. */
+    GMenu              *cur_section;
+
+    /* Pointer back to root NppMenu (root->root == root). The root owns
+     * the action group, the next-id counter, and the eventual popover. */
+    NppMenu            *root;
+
+    /* --- root-only fields below --- */
+    GSimpleActionGroup *actions;     /* "rcm" namespace for callback items */
+    int                 next_id;     /* generates unique action names      */
+    GSList             *subs;        /* every sub NppMenu, for free()      */
+    GtkWidget          *popover;     /* GtkPopoverMenu, NULL until popup  */
 };
 
-static NppMenu *alloc_menu(void)
+/* ------------------------------------------------------------------ */
+/* Callback adapter — bridges GtkButton-style cb to GSimpleAction      */
+/* "activate" so existing callers don't have to change their callback  */
+/* signatures.                                                          */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    GCallback cb;
+    gpointer  data;
+} CbClosure;
+
+static void cb_closure_free(gpointer ud, GClosure *closure) {
+    (void)closure;
+    g_free(ud);
+}
+
+static void action_activated_thunk(GSimpleAction *a, GVariant *param,
+                                   gpointer ud)
 {
+    (void)a; (void)param;
+    CbClosure *c = ud;
+    typedef void (*BtnFn)(GtkButton *, gpointer);
+    BtnFn fn = (BtnFn) c->cb;
+    fn(NULL, c->data);
+}
+
+/* For check items — handler must update state then run the user cb.   */
+static void check_change_state(GSimpleAction *a, GVariant *value,
+                               gpointer ud)
+{
+    g_simple_action_set_state(a, value);
+    CbClosure *c = ud;
+    typedef void (*CheckFn)(GtkCheckButton *, gpointer);
+    CheckFn fn = (CheckFn) c->cb;
+    fn(NULL, c->data);
+}
+
+/* ------------------------------------------------------------------ */
+/* alloc / new                                                          */
+/* ------------------------------------------------------------------ */
+static NppMenu *alloc_menu(void) {
     NppMenu *m = g_new0(NppMenu, 1);
-    m->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_add_css_class(m->box, "npp-popup-menu");
+    m->model       = g_menu_new();
+    m->cur_section = g_menu_new();
+    g_menu_append_section(m->model, NULL, G_MENU_MODEL(m->cur_section));
     return m;
 }
 
-static GtkWidget *make_popover(GtkWidget *child)
-{
-    GtkWidget *p = gtk_popover_new();
-    gtk_popover_set_has_arrow(GTK_POPOVER(p), FALSE);
-    gtk_popover_set_child(GTK_POPOVER(p), child);
-    return p;
-}
-
-/* Install the right-click menu CSS once. Two jobs:
- *   - Match the GtkPopoverMenu modelbutton spacing/padding the App
- *     menubar uses, so right-click menus feel identical.
- *   - Clamp min-width/height on the GtkMenuButton's internal arrow
- *     placeholder image to 0 — even after gtk_menu_button_set_child(),
- *     GTK4 still measures that hidden GtkImage and sometimes passes a
- *     negative for_size, producing the 'GtkImage width 0 height -9'
- *     warning every time a submenu animates open. The CSS makes the
- *     measure floor at 0 so for_size can't go negative. */
-static void ensure_npp_menu_css(void) {
-    static gboolean installed = FALSE;
-    if (installed) return;
-    installed = TRUE;
-    /* - Adwaita modelbutton metrics (min-height: 26 / padding: 3 11)
-     *   so right-click rows match the App menubar's rows.
-     * - :hover/:focus/:active mirror Adwaita's modelbutton state
-     *   highlighting (subtle alpha tint over the row).
-     * - .npp-submenu-arrow renders the pan-end-symbolic icon as a CSS
-     *   background — no GtkImage widget, so no measure assertion. */
-    const char *css =
-        ".npp-popup-menu { padding: 0; }"
-        ".npp-popup-menu > button {"
-        "  padding: 3px 11px;"
-        "  min-height: 26px;"
-        "  border-radius: 0;"
-        "}"
-        ".npp-popup-menu > button:hover,"
-        ".npp-popup-menu > button:focus {"
-        "  background: alpha(currentColor, 0.08);"
-        "}"
-        ".npp-popup-menu > button:active {"
-        "  background: alpha(currentColor, 0.14);"
-        "}"
-        ".npp-submenu-arrow {"
-        "  background-image: -gtk-icontheme(\"pan-end-symbolic\");"
-        "  background-repeat: no-repeat;"
-        "  background-position: center;"
-        "  background-size: contain;"
-        "  -gtk-icon-style: symbolic;"
-        "  opacity: 0.6;"
-        "}";
-    GtkCssProvider *p = gtk_css_provider_new();
-    gtk_css_provider_load_from_string(p, css);
-    gtk_style_context_add_provider_for_display(gdk_display_get_default(),
-        GTK_STYLE_PROVIDER(p), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(p);
-}
-
-NppMenu *npp_menu_new(void)
-{
-    ensure_npp_menu_css();
+NppMenu *npp_menu_new(void) {
     NppMenu *m = alloc_menu();
-    m->popover = make_popover(m->box);
-    m->root_popover = m->popover;
-    m->root = m;
+    m->root    = m;
+    m->actions = g_simple_action_group_new();
     return m;
 }
 
-/* ---- Hover-to-open submenu plumbing ----------------------------------
- * Each row gets a GtkEventControllerMotion. On enter:
- *   - cancel any pending hover timer on the parent menu;
- *   - if a different submenu is currently open, popdown it;
- *   - if this row is itself a submenu trigger, schedule a delayed popup.
- * Standard menu behaviour, matching the GtkPopoverMenu menubar with
- * GTK_POPOVER_MENU_NESTED. Timer runs at 200 ms — same delay GTK uses
- * for modelbutton submenu open. */
-typedef struct { NppMenu *parent; NppMenu *sub; } HoverInfo;
+/* ------------------------------------------------------------------ */
+/* Item add — three flavours                                            */
+/* ------------------------------------------------------------------ */
 
-static gboolean hover_open_timer(gpointer data) {
-    NppMenu *m = data;
-    m->hover_timer = 0;
-    NppMenu *pending = m->pending_sub;
-    m->pending_sub = NULL;
-    if (!pending) return G_SOURCE_REMOVE;
-    gtk_popover_popup(GTK_POPOVER(pending->popover));
-    m->open_sub = pending;
-    return G_SOURCE_REMOVE;
-}
-
-static void cancel_hover_timer(NppMenu *m) {
-    if (m->hover_timer) {
-        g_source_remove(m->hover_timer);
-        m->hover_timer = 0;
-    }
-    m->pending_sub = NULL;
-}
-
-static void on_row_enter(GtkEventControllerMotion *ctl, double x, double y,
-                         gpointer ud)
+/* Register a new transient action under the root's "rcm" group; return
+ * the GSimpleAction (owned by the group). Generates a name like "i17". */
+static GSimpleAction *register_transient_action(NppMenu *m,
+                                                gboolean stateful,
+                                                gboolean initial_state,
+                                                gboolean enabled,
+                                                GCallback cb,
+                                                gpointer data,
+                                                gchar **out_full_action)
 {
-    (void)ctl; (void)x; (void)y;
-    HoverInfo *info = ud;
-    NppMenu *m   = info->parent;
-    NppMenu *sub = info->sub;
+    int id = m->root->next_id++;
+    gchar name[32];
+    g_snprintf(name, sizeof(name), "i%d", id);
 
-    /* Re-entering the same submenu trigger that's already open — keep it. */
-    if (sub && m->open_sub == sub) {
-        cancel_hover_timer(m);
-        return;
+    GSimpleAction *a;
+    if (stateful) {
+        a = g_simple_action_new_stateful(name, NULL,
+                                         g_variant_new_boolean(initial_state));
+        if (cb) {
+            CbClosure *c = g_new(CbClosure, 1);
+            c->cb = cb; c->data = data;
+            g_signal_connect_data(a, "change-state",
+                                  G_CALLBACK(check_change_state),
+                                  c, cb_closure_free, 0);
+        }
+    } else {
+        a = g_simple_action_new(name, NULL);
+        if (cb) {
+            CbClosure *c = g_new(CbClosure, 1);
+            c->cb = cb; c->data = data;
+            g_signal_connect_data(a, "activate",
+                                  G_CALLBACK(action_activated_thunk),
+                                  c, cb_closure_free, 0);
+        }
     }
+    g_simple_action_set_enabled(a, enabled);
+    g_action_map_add_action(G_ACTION_MAP(m->root->actions), G_ACTION(a));
+    /* Drop our ref — action group keeps one. */
+    g_object_unref(a);
 
-    cancel_hover_timer(m);
-
-    /* Close any other open submenu when moving to a different row. */
-    if (m->open_sub && m->open_sub != sub) {
-        gtk_popover_popdown(GTK_POPOVER(m->open_sub->popover));
-        m->open_sub = NULL;
-    }
-
-    if (sub) {
-        m->pending_sub = sub;
-        m->hover_timer = g_timeout_add(200, hover_open_timer, m);
-    }
+    if (out_full_action)
+        *out_full_action = g_strdup_printf("rcm.%s", name);
+    return a;
 }
 
-static void attach_hover(GtkWidget *row, NppMenu *parent, NppMenu *sub) {
-    HoverInfo *info = g_new0(HoverInfo, 1);
-    info->parent = parent;
-    info->sub    = sub;
-    GtkEventController *motion = gtk_event_controller_motion_new();
-    g_object_set_data_full(G_OBJECT(motion), "hover-info", info, g_free);
-    g_signal_connect(motion, "enter", G_CALLBACK(on_row_enter), info);
-    gtk_widget_add_controller(row, motion);
-}
-
-GtkWidget *npp_menu_box(NppMenu *m) { return m->box; }
-
-GtkWidget *npp_menu_add(NppMenu *m, const char *label,
-                        GCallback cb, gpointer data)
+gpointer npp_menu_add(NppMenu *m, const char *label,
+                      GCallback cb, gpointer data)
 {
-    GtkWidget *b = gtk_button_new_with_label(label);
-    gtk_button_set_has_frame(GTK_BUTTON(b), FALSE);
-    GtkWidget *lbl = gtk_button_get_child(GTK_BUTTON(b));
-    if (lbl) gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-    if (cb) g_signal_connect(b, "clicked", cb, data);
-    g_signal_connect_swapped(b, "clicked",
-                             G_CALLBACK(gtk_popover_popdown), m->root_popover);
-    /* Hovering a regular row closes any open submenu in this menu. */
-    attach_hover(b, m, NULL);
-    gtk_box_append(GTK_BOX(m->box), b);
-    return b;
+    gchar *full = NULL;
+    /* When cb is NULL we still register an action — but disabled, so the
+     * item renders as a non-clickable header (used by spell's
+     * "Suggestions for …" row). */
+    GSimpleAction *a = register_transient_action(m, FALSE, FALSE,
+                                                 cb != NULL,
+                                                 cb, data, &full);
+    GMenuItem *it = g_menu_item_new(label, full);
+    g_menu_append_item(m->cur_section, it);
+    g_object_unref(it);
+    g_free(full);
+    return a;  /* opaque handle for set_sensitive */
 }
 
-GtkWidget *npp_menu_add_check(NppMenu *m, const char *label, gboolean active,
-                              GCallback cb, gpointer data)
+gpointer npp_menu_add_check(NppMenu *m, const char *label, gboolean active,
+                            GCallback cb, gpointer data)
 {
-    GtkWidget *c = gtk_check_button_new_with_label(label);
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(c), active);
-    if (cb) g_signal_connect(c, "toggled", cb, data);
-    gtk_box_append(GTK_BOX(m->box), c);
-    return c;
+    gchar *full = NULL;
+    GSimpleAction *a = register_transient_action(m, TRUE, active,
+                                                 TRUE,
+                                                 cb, data, &full);
+    GMenuItem *it = g_menu_item_new(label, full);
+    g_menu_append_item(m->cur_section, it);
+    g_object_unref(it);
+    g_free(full);
+    return a;
 }
 
+void npp_menu_add_action(NppMenu *m, const char *label,
+                         const char *action_full_name)
+{
+    GMenuItem *it = g_menu_item_new(label, action_full_name);
+    g_menu_append_item(m->cur_section, it);
+    g_object_unref(it);
+}
+
+void npp_menu_add_action_target(NppMenu *m, const char *label,
+                                const char *action_full_name, GVariant *target)
+{
+    GMenuItem *it = g_menu_item_new(label, NULL);
+    g_menu_item_set_action_and_target_value(it, action_full_name, target);
+    /* g_menu_item_set_action_and_target_value sinks the floating ref
+     * and copies as needed; defensively unref if caller passed a fresh
+     * non-floating variant. */
+    g_menu_append_item(m->cur_section, it);
+    g_object_unref(it);
+}
+
+void npp_menu_item_set_sensitive(gpointer handle, gboolean sensitive)
+{
+    if (G_IS_SIMPLE_ACTION(handle))
+        g_simple_action_set_enabled(G_SIMPLE_ACTION(handle), sensitive);
+}
+
+/* ------------------------------------------------------------------ */
+/* Separator — implemented as a section break                          */
+/* ------------------------------------------------------------------ */
 void npp_menu_add_separator(NppMenu *m)
 {
-    gtk_box_append(GTK_BOX(m->box),
-                   gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    /* If current section is empty, no separator would render — but
+     * harmless. Start a new section regardless. */
+    GMenu *next = g_menu_new();
+    g_menu_append_section(m->model, NULL, G_MENU_MODEL(next));
+    g_object_unref(m->cur_section);  /* model holds its own ref */
+    m->cur_section = next;
 }
 
+/* ------------------------------------------------------------------ */
+/* Submenu — child NppMenu sharing the root's action group             */
+/* ------------------------------------------------------------------ */
 NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
 {
     NppMenu *sub = alloc_menu();
-    sub->popover      = make_popover(sub->box);
-    sub->root_popover = m->root_popover;
-    sub->root         = m->root;
-    m->root->subs     = g_slist_prepend(m->root->subs, sub);
-
-    /* Only the root popover gets an autohide grab. If the submenu also
-     * grabs (default for GtkPopover), an outside click is consumed by
-     * its grab — the submenu closes but the root stays up ("sticky
-     * menu — ESC works but clicking outside doesn't"). With autohide
-     * off, the root's grab cleanly catches the outside click; the
-     * cascade in on_closed unparents this submenu transitively. */
-    gtk_popover_set_autohide(GTK_POPOVER(sub->popover), FALSE);
-
-    /* Plain GtkButton — not GtkMenuButton — because GtkMenuButton
-     * instantiates an internal GtkImage for its arrow placeholder in
-     * init() and keeps a reference to it even after
-     * gtk_menu_button_set_child() unparents it. The popover-animation
-     * measure pass on submenu open still hits that lingering GtkImage
-     * with a negative for_size and trips the
-     * 'gtk_widget_measure: for_size >= -1' assertion. A plain GtkButton
-     * has no such placeholder.
-     *
-     * Custom child layout: [label hexpand][pan-end-symbolic via CSS
-     * background] — visually identical to the menubar's modelbutton
-     * submenu rows, with no GtkImage anywhere in the tree. */
-    GtkWidget *btn = gtk_button_new();
-    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
-
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *lab  = gtk_label_new(label);
-    gtk_label_set_xalign(GTK_LABEL(lab), 0.0);
-    gtk_widget_set_hexpand(lab, TRUE);
-    GtkWidget *arr  = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_size_request(arr, 16, 16);
-    gtk_widget_set_valign(arr, GTK_ALIGN_CENTER);
-    gtk_widget_add_css_class(arr, "npp-submenu-arrow");
-    gtk_box_append(GTK_BOX(hbox), lab);
-    gtk_box_append(GTK_BOX(hbox), arr);
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-
-    /* Parent the submenu popover to the button (same lifecycle the old
-     * GtkMenuButton path arranged via set_popover). Position to the
-     * right so submenus cascade like macOS NSMenu. */
-    gtk_widget_set_parent(sub->popover, btn);
-    gtk_popover_set_position(GTK_POPOVER(sub->popover), GTK_POS_RIGHT);
-
-    /* Click opens the submenu. The submenu's items popdown the whole
-     * root popover via npp_menu_add's connect_swapped, so the parent
-     * menu closes too once an item is chosen. */
-    g_signal_connect_swapped(btn, "clicked",
-                             G_CALLBACK(gtk_popover_popup), sub->popover);
-
-    /* Hover-to-open: enter schedules the popup after the 200 ms delay,
-     * matching the GtkPopoverMenu menubar's nested-submenu behaviour. */
-    attach_hover(btn, m, sub);
-
-    gtk_box_append(GTK_BOX(m->box), btn);
+    sub->root   = m->root;
+    /* Don't allocate a separate action group — submenu items live in
+     * the root's "rcm" namespace too. */
+    g_menu_append_submenu(m->cur_section, label, G_MENU_MODEL(sub->model));
+    /* Track for free-on-teardown. */
+    m->root->subs = g_slist_prepend(m->root->subs, sub);
     return sub;
 }
 
-/* Teardown is DEFERRED — running gtk_widget_unparent inside the 'closed'
- * signal emission leaves GTK's per-window popover list with a stale
- * pointer to the just-disposed popover. The next time any popover on
- * the same window is presented, GTK walks that list and calls
- * gtk_popover_get_autohide() on the dead entry — which triggers the
- * 'GTK_IS_POPOVER assertion failed' flood the user saw.
- *
- * G_PRIORITY_HIGH so the idle still fires before the next gesture
- * event is dispatched (otherwise a fast follow-up right-click finds
- * the previous popover still parented to the Scintilla widget and the
- * xdg-popup grab refuses, the "menu sometimes doesn't open" bug).
- *
- * Each submenu's popover is manually parented to its GtkButton row
- * (plain GtkButton — nothing else owns the parent link), so we MUST
- * unparent every submenu popover before letting the root tear down,
- * otherwise the cascade-free of the row buttons logs
- *     Finalizing GtkButton, but it still has children left: GtkPopover
- * The NppMenu structs are freed last. */
-static gboolean teardown(gpointer data)
+/* ------------------------------------------------------------------ */
+/* Data owner for compat (spell.c spell-ctx storage)                   */
+/* ------------------------------------------------------------------ */
+GObject *npp_menu_data_owner(NppMenu *m)
 {
-    NppMenu *root = data;
-    cancel_hover_timer(root);
-    for (GSList *l = root->subs; l; l = l->next) {
-        NppMenu *sub = l->data;
-        cancel_hover_timer(sub);
-        if (sub->popover && gtk_widget_get_parent(sub->popover))
-            gtk_widget_unparent(sub->popover);
+    return G_OBJECT(m->root->actions);
+}
+
+/* ------------------------------------------------------------------ */
+/* Pop up / teardown                                                    */
+/* ------------------------------------------------------------------ */
+static void free_one_sub(gpointer p)
+{
+    NppMenu *sub = p;
+    g_object_unref(sub->cur_section);
+    g_object_unref(sub->model);
+    g_free(sub);
+}
+
+static void teardown_root(NppMenu *root)
+{
+    /* Detach the popover from its anchor; the popover itself is
+     * disposed once we drop our last ref through unparent. */
+    if (root->popover) {
+        gtk_widget_unparent(root->popover);
+        root->popover = NULL;
     }
-    gtk_widget_unparent(root->popover);
-    g_slist_free_full(root->subs, g_free);
+    g_slist_free_full(root->subs, free_one_sub);
+    root->subs = NULL;
+    g_object_unref(root->cur_section);
+    g_object_unref(root->model);
+    g_object_unref(root->actions);
     g_free(root);
+}
+
+static gboolean teardown_idle(gpointer ud)
+{
+    teardown_root((NppMenu *)ud);
     return G_SOURCE_REMOVE;
 }
 
-static void on_closed(GtkPopover *p, gpointer data)
+static void on_popover_closed(GtkPopover *p, gpointer ud)
 {
     (void)p;
-    g_idle_add_full(G_PRIORITY_HIGH, teardown, data, NULL);
+    /* Defer to idle so we don't tear down inside the closed-signal
+     * emission — GTK's per-window popover list walks during cleanup
+     * would otherwise hit a stale entry. Priority HIGH keeps the
+     * teardown ahead of the next event so the next right-click starts
+     * from a clean slate. */
+    g_idle_add_full(G_PRIORITY_HIGH, teardown_idle, ud, NULL);
+}
+
+static GtkWidget *build_popover(NppMenu *root)
+{
+    GtkWidget *pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(root->model));
+    gtk_widget_insert_action_group(pop, "rcm", G_ACTION_GROUP(root->actions));
+    gtk_popover_set_has_arrow(GTK_POPOVER(pop), FALSE);
+    g_signal_connect(pop, "closed",
+                     G_CALLBACK(on_popover_closed), root);
+    return pop;
 }
 
 void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
 {
-    gtk_widget_set_parent(m->popover, anchor);
+    NppMenu *root = m->root;
+    root->popover = build_popover(root);
     GdkRectangle r = { (int)x, (int)y, 1, 1 };
-    gtk_popover_set_pointing_to(GTK_POPOVER(m->popover), &r);
-    g_signal_connect(m->popover, "closed", G_CALLBACK(on_closed), m);
-    gtk_popover_popup(GTK_POPOVER(m->popover));
+    gtk_popover_set_pointing_to(GTK_POPOVER(root->popover), &r);
+    gtk_widget_set_parent(root->popover, anchor);
+    gtk_popover_popup(GTK_POPOVER(root->popover));
 }
 
 void npp_menu_popup_at_widget(NppMenu *m, GtkWidget *anchor)
 {
-    gtk_widget_set_parent(m->popover, anchor);
-    g_signal_connect(m->popover, "closed", G_CALLBACK(on_closed), m);
-    gtk_popover_popup(GTK_POPOVER(m->popover));
+    NppMenu *root = m->root;
+    root->popover = build_popover(root);
+    gtk_widget_set_parent(root->popover, anchor);
+    gtk_popover_popup(GTK_POPOVER(root->popover));
 }

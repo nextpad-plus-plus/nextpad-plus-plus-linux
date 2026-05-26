@@ -267,27 +267,36 @@ typedef struct {
     char      *word;
 } SuggCtx;
 
-static void on_suggestion_activate(GtkButton *item, gpointer data)
+/* One per suggestion item — bundles everything the activate callback
+ * needs so it doesn't have to fish data off the item widget (which no
+ * longer exists with the GtkPopoverMenu-backed NppMenu). Freed by the
+ * GAction's set_data destructor when the menu tears down. */
+typedef struct {
+    GtkWidget    *sci;
+    Sci_Position  click_pos;
+    char         *suggestion;
+} SuggItem;
+
+static void sugg_item_free(gpointer p) {
+    SuggItem *si = p;
+    g_free(si->suggestion);
+    g_free(si);
+}
+
+static void on_suggestion_activate(GtkButton *unused, gpointer data)
 {
-    SuggCtx *ctx = data;
-    const char *sugg = gtk_button_get_label(GTK_BUTTON(item));
-
-    /* Replace the word under the stored position (stored in item label —
-     * find word start/end around the saved cursor position)            */
-    uptr_t *pos_ptr = g_object_get_data(G_OBJECT(item), "spell-pos");
-    if (!pos_ptr) return;
-    Sci_Position click_pos = (Sci_Position)*pos_ptr;
-
-    Sci_Position ws = (Sci_Position)sci(ctx->sci, SCI_WORDSTARTPOSITION,
-                                        (uptr_t)click_pos, 1);
-    Sci_Position we = (Sci_Position)sci(ctx->sci, SCI_WORDENDPOSITION,
-                                        (uptr_t)click_pos, 1);
+    (void)unused;
+    SuggItem *si = data;
+    Sci_Position ws = (Sci_Position)sci(si->sci, SCI_WORDSTARTPOSITION,
+                                        (uptr_t)si->click_pos, 1);
+    Sci_Position we = (Sci_Position)sci(si->sci, SCI_WORDENDPOSITION,
+                                        (uptr_t)si->click_pos, 1);
     if (ws >= we) return;
 
-    sci(ctx->sci, SCI_SETSEL, (uptr_t)ws, (sptr_t)we);
-    sci(ctx->sci, SCI_REPLACESEL, 0, (sptr_t)sugg);
+    sci(si->sci, SCI_SETSEL, (uptr_t)ws, (sptr_t)we);
+    sci(si->sci, SCI_REPLACESEL, 0, (sptr_t)si->suggestion);
     /* Re-check after replacement */
-    spell_schedule_check(ctx->sci);
+    spell_schedule_check(si->sci);
 }
 
 static void on_add_to_dict(GtkButton *item, gpointer data)
@@ -352,25 +361,32 @@ void spell_populate_context_menu(GtkWidget *w, NppMenu *menu, int x, int y)
     SuggCtx *ctx = g_new0(SuggCtx, 1);
     ctx->sci  = w;
     ctx->word = word; /* ownership transferred */
-    /* ctx is freed with the menu's widget tree when the popup closes. */
-    g_object_set_data_full(G_OBJECT(npp_menu_box(menu)), "spell-ctx", ctx,
+    /* ctx lives on the menu's data-owner GObject; freed when the menu
+     * is torn down on popdown. The Ignore/Add callbacks read from it. */
+    g_object_set_data_full(npp_menu_data_owner(menu), "spell-ctx", ctx,
                            (GDestroyNotify)sugg_ctx_free);
 
-    /* Header label (non-clickable). */
+    /* Header label (disabled action — non-clickable). */
     char header[128];
     snprintf(header, sizeof(header), "Spell: \"%s\"", ctx->word);
-    GtkWidget *hdr = npp_menu_add(menu, header, NULL, NULL);
-    gtk_widget_set_sensitive(hdr, FALSE);
+    npp_menu_add(menu, header, NULL, NULL);
     npp_menu_add_separator(menu);
 
-    /* Suggestion items (up to 8). */
+    /* Suggestion items (up to 8). Each gets its own SuggItem closure so
+     * the activate callback doesn't need to query item-widget data — it
+     * just reads from the bundled struct passed as cb data. The struct
+     * is attached to the GAction handle returned by npp_menu_add and
+     * freed when the menu tears down. */
     int limit = (int)n_sugg < 8 ? (int)n_sugg : 8;
     for (int i = 0; i < limit; i++) {
-        GtkWidget *mi = npp_menu_add(menu, suggs[i],
-                                     G_CALLBACK(on_suggestion_activate), ctx);
-        uptr_t *pos_storage = g_new(uptr_t, 1);
-        *pos_storage = (uptr_t)click_pos;
-        g_object_set_data_full(G_OBJECT(mi), "spell-pos", pos_storage, g_free);
+        SuggItem *si = g_new(SuggItem, 1);
+        si->sci         = w;
+        si->click_pos   = click_pos;
+        si->suggestion  = g_strdup(suggs[i]);
+        gpointer handle = npp_menu_add(menu, suggs[i],
+                                       G_CALLBACK(on_suggestion_activate), si);
+        g_object_set_data_full(G_OBJECT(handle), "sugg-item", si,
+                               sugg_item_free);
     }
 
     if (suggs)

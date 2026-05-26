@@ -242,21 +242,9 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
     (void)n_press; (void)d;
     GtkWidget *w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
 
-    /* Win the gesture sequence outright. Scintilla's GTK4 backend
-     * installs its own GtkGestureClick on every ScintillaView with
-     * button=0 (any button) in the default PHASE_BUBBLE; left to its
-     * own devices, two competing GtkGestureClicks on the same widget
-     * yield non-deterministic claim ordering on Wayland, which is what
-     * caused right-click to flake. Our gesture runs in PHASE_CAPTURE
-     * (set at attach time below) so we see the press first; claiming
-     * the sequence here denies Scintilla's bubble-phase handler for
-     * this event. */
+    /* Claim the sequence in PHASE_CAPTURE so Scintilla's bubble-phase
+     * gesture is denied — keeps right-click routing deterministic. */
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
-
-    /* Scintilla's pressed handler normally calls gtk_widget_grab_focus()
-     * when focus-on-click is on; claiming above means we've denied that
-     * handler for this event, so do it ourselves to preserve "right-click
-     * focuses the editor" behavior. */
     if (gtk_widget_get_focus_on_click(w))
         gtk_widget_grab_focus(w);
 
@@ -267,30 +255,16 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
                   btn, n_press, x, y, G_OBJECT_TYPE_NAME(w));
     }
 
-    /* P5 — editor context menu from contextMenu.xml, with spell-check
-     * suggestions prepended when the click is over a misspelled word. */
+    /* P5 — editor context menu from contextMenu.xml + spell suggestions.
+     * NppMenu is now backed by GtkPopoverMenu, which handles xdg-popup
+     * grab semantics correctly. Pop synchronously — no defer needed. */
     GtkApplication *app = (GtkApplication *)g_application_get_default();
     NppMenu *menu = npp_menu_new();
-    /* Spell suggestions first (no-op if not over a misspelled word). */
     spell_populate_context_menu(w, menu, (int)x, (int)y);
-    /* Then the XML-driven items. */
     int n = ctxmenu_append_scintilla(menu, app);
     if (s_rc_debug)
-        g_message("[rc] populated %d items", n);
-
+        g_message("[rc] built %d items", n);
     npp_menu_popup_at(menu, w, x, y);
-
-    if (s_rc_debug) {
-        GtkWidget *box = npp_menu_box(menu);
-        /* GtkBox is wrapped by GtkPopover's internal GtkPopoverContent;
-         * one more get_parent reaches the popover proper. */
-        GtkWidget *pop = box ? gtk_widget_get_parent(box) : NULL;
-        if (pop) pop = gtk_widget_get_parent(pop);
-        g_message("[rc] popup visible=%d mapped=%d parent=%s",
-                  pop ? gtk_widget_get_visible(pop) : -1,
-                  pop ? gtk_widget_get_mapped(pop) : -1,
-                  pop ? G_OBJECT_TYPE_NAME(pop) : "(none)");
-    }
 }
 
 /* Editor zoom — Ctrl +/-/0 on the focused editor. A key controller (not a
@@ -593,9 +567,9 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
             };
             for (size_t i = 0; i < G_N_ELEMENTS(items); i++) {
                 if (items[i].label) {
-                    GtkWidget *mi = npp_menu_add(menu, items[i].label,
-                                                 G_CALLBACK(items[i].cb), sci);
-                    gtk_widget_set_sensitive(mi, items[i].enabled);
+                    gpointer h = npp_menu_add(menu, items[i].label,
+                                              G_CALLBACK(items[i].cb), sci);
+                    npp_menu_item_set_sensitive(h, items[i].enabled);
                 } else {
                     npp_menu_add_separator(menu);
                 }
