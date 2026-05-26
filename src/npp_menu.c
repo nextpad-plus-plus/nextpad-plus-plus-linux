@@ -255,29 +255,26 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     return sub;
 }
 
-/* Synchronous teardown out of "closed". The original deferred-via-idle
- * version caused two bugs the user kept hitting:
+/* Teardown is DEFERRED — running gtk_widget_unparent inside the 'closed'
+ * signal emission leaves GTK's per-window popover list with a stale
+ * pointer to the just-disposed popover. The next time any popover on
+ * the same window is presented, GTK walks that list and calls
+ * gtk_popover_get_autohide() on the dead entry — which triggers the
+ * 'GTK_IS_POPOVER assertion failed' flood the user saw.
  *
- *   (a) "menu sometimes doesn't open when I right-click again" — the
- *       previous popover is still parented to the Scintilla widget
- *       while the next right-click tries to map a new one. On Wayland
- *       the xdg-popup grab refuses or the popup never realizes.
- *   (b) Teardown running on idle could chase the user's next click and
- *       race with the gesture handler.
- *
- * Running unparent inside the "closed" emission is safe: closed fires
- * AFTER the popdown animation completes, and GTK isn't iterating
- * children at that point.
+ * G_PRIORITY_HIGH so the idle still fires before the next gesture
+ * event is dispatched (otherwise a fast follow-up right-click finds
+ * the previous popover still parented to the Scintilla widget and the
+ * xdg-popup grab refuses, the "menu sometimes doesn't open" bug).
  *
  * Each submenu's popover is manually parented to its GtkButton row
  * (plain GtkButton — nothing else owns the parent link), so we MUST
  * unparent every submenu popover before letting the root tear down,
  * otherwise the cascade-free of the row buttons logs
  *     Finalizing GtkButton, but it still has children left: GtkPopover
- * The NppMenu structs (sub-menu metadata only) are freed last. */
-static void on_closed(GtkPopover *p, gpointer data)
+ * The NppMenu structs are freed last. */
+static gboolean teardown(gpointer data)
 {
-    (void)p;
     NppMenu *root = data;
     cancel_hover_timer(root);
     for (GSList *l = root->subs; l; l = l->next) {
@@ -289,6 +286,13 @@ static void on_closed(GtkPopover *p, gpointer data)
     gtk_widget_unparent(root->popover);
     g_slist_free_full(root->subs, g_free);
     g_free(root);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_closed(GtkPopover *p, gpointer data)
+{
+    (void)p;
+    g_idle_add_full(G_PRIORITY_HIGH, teardown, data, NULL);
 }
 
 void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
