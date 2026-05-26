@@ -266,77 +266,30 @@ static void new_section_in(CtxMenu *m, FolderInfo *folder) {
     }
 }
 
-/* ============================== Color swatches ============================== */
+/* ============================== Right-click menu CSS ============================== */
 
-static const char *kColorClass[6] = {
-    "npp-color-0",  /* Remove (transparent / dashed) */
-    "npp-color-1", "npp-color-2", "npp-color-3", "npp-color-4", "npp-color-5"
-};
-
-/* Install the swatch CSS once. RGB matches macOS MenuBuilder.mm tab
- * palette (Yellow / Green / Blue / Orange / Pink). */
-static void ensure_color_css(void) {
+/* Install the right-click menu CSS once. Two jobs:
+ *  - max-content-height keeps a tall popover from shrinking into a
+ *    scrolled view (the editor right-click is taller than the default
+ *    cap on small displays).
+ *  - min-width/height 0 on the modelbutton's leading icon image stops
+ *    GTK from sometimes measuring it with a negative for_size and
+ *    spitting "GtkImage with width 0 and height -9" warnings when a
+ *    submenu animates in. The image is invisible for items without
+ *    icons either way. */
+static void ensure_ctxmenu_css(void) {
     static gboolean installed = FALSE;
     if (installed) return;
     installed = TRUE;
     const char *css =
-        ".npp-color-0 { background: transparent;"
-        "  border: 1px dashed alpha(@theme_fg_color,0.4); }"
-        ".npp-color-1 { background: #FCE386; border: 1px solid alpha(@theme_fg_color,0.2); }"
-        ".npp-color-2 { background: #A9F08C; border: 1px solid alpha(@theme_fg_color,0.2); }"
-        ".npp-color-3 { background: #7AC9F5; border: 1px solid alpha(@theme_fg_color,0.2); }"
-        ".npp-color-4 { background: #F5B67A; border: 1px solid alpha(@theme_fg_color,0.2); }"
-        ".npp-color-5 { background: #F08CF0; border: 1px solid alpha(@theme_fg_color,0.2); }"
-        /* Custom row in a popover menu: match the model-button geometry. */
-        ".npp-ctx-row { padding: 4px 12px; min-height: 24px; }";
+        "popover.menu scrolledwindow { max-content-height: 4096px; }"
+        "popover.menu modelbutton > image { min-width: 0; min-height: 0; }"
+        "popover.menu modelbutton > .accelerator { min-width: 0; min-height: 0; }";
     GtkCssProvider *p = gtk_css_provider_new();
     gtk_css_provider_load_from_string(p, css);
     gtk_style_context_add_provider_for_display(gdk_display_get_default(),
         GTK_STYLE_PROVIDER(p), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(p);
-}
-
-/* The click handler dismisses the enclosing popover and activates
- * tab-set-color with the swatch slot (0..5). */
-static void on_color_swatch_clicked(GtkButton *btn, gpointer ud) {
-    GtkApplication *app = (GtkApplication *)ud;
-    int slot = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(btn), "color-slot"));
-    if (app)
-        g_action_group_activate_action(G_ACTION_GROUP(app), "tab-set-color",
-                                       g_variant_new_int32(slot));
-    GtkWidget *p = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (p) gtk_popover_popdown(GTK_POPOVER(p));
-}
-
-/* Build the floating widget that becomes the custom child for an
- * Apply Color / Remove Color row: [colour square][label]. */
-static GtkWidget *build_color_swatch_widget(GtkApplication *app, int slot,
-                                            const char *label_text)
-{
-    ensure_color_css();
-    GtkWidget *btn = gtk_button_new();
-    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
-    gtk_widget_add_css_class(btn, "model");      /* inherit menu-row styling */
-    gtk_widget_add_css_class(btn, "npp-ctx-row");
-
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget *sw   = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_size_request(sw, 12, 12);
-    gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
-    gtk_widget_add_css_class(sw, kColorClass[slot < 0 || slot > 5 ? 0 : slot]);
-
-    GtkWidget *lab = gtk_label_new(label_text);
-    gtk_label_set_xalign(GTK_LABEL(lab), 0.0);
-    gtk_widget_set_hexpand(lab, TRUE);
-
-    gtk_box_append(GTK_BOX(hbox), sw);
-    gtk_box_append(GTK_BOX(hbox), lab);
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-
-    g_object_set_data(G_OBJECT(btn), "color-slot", GINT_TO_POINTER(slot));
-    g_signal_connect(btn, "clicked",
-                     G_CALLBACK(on_color_swatch_clicked), app);
-    return btn;
 }
 
 /* ============================== XML parsing ============================== */
@@ -506,15 +459,31 @@ static void populate(CtxMenu *m, GArray *items) {
         }
 
         if (color_slot >= 0) {
-            /* Custom-child row: colour swatch + label; click activates
-             * app.tab-set-color(slot). */
-            GtkWidget *w = build_color_swatch_widget(m->app, color_slot,
-                                                    xlate(label_eng));
-            const char *slot = ctxmenu_register_custom(m, w);
-            GMenuItem *gi = g_menu_item_new(NULL, NULL);
-            g_menu_item_set_attribute(gi, "custom", "s", slot);
+            /* Apply Color row — the swatch is a Pango-coloured ■ (U+25A0)
+             * inside the GMenu label. Custom-child widgets DON'T work for
+             * items inside a submenu (gtk_popover_menu_add_child only
+             * resolves top-level slots), but a markup label is rendered
+             * by the modelbutton at any depth. */
+            static const char *kColorHex[6] = {
+                "#bdbdbd",   /* 0 Remove: dim grey */
+                "#FCE386",   /* 1 Yellow  */
+                "#A9F08C",   /* 2 Green   */
+                "#7AC9F5",   /* 3 Blue    */
+                "#F5B67A",   /* 4 Orange  */
+                "#F08CF0",   /* 5 Pink    */
+            };
+            char *escaped = g_markup_escape_text(xlate(label_eng), -1);
+            char *markup  = g_strdup_printf(
+                "<span foreground=\"%s\" size=\"large\">\xE2\x96\xA0</span>  %s",
+                kColorHex[color_slot], escaped);
+            GMenuItem *gi = g_menu_item_new(markup, NULL);
+            g_menu_item_set_attribute(gi, "use-markup", "b", TRUE);
+            g_menu_item_set_action_and_target(gi, "app.tab-set-color",
+                                              "i", color_slot);
             g_menu_append_item(target, gi);
             g_object_unref(gi);
+            g_free(markup);
+            g_free(escaped);
         } else {
             GMenuItem *gi = plain_item(xlate(label_eng), action);
             g_menu_append_item(target, gi);
@@ -547,12 +516,16 @@ static void on_popover_closed(GtkPopover *pop, gpointer ud) {
 
 void ctxmenu_popup_at(CtxMenu *m, GtkWidget *anchor, double x, double y) {
     if (!m || !anchor) { ctxmenu_free(m); return; }
+    ensure_ctxmenu_css();
     GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(m->root));
     gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
     /* Hover-to-open submenus (the macOS NSMenu behaviour). */
     gtk_popover_menu_set_flags(GTK_POPOVER_MENU(popover),
                                GTK_POPOVER_MENU_NESTED);
-    /* Attach registered custom children. */
+    /* Attach registered custom children. gtk_popover_menu_add_child only
+     * resolves slots at the top level of the menu (not items inside a
+     * submenu), so colour swatches use Pango markup in the label instead;
+     * this loop is for top-level customs like spell-check suggestions. */
     for (guint i = 0; i < m->customs->len; i++) {
         CtxCustom *c = m->customs->pdata[i];
         gtk_popover_menu_add_child(GTK_POPOVER_MENU(popover),
