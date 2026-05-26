@@ -170,12 +170,23 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     return sub;
 }
 
-/* Teardown is deferred out of the "closed" emission. Unparenting the root
- * popover drops its last reference and frees the whole widget tree (box,
- * rows, submenu buttons and their popovers). Then the NppMenu structs go. */
+/* Teardown is deferred out of the "closed" emission. Each submenu's
+ * popover is manually parented to its GtkButton row (we use a plain
+ * GtkButton, not GtkMenuButton, so nothing else owns that parent
+ * link). We MUST unparent every submenu popover before letting the
+ * root tear down: when gtk_widget_unparent(root->popover) cascades and
+ * frees the row buttons, GTK4 finalizes each button — and if a button
+ * still has the submenu GtkPopover as a child, GTK logs
+ *     Finalizing GtkButton, but it still has children left: GtkPopover
+ * Then the NppMenu structs (sub-menu metadata only) get freed. */
 static gboolean teardown(gpointer data)
 {
     NppMenu *root = data;
+    for (GSList *l = root->subs; l; l = l->next) {
+        NppMenu *sub = l->data;
+        if (sub->popover && gtk_widget_get_parent(sub->popover))
+            gtk_widget_unparent(sub->popover);
+    }
     gtk_widget_unparent(root->popover);
     g_slist_free_full(root->subs, g_free);
     g_free(root);
