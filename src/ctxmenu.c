@@ -543,22 +543,22 @@ static void do_popup_now(PopupRequest *r) {
     GtkWidget *anchor = r->anchor;
     double x = r->x, y = r->y;
 
-    /* If the click target is a non-standard custom widget (Scintilla's
-     * editor view in particular), its input handling swallows the
-     * outside-click that GtkPopover relies on for autohide — the menu
-     * never closes. Walk up one level to the standard GTK container
-     * (GtkScrolledWindow wrapping the editor, the tab-strip's GtkBox
-     * for tab labels) and parent the popover there; translate the
-     * click coordinates with gtk_widget_compute_point. */
-    GtkWidget *parent = gtk_widget_get_parent(anchor);
-    if (parent) {
-        graphene_point_t in  = GRAPHENE_POINT_INIT((float)x, (float)y);
-        graphene_point_t out = GRAPHENE_POINT_INIT(0, 0);
-        if (gtk_widget_compute_point(anchor, parent, &in, &out)) {
-            anchor = parent;
-            x = out.x;
-            y = out.y;
-        }
+    /* GTK4 requires popovers with autohide=TRUE to be parented to a
+     * top-level GtkWindow — otherwise GDK refuses the input grab with
+     * "Tried to map a grabbing popup with a non-top most parent" and
+     * the popover leaks (the previous parent's destruction logs
+     * "Finalizing GtkScrolledWindow … still has children left:
+     * GtkPopoverMenu"). Walk to the GtkWindow root and translate the
+     * click coordinates from the anchor into window space. */
+    GtkRoot   *root      = gtk_widget_get_root(anchor);
+    GtkWidget *toplevel  = root ? GTK_WIDGET(root) : anchor;
+    graphene_point_t in  = GRAPHENE_POINT_INIT((float)x, (float)y);
+    graphene_point_t out = GRAPHENE_POINT_INIT(0, 0);
+    if (toplevel != anchor &&
+        gtk_widget_compute_point(anchor, toplevel, &in, &out)) {
+        anchor = toplevel;
+        x = out.x;
+        y = out.y;
     }
 
     ensure_ctxmenu_css();
