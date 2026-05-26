@@ -536,8 +536,28 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
                 }
             }
         }
-        npp_menu_popup_at(menu,
-            gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)), x, y);
+        /* Parent the popover to the top-level window — NOT to the tab's
+         * GtkBox. A GtkBox layout-measures every child including parented
+         * popovers, so attaching the popover here stretches the tab's
+         * width by the menu's measured width. GtkWindow doesn't have that
+         * problem. Translate the click coords into window space so the
+         * popover anchors at the same on-screen point. */
+        GtkWidget *anchor = gtk_event_controller_get_widget(
+                                GTK_EVENT_CONTROLLER(gesture));
+        GtkRoot   *root_widget = gtk_widget_get_root(anchor);
+        GtkWidget *popover_parent = root_widget
+                                        ? GTK_WIDGET(root_widget)
+                                        : anchor;
+        double px = x, py = y;
+        if (popover_parent != anchor) {
+            graphene_point_t in = GRAPHENE_POINT_INIT((float)x, (float)y);
+            graphene_point_t out;
+            if (gtk_widget_compute_point(anchor, popover_parent, &in, &out)) {
+                px = out.x;
+                py = out.y;
+            }
+        }
+        npp_menu_popup_at(menu, popover_parent, px, py);
     }
 }
 
