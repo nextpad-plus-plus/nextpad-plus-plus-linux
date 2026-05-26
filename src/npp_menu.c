@@ -42,13 +42,18 @@ static void ensure_npp_menu_css(void) {
     static gboolean installed = FALSE;
     if (installed) return;
     installed = TRUE;
+    /* Tightened to match Adwaita's GtkPopoverMenu modelbutton metrics
+     * (min-height: 26px; padding: 3px 11px) so right-click rows are the
+     * same height as the App menubar's rows. */
     const char *css =
-        ".npp-popup-menu { padding: 4px 0; }"
+        ".npp-popup-menu { padding: 0; }"
         ".npp-popup-menu > button,"
+        ".npp-popup-menu > menubutton,"
         ".npp-popup-menu > menubutton > button {"
-        "  padding: 6px 12px;"
-        "  min-height: 24px;"
+        "  padding: 3px 11px;"
+        "  min-height: 26px;"
         "}"
+        ".npp-popup-menu > menubutton { padding: 0; }"
         ".npp-popup-menu menubutton image {"
         "  min-width: 0;"
         "  min-height: 0;"
