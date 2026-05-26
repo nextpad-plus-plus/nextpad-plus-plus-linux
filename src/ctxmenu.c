@@ -344,9 +344,18 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
             label  = it->display_name ? it->display_name : it->menu_item;
         }
         else if (it->plugin_entry && it->plugin_item) {
-            /* Plugin commands aren't surfaced as GActions on Linux yet —
-             * skip (macOS skips the same way when the plugin isn't loaded). */
-            continue;
+            /* macOS approach (MainWindowController.mm:192-213): walk the
+             * menubar's Plugins menu, find the plugin's submenu by name,
+             * then the command by name, and reuse the existing menu
+             * item's action. Our GMenuModel indexer already records
+             * ("Plugins", <PluginEntryName>, <PluginCommandItemName>)
+             * keys for everything in the live menubar, so a normal
+             * lookup_action call resolves the same way. If the plugin
+             * isn't represented in the menubar (not bundled and no .so
+             * loader has injected it), the lookup misses and we skip —
+             * matching macOS's silent-skip-when-unavailable. */
+            action = lookup_action("Plugins", it->plugin_entry, it->plugin_item);
+            label  = it->display_name ? it->display_name : it->plugin_item;
         }
         else if (it->macro_name) {
             /* Named macros not exposed as GActions yet — skip. */
@@ -355,12 +364,12 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
 
         if (!action || !label) continue;
 
-        gboolean is_pin   = it->builtin &&
-                            !g_ascii_strcasecmp(it->builtin, "PinTab");
-        gboolean is_color = (color_slot >= 0);
-        GCallback cb = is_pin   ? G_CALLBACK(on_builtin_pintab)
-                     : is_color ? G_CALLBACK(on_apply_color)
-                                 : G_CALLBACK(on_action_activate);
+        gboolean is_pin    = it->builtin &&
+                             !g_ascii_strcasecmp(it->builtin, "PinTab");
+        gboolean is_color  = (color_slot >= 0);
+        GCallback cb = is_pin    ? G_CALLBACK(on_builtin_pintab)
+                     : is_color  ? G_CALLBACK(on_apply_color)
+                                  : G_CALLBACK(on_action_activate);
 
         /* Folder grouping — translate the folder title (macOS xlate)
          * the first time we instantiate it so the user sees it in their
