@@ -379,7 +379,11 @@ static void setup_sci(GtkWidget *sci)
     {
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), GDK_BUTTON_SECONDARY);
-        g_signal_connect(gc, "pressed", G_CALLBACK(on_sci_button_press), NULL);
+        /* "released" not "pressed": GtkPopover's autohide grab activates
+         * the moment popup() runs, and a pending button-release on the
+         * Scintilla surface dismisses it instantly ("blink and vanish")
+         * on Wayland. By the time "released" fires both events are done. */
+        g_signal_connect(gc, "released", G_CALLBACK(on_sci_button_press), NULL);
         gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(gc));
     }
     {
@@ -656,7 +660,11 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     {
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), 0); /* any button */
-        g_signal_connect(gc, "pressed", G_CALLBACK(on_tab_button_press), sci);
+        /* "released" so the right-click context menu (in this handler)
+         * isn't dismissed by its own pending button-release on Wayland;
+         * see the SCI gesture for the full rationale. Middle-click /
+         * double-click close still work correctly on release. */
+        g_signal_connect(gc, "released", G_CALLBACK(on_tab_button_press), sci);
         gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(gc));
     }
     /* Tab labels: 10pt absolute — kept absolute so the size is stable

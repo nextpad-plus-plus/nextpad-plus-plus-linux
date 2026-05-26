@@ -112,8 +112,31 @@ static void on_closed(GtkPopover *p, gpointer data)
     g_idle_add(teardown, data);
 }
 
+/* GTK4 requires popovers with autohide=TRUE to be parented to a top-
+ * level GtkWindow — otherwise the xdg-popup grab fails on Wayland and
+ * the popover dismisses itself on the very click that opened it
+ * ("Tried to map a grabbing popup with a non-top most parent"). Walk
+ * anchor → root, translate the click coordinates into window space,
+ * parent there. */
+static GtkWidget *toplevel_anchor(GtkWidget *anchor, double *x, double *y)
+{
+    GtkRoot *root = gtk_widget_get_root(anchor);
+    if (!root) return anchor;
+    GtkWidget *toplevel = GTK_WIDGET(root);
+    if (toplevel == anchor) return anchor;
+    graphene_point_t in  = GRAPHENE_POINT_INIT((float)*x, (float)*y);
+    graphene_point_t out = GRAPHENE_POINT_INIT(0, 0);
+    if (gtk_widget_compute_point(anchor, toplevel, &in, &out)) {
+        *x = out.x;
+        *y = out.y;
+        return toplevel;
+    }
+    return anchor;
+}
+
 void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
 {
+    anchor = toplevel_anchor(anchor, &x, &y);
     gtk_widget_set_parent(m->popover, anchor);
     GdkRectangle r = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(m->popover), &r);
@@ -123,7 +146,20 @@ void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
 
 void npp_menu_popup_at_widget(NppMenu *m, GtkWidget *anchor)
 {
-    gtk_widget_set_parent(m->popover, anchor);
+    double zero_x = 0, zero_y = 0;
+    GtkWidget *parent = toplevel_anchor(anchor, &zero_x, &zero_y);
+    gtk_widget_set_parent(m->popover, parent);
+    /* When we walked up to the window, point at the anchor's bounds in
+     * window space so the popover still appears next to the original
+     * widget instead of at the window origin. */
+    if (parent != anchor) {
+        graphene_rect_t bounds;
+        if (gtk_widget_compute_bounds(anchor, parent, &bounds)) {
+            GdkRectangle r = { (int)bounds.origin.x, (int)bounds.origin.y,
+                               (int)bounds.size.width, (int)bounds.size.height };
+            gtk_popover_set_pointing_to(GTK_POPOVER(m->popover), &r);
+        }
+    }
     g_signal_connect(m->popover, "closed", G_CALLBACK(on_closed), m);
     gtk_popover_popup(GTK_POPOVER(m->popover));
 }
