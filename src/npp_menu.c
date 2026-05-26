@@ -80,17 +80,20 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
 
     GtkWidget *mb = gtk_menu_button_new();
     gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(mb), FALSE);
-    /* Custom child: [label hexpand][▸] — label left-aligned, side arrow
-     * on the right (macOS NSMenu submenu disclosure). Both are GtkLabel,
-     * not GtkImage, so this doesn't trigger the GtkImage measure
-     * assertions that gtk_menu_button_set_always_show_arrow(TRUE) does.
-     * set_direction(RIGHT) just positions the popover side-by-side. */
+    /* Custom child: [label hexpand][pan-end-symbolic] — left-aligned
+     * label + the same standard submenu-disclosure icon GtkPopoverMenu
+     * modelbuttons use in the menubar. set_direction(RIGHT) positions
+     * the submenu popover side-by-side (macOS cascade). Explicit pixel
+     * size on the GtkImage keeps the GTK measure code from passing a
+     * negative for_size that gtk_menu_button_set_always_show_arrow(TRUE)
+     * was hitting before. */
     gtk_menu_button_set_direction(GTK_MENU_BUTTON(mb), GTK_ARROW_RIGHT);
     GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget *lab  = gtk_label_new(label);
     gtk_label_set_xalign(GTK_LABEL(lab), 0.0);
     gtk_widget_set_hexpand(lab, TRUE);
-    GtkWidget *arr  = gtk_label_new("\xE2\x96\xB8");   /* ▸ U+25B8 */
+    GtkWidget *arr  = gtk_image_new_from_icon_name("pan-end-symbolic");
+    gtk_image_set_pixel_size(GTK_IMAGE(arr), 16);
     gtk_widget_add_css_class(arr, "dim-label");
     gtk_box_append(GTK_BOX(hbox), lab);
     gtk_box_append(GTK_BOX(hbox), arr);
