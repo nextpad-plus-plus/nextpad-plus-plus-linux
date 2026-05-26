@@ -230,11 +230,43 @@ static void filewatch_stop(NppDoc *doc)
     }
 }
 
+/* Gated by NPP_RC_DEBUG=1 — terminal trace for every editor right-click,
+ * meant to be turned on when the menu fails to appear so we can see
+ * whether the gesture even fired and whether the popover became visible.
+ * Resolved once at process start; cost when off is one int compare. */
+static gboolean s_rc_debug = FALSE;
+
 static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
                                 double x, double y, gpointer d)
 {
     (void)n_press; (void)d;
     GtkWidget *w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+
+    /* Win the gesture sequence outright. Scintilla's GTK4 backend
+     * installs its own GtkGestureClick on every ScintillaView with
+     * button=0 (any button) in the default PHASE_BUBBLE; left to its
+     * own devices, two competing GtkGestureClicks on the same widget
+     * yield non-deterministic claim ordering on Wayland, which is what
+     * caused right-click to flake. Our gesture runs in PHASE_CAPTURE
+     * (set at attach time below) so we see the press first; claiming
+     * the sequence here denies Scintilla's bubble-phase handler for
+     * this event. */
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+
+    /* Scintilla's pressed handler normally calls gtk_widget_grab_focus()
+     * when focus-on-click is on; claiming above means we've denied that
+     * handler for this event, so do it ourselves to preserve "right-click
+     * focuses the editor" behavior. */
+    if (gtk_widget_get_focus_on_click(w))
+        gtk_widget_grab_focus(w);
+
+    if (s_rc_debug) {
+        guint btn = gtk_gesture_single_get_current_button(
+                        GTK_GESTURE_SINGLE(gesture));
+        g_message("[rc] press btn=%u npress=%d @(%g,%g) on %s",
+                  btn, n_press, x, y, G_OBJECT_TYPE_NAME(w));
+    }
+
     /* P5 — editor context menu from contextMenu.xml, with spell-check
      * suggestions prepended when the click is over a misspelled word. */
     GtkApplication *app = (GtkApplication *)g_application_get_default();
@@ -242,8 +274,23 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
     /* Spell suggestions first (no-op if not over a misspelled word). */
     spell_populate_context_menu(w, menu, (int)x, (int)y);
     /* Then the XML-driven items. */
-    ctxmenu_append_scintilla(menu, app);
+    int n = ctxmenu_append_scintilla(menu, app);
+    if (s_rc_debug)
+        g_message("[rc] populated %d items", n);
+
     npp_menu_popup_at(menu, w, x, y);
+
+    if (s_rc_debug) {
+        GtkWidget *box = npp_menu_box(menu);
+        /* GtkBox is wrapped by GtkPopover's internal GtkPopoverContent;
+         * one more get_parent reaches the popover proper. */
+        GtkWidget *pop = box ? gtk_widget_get_parent(box) : NULL;
+        if (pop) pop = gtk_widget_get_parent(pop);
+        g_message("[rc] popup visible=%d mapped=%d parent=%s",
+                  pop ? gtk_widget_get_visible(pop) : -1,
+                  pop ? gtk_widget_get_mapped(pop) : -1,
+                  pop ? G_OBJECT_TYPE_NAME(pop) : "(none)");
+    }
 }
 
 /* Editor zoom — Ctrl +/-/0 on the focused editor. A key controller (not a
@@ -377,8 +424,26 @@ static void setup_sci(GtkWidget *sci)
      * parent" warnings every few ms. */
     sci_msg(sci, SCI_USEPOPUP, SC_POPUP_NEVER, 0);
     {
+        /* Cache NPP_RC_DEBUG once; cheap per-click compare thereafter. */
+        static gboolean s_rc_debug_resolved = FALSE;
+        if (!s_rc_debug_resolved) {
+            s_rc_debug = (g_getenv("NPP_RC_DEBUG") != NULL);
+            s_rc_debug_resolved = TRUE;
+            if (s_rc_debug)
+                g_message("[rc] debug enabled — every editor right-click "
+                          "will log a [rc] line");
+        }
+
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), GDK_BUTTON_SECONDARY);
+        /* Run in the capture phase so we see button-press before Scintilla's
+         * own GtkGestureClick (button=0, bubble phase) on the same widget;
+         * the handler then claims the sequence to deny Scintilla's. This
+         * is what makes right-click deterministic on Wayland — without it
+         * the two bubble-phase gestures race and our menu intermittently
+         * fails to appear. */
+        gtk_event_controller_set_propagation_phase(
+            GTK_EVENT_CONTROLLER(gc), GTK_PHASE_CAPTURE);
         g_signal_connect(gc, "pressed", G_CALLBACK(on_sci_button_press), NULL);
         gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(gc));
     }
