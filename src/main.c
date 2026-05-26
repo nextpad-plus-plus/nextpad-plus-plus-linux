@@ -5803,11 +5803,21 @@ static GMenuModel *build_menu_model(void)
         g_object_unref(tmov);
         GMenu *tcol = g_menu_new();
         for (int i = 1; i <= 5; i++) {
-            char label[16]; g_snprintf(label, sizeof(label), "Apply Color %d", i);
-            GMenuItem *mi = g_menu_item_new(label, NULL);
+            char raw[16];
+            g_snprintf(raw, sizeof(raw), "Apply Color %d", i);
+            /* Pango markup with a coloured U+25A0 swatch prefix, since
+             * GtkPopoverMenu's GMenuItem icon attribute is a known no-op
+             * for vertical rows in GTK4 (GNOME Discourse:
+             * "G_MENU_ATTRIBUTE_ICON does not work in GTK4 as expected").
+             * editor_tab_color_markup_label is the single source of
+             * truth for the palette + the markup format. */
+            char *markup = editor_tab_color_markup_label(i, raw);
+            GMenuItem *mi = g_menu_item_new(markup, NULL);
             g_menu_item_set_action_and_target(mi, "app.tab-set-color", "i", i);
+            g_menu_item_set_attribute(mi, "use-markup", "s", "true");
             g_menu_append_item(tcol, mi);
             g_object_unref(mi);
+            g_free(markup);
         }
         {
             GMenuItem *mi = g_menu_item_new("Remove Color", NULL);

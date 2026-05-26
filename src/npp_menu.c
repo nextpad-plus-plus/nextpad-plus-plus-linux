@@ -189,6 +189,32 @@ void npp_menu_add_action_target(NppMenu *m, const char *label,
     g_object_unref(it);
 }
 
+gpointer npp_menu_add_markup(NppMenu *m, const char *markup_label,
+                             GCallback cb, gpointer data)
+{
+    gchar *full = NULL;
+    GSimpleAction *a = register_transient_action(m, FALSE, FALSE,
+                                                 cb != NULL,
+                                                 cb, data, &full);
+    GMenuItem *it = g_menu_item_new(markup_label, full);
+    g_menu_item_set_attribute(it, "use-markup", "s", "true");
+    g_menu_append_item(m->cur_section, it);
+    g_object_unref(it);
+    g_free(full);
+    return a;
+}
+
+void npp_menu_add_action_target_markup(NppMenu *m, const char *markup_label,
+                                       const char *action_full_name,
+                                       GVariant *target)
+{
+    GMenuItem *it = g_menu_item_new(markup_label, NULL);
+    g_menu_item_set_action_and_target_value(it, action_full_name, target);
+    g_menu_item_set_attribute(it, "use-markup", "s", "true");
+    g_menu_append_item(m->cur_section, it);
+    g_object_unref(it);
+}
+
 void npp_menu_item_set_sensitive(gpointer handle, gboolean sensitive)
 {
     if (G_IS_SIMPLE_ACTION(handle))

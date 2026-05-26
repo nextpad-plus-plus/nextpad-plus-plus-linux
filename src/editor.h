@@ -89,6 +89,18 @@ gint       editor_tab_color(GtkWidget *sci);
 void       editor_set_tab_color(GtkWidget *sci, int slot);
 void       editor_apply_tab_color(GtkWidget *sci);
 
+/* Hex string ("#RRGGBB") for tab colour slot 1..5; NULL for 0/out-of-range.
+ * Single source of truth for the palette — main.c's tab-stripe CSS and
+ * the colour-swatch menu labels both read from here. */
+const char *editor_tab_color_hex(int slot);
+
+/* Pango markup label for a "Apply Color N"-style menu item:
+ *   <span color='#FCE386'>■</span>  Apply Color 1
+ * Caller frees the returned string with g_free. Slots outside 1..5
+ * return a plain g_strdup(label) with no swatch glyph. The label
+ * argument is XML-escaped, so user-translated strings are safe. */
+char       *editor_tab_color_markup_label(int slot, const char *label);
+
 /* Edit operations on current document */
 void editor_undo(void);
 void editor_redo(void);

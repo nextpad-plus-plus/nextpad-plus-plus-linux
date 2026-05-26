@@ -1866,6 +1866,39 @@ void editor_set_tab_color(GtkWidget *sci, int slot)
     main_doclist_refresh();
 }
 
+/* Tab-colour palette — single source of truth (matches the tab-stripe
+ * CSS hex literals in main.c around line 4555). Index 0 is intentionally
+ * NULL so callers can treat 0 = "no swatch". */
+const char *editor_tab_color_hex(int slot)
+{
+    static const char *const palette[6] = {
+        NULL,        /* 0 — no swatch */
+        "#FCE386",   /* 1 — Yellow */
+        "#A9F08C",   /* 2 — Green  */
+        "#7AC9F5",   /* 3 — Blue   */
+        "#F5B67A",   /* 4 — Orange */
+        "#F08CF0",   /* 5 — Pink   */
+    };
+    if (slot < 1 || slot > 5) return NULL;
+    return palette[slot];
+}
+
+char *editor_tab_color_markup_label(int slot, const char *label)
+{
+    const char *hex = editor_tab_color_hex(slot);
+    if (!hex || !label)
+        return g_strdup(label ? label : "");
+    /* Escape the label so labels containing &, <, > are safe inside the
+     * Pango markup we're about to build. U+25A0 BLACK SQUARE renders as
+     * a filled square in every standard system font. Two spaces between
+     * the swatch and the label match macOS NSMenu's image-then-label
+     * spacing closely. */
+    char *esc = g_markup_escape_text(label, -1);
+    char *out = g_strdup_printf("<span color='%s'>■</span>  %s", hex, esc);
+    g_free(esc);
+    return out;
+}
+
 /* ---- Synchronised scrolling between split views (#5) -------------- *
  * Mirrors macOS _pollScrollSync: a 60 Hz poll detects which view the
  * user scrolled and propagates the first-visible-line / x-offset to the

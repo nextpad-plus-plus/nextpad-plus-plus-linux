@@ -11,6 +11,7 @@
 #include "gtk_compat.h"
 #include "paths.h"
 #include "i18n.h"
+#include "editor.h"
 #include <string.h>
 
 /* (top-menu, submenu-or-"", item) → "app.action-name", normalised.
@@ -356,9 +357,15 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
         }
 
         if (is_color) {
-            npp_menu_add_action_target(target, xlate(label),
-                                       "app.tab-set-color",
-                                       g_variant_new_int32(color_slot));
+            /* Apply Color N rows show a coloured swatch glyph inline in
+             * the label, via Pango markup; Remove Color (slot 0) just
+             * gets the plain label. */
+            char *markup = editor_tab_color_markup_label(color_slot,
+                                                         xlate(label));
+            npp_menu_add_action_target_markup(target, markup,
+                                              "app.tab-set-color",
+                                              g_variant_new_int32(color_slot));
+            g_free(markup);
         } else {
             npp_menu_add_action(target, xlate(label), full_action(action));
         }

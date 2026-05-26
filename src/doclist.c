@@ -155,8 +155,14 @@ static void on_listbox_button_press(GtkGestureClick *gesture, int n_press,
         G_CALLBACK(on_color_3), G_CALLBACK(on_color_4),
         G_CALLBACK(on_color_5)
     };
-    for (int i = 1; i <= 5; i++)
-        npp_menu_add(color_sub, color_label[i], color_cbs[i - 1], NULL);
+    for (int i = 1; i <= 5; i++) {
+        /* Pango markup label with a coloured U+25A0 swatch prefix.
+         * editor_tab_color_markup_label is the single source of truth
+         * for the palette. */
+        char *markup = editor_tab_color_markup_label(i, color_label[i]);
+        npp_menu_add_markup(color_sub, markup, color_cbs[i - 1], NULL);
+        g_free(markup);
+    }
     npp_menu_add_separator(color_sub);
     npp_menu_add(color_sub, color_label[0], G_CALLBACK(on_color_0), NULL);
 

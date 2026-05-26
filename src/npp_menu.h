@@ -49,6 +49,17 @@ void       npp_menu_add_action_target(NppMenu *m, const char *label,
                                       const char *action_full_name,
                                       GVariant *target);
 
+/* Pango-markup-label variants — for "Apply Color N"-style rows that
+ * need a coloured Unicode swatch inline in the label (GtkPopoverMenu
+ * does not render the GMenuItem icon attribute on vertical rows; Pango
+ * markup on the label IS rendered, which is the workaround). */
+gpointer   npp_menu_add_markup(NppMenu *m, const char *markup_label,
+                               GCallback cb, gpointer data);
+void       npp_menu_add_action_target_markup(NppMenu *m,
+                                             const char *markup_label,
+                                             const char *action_full_name,
+                                             GVariant *target);
+
 /* Toggle item enabled state. Pass the handle returned by npp_menu_add. */
 void       npp_menu_item_set_sensitive(gpointer handle, gboolean sensitive);
 
