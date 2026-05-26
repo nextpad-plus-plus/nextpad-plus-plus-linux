@@ -79,8 +79,22 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     m->root->subs     = g_slist_prepend(m->root->subs, sub);
 
     GtkWidget *mb = gtk_menu_button_new();
-    gtk_menu_button_set_label(GTK_MENU_BUTTON(mb), label);
     gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(mb), FALSE);
+    /* Custom child: [label hexpand][▸] — label left-aligned, side arrow
+     * on the right (macOS NSMenu submenu disclosure). Both are GtkLabel,
+     * not GtkImage, so this doesn't trigger the GtkImage measure
+     * assertions that gtk_menu_button_set_always_show_arrow(TRUE) does.
+     * set_direction(RIGHT) just positions the popover side-by-side. */
+    gtk_menu_button_set_direction(GTK_MENU_BUTTON(mb), GTK_ARROW_RIGHT);
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *lab  = gtk_label_new(label);
+    gtk_label_set_xalign(GTK_LABEL(lab), 0.0);
+    gtk_widget_set_hexpand(lab, TRUE);
+    GtkWidget *arr  = gtk_label_new("\xE2\x96\xB8");   /* ▸ U+25B8 */
+    gtk_widget_add_css_class(arr, "dim-label");
+    gtk_box_append(GTK_BOX(hbox), lab);
+    gtk_box_append(GTK_BOX(hbox), arr);
+    gtk_menu_button_set_child(GTK_MENU_BUTTON(mb), hbox);
     /* The menu button takes ownership of the submenu popover, so it is
      * freed transitively when the root popover tree is torn down. */
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(mb), sub->popover);
