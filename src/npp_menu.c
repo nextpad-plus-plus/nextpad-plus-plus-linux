@@ -81,6 +81,12 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     GtkWidget *mb = gtk_menu_button_new();
     gtk_menu_button_set_label(GTK_MENU_BUTTON(mb), label);
     gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(mb), FALSE);
+    /* Side-pointing arrow indicator (macOS style) — RIGHT both points the
+     * indicator glyph rightwards and makes the submenu open to the side
+     * of the parent row instead of below it. always-show-arrow is needed
+     * for the arrow to appear alongside the text label. */
+    gtk_menu_button_set_direction(GTK_MENU_BUTTON(mb), GTK_ARROW_RIGHT);
+    gtk_menu_button_set_always_show_arrow(GTK_MENU_BUTTON(mb), TRUE);
     /* The menu button takes ownership of the submenu popover, so it is
      * freed transitively when the root popover tree is torn down. */
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(mb), sub->popover);

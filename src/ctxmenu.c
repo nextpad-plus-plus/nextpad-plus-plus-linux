@@ -1,13 +1,22 @@
 /*
- * ctxmenu.c — XML-driven context menus matching macOS port.
+ * ctxmenu.c — XML-driven editor + tab context menus.
+ *
+ * Mirrors macOS MainWindowController.mm:_buildEditorContextMenuFromXML and
+ * NppTabBar.mm:_buildTabContextMenuFromXML — same XML attributes, same
+ * lookup semantics (top-level menu → optional submenu narrowing → item by
+ * label), same FolderName grouping, same id="0" → separator rule, and
+ * same display-string localization via the i18n catalog.
  */
 #include "ctxmenu.h"
 #include "gtk_compat.h"
 #include "paths.h"
+#include "i18n.h"
 #include <string.h>
 
-/* (top-menu-name, item-label) → "app.action-name". Case-insensitive on
- * lookup; entries are stored already lower-cased. */
+/* (top-menu, submenu-or-"", item) → "app.action-name", normalised.
+ * Submenu-aware so the editor XML's three "Using 1st Style" entries (which
+ * live in different parent submenus: Style All Occurrences / Style One /
+ * Clear Style) resolve to their correct distinct actions. */
 static GHashTable *s_index = NULL;
 
 /* Drop a trailing ellipsis (ASCII "..." or U+2026 "…") and trailing
@@ -29,48 +38,80 @@ static gchar *strip_trailing_ellipsis(const char *s) {
     return r;
 }
 
-static gchar *lc_key(const char *top, const char *item) {
-    gchar *t  = g_ascii_strdown(top  ? top  : "", -1);
-    gchar *i  = g_ascii_strdown(item ? item : "", -1);
-    gchar *in = strip_trailing_ellipsis(i);
-    gchar *out = g_strdup_printf("%s\t%s", t, in);
-    g_free(t); g_free(i); g_free(in);
+static gchar *norm_part(const char *s) {
+    gchar *lo  = g_ascii_strdown(s ? s : "", -1);
+    gchar *out = strip_trailing_ellipsis(lo);
+    g_free(lo);
     return out;
 }
 
-static void walk_model(GMenuModel *model, const char *top_name);
+/* (top, sub, item) → "top<TAB>sub<TAB>item" all lowercased, no ellipsis.
+ * `sub` may be NULL/"" for the top-level scope. */
+static gchar *key3(const char *top, const char *sub, const char *item) {
+    gchar *t = norm_part(top);
+    gchar *s = norm_part(sub);
+    gchar *i = norm_part(item);
+    gchar *r = g_strdup_printf("%s\t%s\t%s", t, s, i);
+    g_free(t); g_free(s); g_free(i);
+    return r;
+}
 
-static void walk_section(GMenuModel *section, const char *top_name) {
-    int n = g_menu_model_get_n_items(section);
+/* Insert (top, sub, item) → action. Also inserts (top, "", item) for
+ * lookups where MenuSubMenuName isn't specified — first-found wins so we
+ * don't lose the natural top-down menu order in the face of duplicate
+ * item labels across sibling submenus. */
+static void index_item(const char *top, const char *sub,
+                       const char *label, const char *action)
+{
+    gchar *k_sub = key3(top, sub, label);
+    g_hash_table_insert(s_index, k_sub, g_strdup(action));
+
+    gchar *k_any = key3(top, "", label);
+    if (g_hash_table_contains(s_index, k_any))
+        g_free(k_any);
+    else
+        g_hash_table_insert(s_index, k_any, g_strdup(action));
+}
+
+/* Strip GTK mnemonic markers ("_") from a model label. */
+static gchar *strip_mnemonic(const char *s) {
+    gchar *r = g_new(gchar, strlen(s) + 1);
+    int j = 0;
+    for (int k = 0; s[k]; k++) if (s[k] != '_') r[j++] = s[k];
+    r[j] = '\0';
+    return r;
+}
+
+/* Walk a GMenuModel scope (section or submenu), indexing every (label,
+ * action) pair with the supplied `top` and `cur_sub`. Sections inherit
+ * `cur_sub` from their parent; descending into a submenu rebinds it. */
+static void walk_scope(GMenuModel *model, const char *top, const char *cur_sub)
+{
+    int n = g_menu_model_get_n_items(model);
     for (int i = 0; i < n; i++) {
-        gchar *label = NULL, *action = NULL;
-        g_menu_model_get_item_attribute(section, i, G_MENU_ATTRIBUTE_LABEL,  "s", &label);
-        g_menu_model_get_item_attribute(section, i, G_MENU_ATTRIBUTE_ACTION, "s", &action);
+        gchar *label  = NULL;
+        gchar *action = NULL;
+        g_menu_model_get_item_attribute(model, i, G_MENU_ATTRIBUTE_LABEL,  "s", &label);
+        g_menu_model_get_item_attribute(model, i, G_MENU_ATTRIBUTE_ACTION, "s", &action);
 
         if (label && action) {
-            /* Strip the "_X" accelerator marker if present. */
-            gchar *clean = g_new(gchar, strlen(label) + 1);
-            int j = 0;
-            for (int k = 0; label[k]; k++)
-                if (label[k] != '_') clean[j++] = label[k];
-            clean[j] = '\0';
-            gchar *key = lc_key(top_name, clean);
-            g_hash_table_insert(s_index, key, g_strdup(action));
+            gchar *clean = strip_mnemonic(label);
+            index_item(top, cur_sub, clean, action);
             g_free(clean);
         }
 
-        /* Nested section / submenu? */
-        GMenuModel *sub = NULL;
-        sub = g_menu_model_get_item_link(section, i, G_MENU_LINK_SECTION);
-        if (sub) {
-            walk_section(sub, top_name);
-            g_object_unref(sub);
+        GMenuModel *sec = g_menu_model_get_item_link(model, i, G_MENU_LINK_SECTION);
+        if (sec) {
+            walk_scope(sec, top, cur_sub);
+            g_object_unref(sec);
         }
-        sub = g_menu_model_get_item_link(section, i, G_MENU_LINK_SUBMENU);
+        GMenuModel *sub = g_menu_model_get_item_link(model, i, G_MENU_LINK_SUBMENU);
         if (sub) {
-            /* Items inside a submenu keep the same top-level entry name
-             * — macOS XML doesn't require MenuSubMenuName for most lookups. */
-            walk_section(sub, top_name);
+            /* Re-bind cur_sub to this submenu's label — that gives the
+             * (top, sub, item) keys macOS's MenuSubMenuName narrows on. */
+            gchar *sub_label = label ? strip_mnemonic(label) : NULL;
+            walk_scope(sub, top, sub_label ? sub_label : "");
+            g_free(sub_label);
             g_object_unref(sub);
         }
 
@@ -79,29 +120,20 @@ static void walk_section(GMenuModel *section, const char *top_name) {
     }
 }
 
-static void walk_model(GMenuModel *model, const char *top_name) {
-    walk_section(model, top_name);
-}
-
 void ctxmenu_index_from_model(GMenuModel *model) {
     if (s_index) g_hash_table_destroy(s_index);
     s_index = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     if (!model) return;
 
-    /* Top level: iterate menus, each has a label (e.g. "_File"). */
+    /* Top level: each item is a top-level menu with a submenu link. */
     int n = g_menu_model_get_n_items(model);
     for (int i = 0; i < n; i++) {
         gchar *label = NULL;
         g_menu_model_get_item_attribute(model, i, G_MENU_ATTRIBUTE_LABEL, "s", &label);
         GMenuModel *sub = g_menu_model_get_item_link(model, i, G_MENU_LINK_SUBMENU);
         if (label && sub) {
-            /* Strip the "_X" accelerator marker. */
-            gchar *clean = g_new(gchar, strlen(label) + 1);
-            int j = 0;
-            for (int k = 0; label[k]; k++)
-                if (label[k] != '_') clean[j++] = label[k];
-            clean[j] = '\0';
-            walk_model(sub, clean);
+            gchar *clean = strip_mnemonic(label);
+            walk_scope(sub, clean, "");
             g_free(clean);
         }
         g_free(label);
@@ -109,34 +141,46 @@ void ctxmenu_index_from_model(GMenuModel *model) {
     }
 }
 
-static const char *lookup_action(const char *entry, const char *item) {
+/* Try the submenu-narrowed key first, fall back to the generic (top, item)
+ * key — mirrors macOS's "if subMenuName given, narrow searchIn; else search
+ * recursively from the top menu." */
+static const char *lookup_action(const char *entry, const char *sub,
+                                 const char *item)
+{
     if (!s_index || !entry || !item) return NULL;
-    gchar *k = lc_key(entry, item);
-    const char *v = (const char *)g_hash_table_lookup(s_index, k);
-    g_free(k);
+    if (sub && *sub) {
+        gchar *ks = key3(entry, sub, item);
+        const char *v = g_hash_table_lookup(s_index, ks);
+        g_free(ks);
+        if (v) return v;
+    }
+    gchar *ka = key3(entry, "", item);
+    const char *v = g_hash_table_lookup(s_index, ka);
+    g_free(ka);
     return v;
 }
 
 /* ------------------------------------------------------------------ */
-/* XML parsing for both context menu schemas                          */
+/* XML parsing                                                         */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    char *folder_name;     /* may be NULL */
-    char *menu_entry;      /* MenuEntryName */
-    char *menu_item;       /* MenuItemName */
-    char *plugin_entry;    /* PluginEntryName */
-    char *plugin_item;     /* PluginCommandItemName */
-    char *macro_name;      /* MacroEntryName */
-    char *builtin;         /* BuiltIn="…" */
-    char *display_name;    /* ItemNameAs override */
-    int   separator;       /* id="0" */
+    char *folder_name;
+    char *menu_entry;
+    char *menu_item;
+    char *menu_sub_menu;     /* MenuSubMenuName — narrows lookup */
+    char *plugin_entry;
+    char *plugin_item;
+    char *macro_name;
+    char *builtin;
+    char *display_name;      /* ItemNameAs override */
+    int   separator;
 } CtxItem;
 
 typedef struct {
-    const char *want_root;   /* "ScintillaContextMenu" or "TabContextMenu" */
+    const char *want_root;
     gboolean    in_root;
-    GArray     *items;       /* CtxItem */
+    GArray     *items;
 } CtxParseState;
 
 static void ctx_xml_start(GMarkupParseContext *ctx, const gchar *el,
@@ -145,22 +189,20 @@ static void ctx_xml_start(GMarkupParseContext *ctx, const gchar *el,
 {
     (void)ctx; (void)err;
     CtxParseState *st = ud;
-    if (strcmp(el, st->want_root) == 0) {
-        st->in_root = TRUE;
-        return;
-    }
+    if (strcmp(el, st->want_root) == 0) { st->in_root = TRUE; return; }
     if (!st->in_root || strcmp(el, "Item") != 0) return;
 
     CtxItem it = { 0 };
     for (int i = 0; names[i]; i++) {
-        if      (!strcmp(names[i], "FolderName"))           it.folder_name = g_strdup(vals[i]);
-        else if (!strcmp(names[i], "MenuEntryName"))        it.menu_entry  = g_strdup(vals[i]);
-        else if (!strcmp(names[i], "MenuItemName"))         it.menu_item   = g_strdup(vals[i]);
-        else if (!strcmp(names[i], "PluginEntryName"))      it.plugin_entry= g_strdup(vals[i]);
-        else if (!strcmp(names[i], "PluginCommandItemName"))it.plugin_item = g_strdup(vals[i]);
-        else if (!strcmp(names[i], "MacroEntryName"))       it.macro_name  = g_strdup(vals[i]);
-        else if (!strcmp(names[i], "BuiltIn"))              it.builtin     = g_strdup(vals[i]);
-        else if (!strcmp(names[i], "ItemNameAs"))           it.display_name= g_strdup(vals[i]);
+        if      (!strcmp(names[i], "FolderName"))            it.folder_name   = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "MenuEntryName"))         it.menu_entry    = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "MenuItemName"))          it.menu_item     = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "MenuSubMenuName"))       it.menu_sub_menu = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "PluginEntryName"))       it.plugin_entry  = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "PluginCommandItemName")) it.plugin_item   = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "MacroEntryName"))        it.macro_name    = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "BuiltIn"))               it.builtin       = g_strdup(vals[i]);
+        else if (!strcmp(names[i], "ItemNameAs"))            it.display_name  = g_strdup(vals[i]);
         else if (!strcmp(names[i], "id") && !strcmp(vals[i], "0"))
             it.separator = 1;
     }
@@ -199,6 +241,7 @@ static void free_items(GArray *a) {
         g_free(it->folder_name);
         g_free(it->menu_entry);
         g_free(it->menu_item);
+        g_free(it->menu_sub_menu);
         g_free(it->plugin_entry);
         g_free(it->plugin_item);
         g_free(it->macro_name);
@@ -216,11 +259,8 @@ static void on_action_activate(GtkButton *mi, gpointer ud) {
     GtkApplication *app = (GtkApplication *)ud;
     const char *action_name = g_object_get_data(G_OBJECT(mi), "action-name");
     if (!app || !action_name) return;
-    /* The menu model stores prefixed action names ("app.close"); the
-     * application's GActionGroup is keyed by the bare name ("close"), so
-     * strip the "<prefix>." — otherwise the activation silently no-ops
-     * (this is why tab-menu items like "Move to Other Vertical View"
-     * did nothing). */
+    /* GMenu stores prefixed names ("app.close"); the GActionGroup is keyed
+     * by the bare name — strip the prefix or activation no-ops. */
     const char *dot = strchr(action_name, '.');
     g_action_group_activate_action(G_ACTION_GROUP(app),
                                    dot ? dot + 1 : action_name, NULL);
@@ -234,10 +274,7 @@ static void on_builtin_pintab(GtkButton *mi, gpointer ud) {
                                        "tab-pin-toggle", NULL);
 }
 
-/* Tab-colour context items. The tabContextMenu.xml uses readable item
- * names ("Apply Color 1".."Apply Color 5", "Remove Color"); map them to
- * the parameterised "tab-set-color" action (0 = clear, 1..5 = colour).
- * Returns the colour slot, or -1 if `item` is not a colour command. */
+/* Tab-colour items use parameterised "tab-set-color" (0 = clear, 1..5). */
 static int tab_color_slot(const char *item) {
     if (!item) return -1;
     if (!g_ascii_strcasecmp(item, "Remove Color")) return 0;
@@ -255,29 +292,43 @@ static void on_apply_color(GtkButton *mi, gpointer ud) {
                                        g_variant_new_int32(slot));
 }
 
+/* Resolve a display string through the i18n catalog — exactly how macOS
+ * runs FolderName / ItemNameAs / item titles through NppLocalizer before
+ * adding them to the menu. Returns the input unchanged when no catalog
+ * entry matches (safe to apply blindly to plugin/macro/custom labels). */
+static const char *xlate(const char *s) {
+    return (s && *s) ? i18n_translate(s) : (s ? s : "");
+}
+
 /* Append the parsed item list onto `menu`. Returns the number of action
- * items added (0 means the XML produced nothing usable). */
+ * items added (0 → the XML produced nothing usable). */
 static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
     if (!items) return 0;
     int count = 0;
-    /* Track the currently-open folder submenu by name so contiguous items
-     * with the same FolderName collapse into one submenu. */
-    NppMenu *cur_folder = NULL;
-    char     cur_folder_name[128] = "";
+    /* Folder submenus keyed by FolderName (original, untranslated) so
+     * non-contiguous items with the same FolderName still collapse into
+     * one submenu — mirrors macOS's `folders` NSMutableDictionary. */
+    GHashTable *folders = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                                g_free, NULL);
 
     for (guint i = 0; i < items->len; i++) {
         CtxItem *it = &g_array_index(items, CtxItem, i);
 
         if (it->separator) {
-            cur_folder = NULL; cur_folder_name[0] = '\0';
-            npp_menu_add_separator(menu);
+            /* A separator inside a folder belongs to that folder's
+             * submenu (macOS passes it to the folder NSMenu). */
+            NppMenu *target = menu;
+            if (it->folder_name && *it->folder_name) {
+                NppMenu *fld = g_hash_table_lookup(folders, it->folder_name);
+                if (fld) target = fld;
+            }
+            npp_menu_add_separator(target);
             continue;
         }
 
-        /* Determine action + display name. */
         const char *action = NULL;
         const char *label  = NULL;
-        int color_slot = -1;          /* >=0 → an "Apply/Remove Color" item */
+        int color_slot = -1;
 
         if (it->builtin && !g_ascii_strcasecmp(it->builtin, "PinTab")) {
             action = "tab-pin-toggle";
@@ -288,20 +339,21 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
             label  = it->display_name ? it->display_name : it->menu_item;
         }
         else if (it->menu_entry && it->menu_item) {
-            action = lookup_action(it->menu_entry, it->menu_item);
+            action = lookup_action(it->menu_entry, it->menu_sub_menu,
+                                   it->menu_item);
             label  = it->display_name ? it->display_name : it->menu_item;
         }
         else if (it->plugin_entry && it->plugin_item) {
-            /* Plugin commands not wired through GAction yet — skip. */
+            /* Plugin commands aren't surfaced as GActions on Linux yet —
+             * skip (macOS skips the same way when the plugin isn't loaded). */
             continue;
         }
         else if (it->macro_name) {
-            /* Macros not exposed as GActions yet — skip. */
+            /* Named macros not exposed as GActions yet — skip. */
             continue;
         }
 
-        if (!action) continue;
-        if (!label)  continue;
+        if (!action || !label) continue;
 
         gboolean is_pin   = it->builtin &&
                             !g_ascii_strcasecmp(it->builtin, "PinTab");
@@ -310,20 +362,20 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
                      : is_color ? G_CALLBACK(on_apply_color)
                                  : G_CALLBACK(on_action_activate);
 
-        /* Folder grouping. */
+        /* Folder grouping — translate the folder title (macOS xlate)
+         * the first time we instantiate it so the user sees it in their
+         * UI language. */
         NppMenu *target = menu;
         if (it->folder_name && *it->folder_name) {
-            if (strcmp(cur_folder_name, it->folder_name) != 0) {
-                cur_folder = npp_menu_add_submenu(menu, it->folder_name);
-                g_strlcpy(cur_folder_name, it->folder_name,
-                          sizeof(cur_folder_name));
+            NppMenu *fld = g_hash_table_lookup(folders, it->folder_name);
+            if (!fld) {
+                fld = npp_menu_add_submenu(menu, xlate(it->folder_name));
+                g_hash_table_insert(folders, g_strdup(it->folder_name), fld);
             }
-            target = cur_folder;
-        } else {
-            cur_folder = NULL; cur_folder_name[0] = '\0';
+            target = fld;
         }
 
-        GtkWidget *mi = npp_menu_add(target, label, cb, app);
+        GtkWidget *mi = npp_menu_add(target, xlate(label), cb, app);
         g_object_set_data_full(G_OBJECT(mi), "action-name",
                                g_strdup(action), g_free);
         if (is_color)
@@ -331,6 +383,7 @@ static int populate_menu(NppMenu *menu, GArray *items, GtkApplication *app) {
                               GINT_TO_POINTER(color_slot));
         count++;
     }
+    g_hash_table_destroy(folders);
     return count;
 }
 
@@ -354,10 +407,9 @@ int ctxmenu_append_scintilla(NppMenu *menu, GtkApplication *app) {
 }
 
 int ctxmenu_append_tab(NppMenu *menu, GtkApplication *app) {
-    /* macOS-parity: ~/.nextpad++/tabContextMenu_example.xml is an
-     * inactive template — it must NOT be read until the user opts in
-     * by renaming it (dropping `_example`). Read tabContextMenu.xml
-     * only, falling back to the bundled default if neither exists. */
+    /* macOS-parity: tabContextMenu_example.xml is an inactive template —
+     * read only tabContextMenu.xml (user must rename to opt in), falling
+     * back to the bundled default. */
     gchar *user = npp_user_file(NULL, "tabContextMenu.xml");
     GArray *items = NULL;
     if (g_file_test(user, G_FILE_TEST_EXISTS))
