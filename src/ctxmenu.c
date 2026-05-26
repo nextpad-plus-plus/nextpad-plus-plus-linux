@@ -268,28 +268,43 @@ static void new_section_in(CtxMenu *m, FolderInfo *folder) {
 
 /* ============================== Right-click menu CSS ============================== */
 
-/* Install the right-click menu CSS once. Two jobs:
- *  - max-content-height keeps a tall popover from shrinking into a
- *    scrolled view (the editor right-click is taller than the default
- *    cap on small displays).
- *  - min-width/height 0 on the modelbutton's leading icon image stops
- *    GTK from sometimes measuring it with a negative for_size and
- *    spitting "GtkImage with width 0 and height -9" warnings when a
- *    submenu animates in. The image is invisible for items without
- *    icons either way. */
+/* Clamp min-width/height of the modelbutton's leading-icon image to 0
+ * so the size negotiation can't pass a negative for_size — this kills
+ * the "gtk_widget_measure for_size >= -1" / "GtkImage width 0 height
+ * -9" warnings that fire when a submenu animates open and GTK measures
+ * the (invisible-for-our-items) icon placeholder. */
 static void ensure_ctxmenu_css(void) {
     static gboolean installed = FALSE;
     if (installed) return;
     installed = TRUE;
     const char *css =
-        "popover.menu scrolledwindow { max-content-height: 4096px; }"
-        "popover.menu modelbutton > image { min-width: 0; min-height: 0; }"
-        "popover.menu modelbutton > .accelerator { min-width: 0; min-height: 0; }";
+        "popover.menu modelbutton > image { min-width: 0; min-height: 0; }";
     GtkCssProvider *p = gtk_css_provider_new();
     gtk_css_provider_load_from_string(p, css);
     gtk_style_context_add_provider_for_display(gdk_display_get_default(),
         GTK_STYLE_PROVIDER(p), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(p);
+}
+
+/* Walk the popover-menu's widget tree and let every internal
+ * GtkScrolledWindow expand to its natural content height. GTK4 caps it
+ * at a smallish default (a few hundred px) which makes the editor
+ * right-click menu scroll instead of fitting on screen. */
+static void unclamp_scrolled_windows(GtkWidget *root) {
+    if (!root) return;
+    for (GtkWidget *c = gtk_widget_get_first_child(root); c;
+         c = gtk_widget_get_next_sibling(c)) {
+        if (GTK_IS_SCROLLED_WINDOW(c)) {
+            gtk_scrolled_window_set_propagate_natural_height(
+                GTK_SCROLLED_WINDOW(c), TRUE);
+            gtk_scrolled_window_set_max_content_height(
+                GTK_SCROLLED_WINDOW(c), 4096);
+            gtk_scrolled_window_set_policy(
+                GTK_SCROLLED_WINDOW(c),
+                GTK_POLICY_NEVER, GTK_POLICY_NEVER);
+        }
+        unclamp_scrolled_windows(c);
+    }
 }
 
 /* ============================== XML parsing ============================== */
@@ -459,31 +474,29 @@ static void populate(CtxMenu *m, GArray *items) {
         }
 
         if (color_slot >= 0) {
-            /* Apply Color row — the swatch is a Pango-coloured ■ (U+25A0)
-             * inside the GMenu label. Custom-child widgets DON'T work for
-             * items inside a submenu (gtk_popover_menu_add_child only
-             * resolves top-level slots), but a markup label is rendered
-             * by the modelbutton at any depth. */
-            static const char *kColorHex[6] = {
-                "#bdbdbd",   /* 0 Remove: dim grey */
-                "#FCE386",   /* 1 Yellow  */
-                "#A9F08C",   /* 2 Green   */
-                "#7AC9F5",   /* 3 Blue    */
-                "#F5B67A",   /* 4 Orange  */
-                "#F08CF0",   /* 5 Pink    */
+            /* Apply Color row — the swatch is a coloured-square emoji
+             * baked into the plain GMenu label. Custom-child widgets do
+             * not work for items inside a submenu (the GTK4 add_child
+             * API only resolves top-level slots) and use-markup is not
+             * honoured on GMenu items, so the emoji is the path that
+             * actually renders coloured. The five emoji approximate the
+             * macOS palette (Yellow/Green/Blue/Orange/Pink). */
+            static const char *kColorEmoji[6] = {
+                "\xE2\xAC\x9C", /* 0 Remove: ⬜ WHITE LARGE SQUARE  */
+                "\xF0\x9F\x9F\xA8", /* 1 🟨 yellow */
+                "\xF0\x9F\x9F\xA9", /* 2 🟩 green  */
+                "\xF0\x9F\x9F\xA6", /* 3 🟦 blue   */
+                "\xF0\x9F\x9F\xA7", /* 4 🟧 orange */
+                "\xF0\x9F\x9F\xAA", /* 5 🟪 (pink in macOS — closest emoji) */
             };
-            char *escaped = g_markup_escape_text(xlate(label_eng), -1);
-            char *markup  = g_strdup_printf(
-                "<span foreground=\"%s\" size=\"large\">\xE2\x96\xA0</span>  %s",
-                kColorHex[color_slot], escaped);
-            GMenuItem *gi = g_menu_item_new(markup, NULL);
-            g_menu_item_set_attribute(gi, "use-markup", "b", TRUE);
+            char *label = g_strdup_printf("%s  %s", kColorEmoji[color_slot],
+                                          xlate(label_eng));
+            GMenuItem *gi = g_menu_item_new(label, NULL);
             g_menu_item_set_action_and_target(gi, "app.tab-set-color",
                                               "i", color_slot);
             g_menu_append_item(target, gi);
             g_object_unref(gi);
-            g_free(markup);
-            g_free(escaped);
+            g_free(label);
         } else {
             GMenuItem *gi = plain_item(xlate(label_eng), action);
             g_menu_append_item(target, gi);
@@ -516,12 +529,34 @@ static void on_popover_closed(GtkPopover *pop, gpointer ud) {
 
 void ctxmenu_popup_at(CtxMenu *m, GtkWidget *anchor, double x, double y) {
     if (!m || !anchor) { ctxmenu_free(m); return; }
+
+    /* If the click target is a non-standard custom widget (Scintilla's
+     * editor view in particular), its input handling can swallow the
+     * outside-click that GtkPopover relies on for autohide — meaning
+     * the menu never closes. Walk up one level to the standard GTK
+     * container that wraps it (a GtkScrolledWindow for the editor, a
+     * GtkBox for tab labels) and parent the popover there; translate
+     * the click coordinates into the new parent's space. */
+    GtkWidget *parent = gtk_widget_get_parent(anchor);
+    if (parent) {
+        graphene_point_t in  = GRAPHENE_POINT_INIT((float)x, (float)y);
+        graphene_point_t out = GRAPHENE_POINT_INIT(0, 0);
+        if (gtk_widget_compute_point(anchor, parent, &in, &out)) {
+            anchor = parent;
+            x = out.x;
+            y = out.y;
+        }
+    }
+
     ensure_ctxmenu_css();
     GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(m->root));
     gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+    gtk_popover_set_autohide(GTK_POPOVER(popover), TRUE);
     /* Hover-to-open submenus (the macOS NSMenu behaviour). */
     gtk_popover_menu_set_flags(GTK_POPOVER_MENU(popover),
                                GTK_POPOVER_MENU_NESTED);
+    /* Make the popover grow to fit all items — no scrollbar. */
+    unclamp_scrolled_windows(popover);
     /* Attach registered custom children. gtk_popover_menu_add_child only
      * resolves slots at the top level of the menu (not items inside a
      * submenu), so colour swatches use Pango markup in the label instead;
