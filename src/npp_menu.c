@@ -42,9 +42,14 @@ static void ensure_npp_menu_css(void) {
     static gboolean installed = FALSE;
     if (installed) return;
     installed = TRUE;
-    /* Tightened to match Adwaita's GtkPopoverMenu modelbutton metrics
-     * (min-height: 26px; padding: 3px 11px) so right-click rows are the
-     * same height as the App menubar's rows. */
+    /* - Adwaita modelbutton metrics (min-height: 26 / padding: 3 11)
+     *   so right-click rows match the App menubar's rows.
+     * - .npp-submenu-arrow renders the pan-end-symbolic icon as a CSS
+     *   background on a plain GtkBox — avoids the GtkImage measure
+     *   assertion that animating popovers trigger when measuring the
+     *   icon widget.
+     * - menubutton's internal placeholder image gets min-size: 0 as a
+     *   belt-and-braces clamp (it still exists even after set_child). */
     const char *css =
         ".npp-popup-menu { padding: 0; }"
         ".npp-popup-menu > button,"
@@ -57,6 +62,14 @@ static void ensure_npp_menu_css(void) {
         ".npp-popup-menu menubutton image {"
         "  min-width: 0;"
         "  min-height: 0;"
+        "}"
+        ".npp-submenu-arrow {"
+        "  background-image: -gtk-icontheme(\"pan-end-symbolic\");"
+        "  background-repeat: no-repeat;"
+        "  background-position: center;"
+        "  background-size: contain;"
+        "  -gtk-icon-style: symbolic;"
+        "  opacity: 0.6;"
         "}";
     GtkCssProvider *p = gtk_css_provider_new();
     gtk_css_provider_load_from_string(p, css);
@@ -117,21 +130,24 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
 
     GtkWidget *mb = gtk_menu_button_new();
     gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(mb), FALSE);
-    /* Custom child: [label hexpand][pan-end-symbolic] — left-aligned
-     * label + the same standard submenu-disclosure icon GtkPopoverMenu
-     * modelbuttons use in the menubar. set_direction(RIGHT) positions
-     * the submenu popover side-by-side (macOS cascade). Explicit pixel
-     * size on the GtkImage keeps the GTK measure code from passing a
-     * negative for_size that gtk_menu_button_set_always_show_arrow(TRUE)
-     * was hitting before. */
+    /* Custom child: [label hexpand][pan-end-symbolic via CSS background].
+     * Rendering the arrow with a CSS background-image on a plain GtkBox
+     * (instead of a GtkImage) keeps the icon visually identical to the
+     * menubar's modelbutton submenu arrow while eliminating the GtkImage
+     * measure assertion ("for_size >= -1 failed" / "width 0 height -9")
+     * that fires when a submenu animates open — that assertion lives in
+     * gtk_widget_measure() on GtkImage and cannot be suppressed from CSS
+     * once the widget exists. set_direction(RIGHT) positions the popover
+     * side-by-side (macOS cascade). */
     gtk_menu_button_set_direction(GTK_MENU_BUTTON(mb), GTK_ARROW_RIGHT);
     GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget *lab  = gtk_label_new(label);
     gtk_label_set_xalign(GTK_LABEL(lab), 0.0);
     gtk_widget_set_hexpand(lab, TRUE);
-    GtkWidget *arr  = gtk_image_new_from_icon_name("pan-end-symbolic");
-    gtk_image_set_pixel_size(GTK_IMAGE(arr), 16);
-    gtk_widget_add_css_class(arr, "dim-label");
+    GtkWidget *arr  = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_size_request(arr, 16, 16);
+    gtk_widget_set_valign(arr, GTK_ALIGN_CENTER);
+    gtk_widget_add_css_class(arr, "npp-submenu-arrow");
     gtk_box_append(GTK_BOX(hbox), lab);
     gtk_box_append(GTK_BOX(hbox), arr);
     gtk_menu_button_set_child(GTK_MENU_BUTTON(mb), hbox);
