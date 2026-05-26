@@ -44,24 +44,23 @@ static void ensure_npp_menu_css(void) {
     installed = TRUE;
     /* - Adwaita modelbutton metrics (min-height: 26 / padding: 3 11)
      *   so right-click rows match the App menubar's rows.
+     * - :hover/:focus/:active mirror Adwaita's modelbutton state
+     *   highlighting (subtle alpha tint over the row).
      * - .npp-submenu-arrow renders the pan-end-symbolic icon as a CSS
-     *   background on a plain GtkBox — avoids the GtkImage measure
-     *   assertion that animating popovers trigger when measuring the
-     *   icon widget.
-     * - menubutton's internal placeholder image gets min-size: 0 as a
-     *   belt-and-braces clamp (it still exists even after set_child). */
+     *   background — no GtkImage widget, so no measure assertion. */
     const char *css =
         ".npp-popup-menu { padding: 0; }"
-        ".npp-popup-menu > button,"
-        ".npp-popup-menu > menubutton,"
-        ".npp-popup-menu > menubutton > button {"
+        ".npp-popup-menu > button {"
         "  padding: 3px 11px;"
         "  min-height: 26px;"
+        "  border-radius: 0;"
         "}"
-        ".npp-popup-menu > menubutton { padding: 0; }"
-        ".npp-popup-menu menubutton image {"
-        "  min-width: 0;"
-        "  min-height: 0;"
+        ".npp-popup-menu > button:hover,"
+        ".npp-popup-menu > button:focus {"
+        "  background: alpha(currentColor, 0.08);"
+        "}"
+        ".npp-popup-menu > button:active {"
+        "  background: alpha(currentColor, 0.14);"
         "}"
         ".npp-submenu-arrow {"
         "  background-image: -gtk-icontheme(\"pan-end-symbolic\");"
@@ -128,18 +127,21 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     sub->root         = m->root;
     m->root->subs     = g_slist_prepend(m->root->subs, sub);
 
-    GtkWidget *mb = gtk_menu_button_new();
-    gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(mb), FALSE);
-    /* Custom child: [label hexpand][pan-end-symbolic via CSS background].
-     * Rendering the arrow with a CSS background-image on a plain GtkBox
-     * (instead of a GtkImage) keeps the icon visually identical to the
-     * menubar's modelbutton submenu arrow while eliminating the GtkImage
-     * measure assertion ("for_size >= -1 failed" / "width 0 height -9")
-     * that fires when a submenu animates open — that assertion lives in
-     * gtk_widget_measure() on GtkImage and cannot be suppressed from CSS
-     * once the widget exists. set_direction(RIGHT) positions the popover
-     * side-by-side (macOS cascade). */
-    gtk_menu_button_set_direction(GTK_MENU_BUTTON(mb), GTK_ARROW_RIGHT);
+    /* Plain GtkButton — not GtkMenuButton — because GtkMenuButton
+     * instantiates an internal GtkImage for its arrow placeholder in
+     * init() and keeps a reference to it even after
+     * gtk_menu_button_set_child() unparents it. The popover-animation
+     * measure pass on submenu open still hits that lingering GtkImage
+     * with a negative for_size and trips the
+     * 'gtk_widget_measure: for_size >= -1' assertion. A plain GtkButton
+     * has no such placeholder.
+     *
+     * Custom child layout: [label hexpand][pan-end-symbolic via CSS
+     * background] — visually identical to the menubar's modelbutton
+     * submenu rows, with no GtkImage anywhere in the tree. */
+    GtkWidget *btn = gtk_button_new();
+    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
+
     GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget *lab  = gtk_label_new(label);
     gtk_label_set_xalign(GTK_LABEL(lab), 0.0);
@@ -150,11 +152,21 @@ NppMenu *npp_menu_add_submenu(NppMenu *m, const char *label)
     gtk_widget_add_css_class(arr, "npp-submenu-arrow");
     gtk_box_append(GTK_BOX(hbox), lab);
     gtk_box_append(GTK_BOX(hbox), arr);
-    gtk_menu_button_set_child(GTK_MENU_BUTTON(mb), hbox);
-    /* The menu button takes ownership of the submenu popover, so it is
-     * freed transitively when the root popover tree is torn down. */
-    gtk_menu_button_set_popover(GTK_MENU_BUTTON(mb), sub->popover);
-    gtk_box_append(GTK_BOX(m->box), mb);
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+
+    /* Parent the submenu popover to the button (same lifecycle the old
+     * GtkMenuButton path arranged via set_popover). Position to the
+     * right so submenus cascade like macOS NSMenu. */
+    gtk_widget_set_parent(sub->popover, btn);
+    gtk_popover_set_position(GTK_POPOVER(sub->popover), GTK_POS_RIGHT);
+
+    /* Click opens the submenu. The submenu's items popdown the whole
+     * root popover via npp_menu_add's connect_swapped, so the parent
+     * menu closes too once an item is chosen. */
+    g_signal_connect_swapped(btn, "clicked",
+                             G_CALLBACK(gtk_popover_popup), sub->popover);
+
+    gtk_box_append(GTK_BOX(m->box), btn);
     return sub;
 }
 
