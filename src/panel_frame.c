@@ -326,6 +326,42 @@ static gboolean pf_on_key(GtkEventControllerKey *ctl, guint keyval,
 /* Construction                                                           */
 /* ─────────────────────────────────────────────────────────────────────── */
 
+/* Neutral selection-highlight CSS — installed once at display level so
+ * every panel that goes through panel_frame_new() gets it. Targets the
+ * row-selection CSS nodes of the four list-style widgets actually used
+ * by side panels: GtkListView (modern; the doc-list panel + future
+ * panels), GtkColumnView's inner listview, GtkTreeView (deprecated but
+ * still used by funclist / workspace / project / charpanel / gitpanel),
+ * and GtkListBox (cliphistory). Search Results is the deliberate
+ * exception — its content widget is a Scintilla view, not a list, and
+ * Scintilla draws its own selection via SCI_STYLESETBACK, so no CSS
+ * rule here applies to it. */
+static void install_panel_selection_css_once(void)
+{
+    static gboolean done = FALSE;
+    if (done) return;
+    done = TRUE;
+    const char *css =
+        /* GtkListView / GtkColumnView */
+        ".npp-panel-content listview > row:selected,"
+        ".npp-panel-content listview > row:selected cell,"
+        /* GtkTreeView (gtk_tree_view_new_with_model). The selection
+         * paints on the .view child node when a row is :selected. */
+        ".npp-panel-content treeview.view:selected,"
+        ".npp-panel-content treeview > cell:selected,"
+        /* GtkListBox */
+        ".npp-panel-content list > row:selected {"
+        "  background-color: #dcdcdc;"
+        "  color: inherit;"
+        "}";
+    GtkCssProvider *p = gtk_css_provider_new();
+    gtk_css_provider_load_from_string(p, css);
+    gtk_style_context_add_provider_for_display(gdk_display_get_default(),
+                                               GTK_STYLE_PROVIDER(p),
+                                               GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(p);
+}
+
 GtkWidget *panel_frame_new(const char *name,
                            const char *title,
                            GtkWidget   *content,
@@ -333,6 +369,7 @@ GtkWidget *panel_frame_new(const char *name,
                            gpointer     user)
 {
     g_return_val_if_fail(content != NULL, NULL);
+    install_panel_selection_css_once();
 
     GtkWidget *frame = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
