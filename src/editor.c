@@ -617,7 +617,8 @@ static gboolean tab_dark_mode(void)
     return dark;
 }
 
-static void set_tab_status_icon(GtkWidget *img, gboolean modified)
+void editor_apply_save_status_icon(GtkWidget *img, gboolean modified,
+                                   int pixel_size)
 {
     gboolean dark = tab_dark_mode();
     static GdkTexture *cache[2][2];   /* [dark][modified] */
@@ -632,7 +633,14 @@ static void set_tab_status_icon(GtkWidget *img, gboolean modified)
     }
     if (*slot)
         gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(*slot));
-    gtk_image_set_pixel_size(GTK_IMAGE(img), TAB_STATUS_ICON_PX);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), pixel_size);
+}
+
+/* Tab-bar convenience wrapper — fixes the size at TAB_STATUS_ICON_PX so
+ * existing call sites don't have to repeat it. */
+static void set_tab_status_icon(GtkWidget *img, gboolean modified)
+{
+    editor_apply_save_status_icon(img, modified, TAB_STATUS_ICON_PX);
 }
 
 /* ---- Tab pin icon ------------------------------------------------- *
@@ -882,6 +890,10 @@ void editor_refresh_tab_chrome(void)
             }
         }
     }
+    /* The Document List panel's floppy icons are loaded from the same
+     * light/dark PNG set; re-run its bind path so each row picks up the
+     * new-theme texture too. */
+    main_doclist_refresh();
 }
 
 static void update_window_title(void)
@@ -926,11 +938,15 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         int page = sci_page_num(sci);
         refresh_tab_label(page);
         update_window_title();
+        /* The Document List panel mirrors the tab's saved/modified
+         * floppy — refresh it from the same trigger. */
+        main_doclist_refresh();
     } else if (code == SCN_SAVEPOINTLEFT) {
         doc->modified = TRUE;
         int page = sci_page_num(sci);
         refresh_tab_label(page);
         update_window_title();
+        main_doclist_refresh();
     } else if (code == SCN_UPDATEUI) {
         /* only update statusbar for the currently visible tab */
         int cur = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook));

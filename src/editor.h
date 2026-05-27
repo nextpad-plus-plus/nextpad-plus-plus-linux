@@ -89,6 +89,14 @@ gint       editor_tab_color(GtkWidget *sci);
 void       editor_set_tab_color(GtkWidget *sci, int slot);
 void       editor_apply_tab_color(GtkWidget *sci);
 
+/* Set img's contents to the same toolbar floppy icon the tab strip uses
+ * (resources/icons/{light|dark}/toolbar/regular/save_off{,_red}.png).
+ * `modified` toggles between the saved and red-modified variants.
+ * `pixel_size` lets the caller pick the rendered size (tabs use 11 px;
+ * the doc-list panel uses 14 px to match macOS NSTableView rows). */
+void       editor_apply_save_status_icon(GtkWidget *img, gboolean modified,
+                                         int pixel_size);
+
 /* Hex string ("#RRGGBB") for tab colour slot 1..5; NULL for 0/out-of-range.
  * Single source of truth for the palette — main.c's tab-stripe CSS and
  * the colour-swatch menu labels both read from here. */
