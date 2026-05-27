@@ -376,6 +376,19 @@ static void install_doclist_css_once(void)
         "}"
         "columnview.doclist-cv > listview > row label {"
         "  font-size: smaller;"
+        "}"
+        /* Selected-row highlight — neutral light gray, not the theme's
+         * accent-orange. Targets both the row and its descendant cells
+         * so the colour fills the whole horizontal stripe (Adwaita
+         * paints the selection on the row, but some themes paint on
+         * cell). color: inherit keeps the row text at the theme's
+         * normal foreground (otherwise selected rows would render the
+         * gray text macOS uses for selected, which doesn't read on
+         * #dcdcdc). */
+        "columnview.doclist-cv > listview > row:selected,"
+        "columnview.doclist-cv > listview > row:selected cell {"
+        "  background-color: #dcdcdc;"
+        "  color: inherit;"
         "}";
     GtkCssProvider *p = gtk_css_provider_new();
     gtk_css_provider_load_from_string(p, css);
