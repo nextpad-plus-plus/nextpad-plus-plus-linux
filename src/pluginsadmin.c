@@ -185,28 +185,8 @@ static void on_close_clicked(GtkButton *b, gpointer user);
  * Output is a tree of JNode objects; freed by jnode_free.
  * ═══════════════════════════════════════════════════════════════════════ */
 
-typedef enum {
-    J_NULL, J_BOOL, J_NUM, J_STR, J_ARR, J_OBJ
-} JKind;
-
-typedef struct JNode JNode;
-typedef struct {
-    char  *key;       /* heap-owned */
-    JNode *val;
-} JPair;
-
-struct JNode {
-    JKind kind;
-    union {
-        gboolean    b;
-        double      n;
-        char       *s;     /* heap-owned                                  */
-        GPtrArray  *arr;   /* JNode*                                      */
-        GPtrArray  *obj;   /* JPair*                                      */
-    } u;
-};
-
-static void jnode_free(JNode *n);
+/* JNode/JPair/JKind live in pluginsadmin.h (shared with udladmin.c). */
+void jnode_free(JNode *n);
 
 static void jpair_free(gpointer p) {
     JPair *pp = p;
@@ -216,7 +196,7 @@ static void jpair_free(gpointer p) {
     g_free(pp);
 }
 
-static void jnode_free(JNode *n) {
+void jnode_free(JNode *n) {
     if (!n) return;
     switch (n->kind) {
         case J_STR: g_free(n->u.s); break;
@@ -384,7 +364,7 @@ static JNode *j_parse_value(JParser *jp) {
     return NULL;
 }
 
-static JNode *json_parse(const char *src, gsize len) {
+JNode *json_parse(const char *src, gsize len) {
     JParser jp = { src, src + len };
     j_skip_ws(&jp);
     JNode *n = j_parse_value(&jp);
@@ -392,7 +372,7 @@ static JNode *json_parse(const char *src, gsize len) {
 }
 
 /* Helpers: look up keyed fields in an object node. */
-static JNode *jobj_get(JNode *obj, const char *key) {
+JNode *jobj_get(JNode *obj, const char *key) {
     if (!obj || obj->kind != J_OBJ) return NULL;
     for (guint i = 0; i < obj->u.obj->len; i++) {
         JPair *pr = obj->u.obj->pdata[i];
@@ -401,7 +381,7 @@ static JNode *jobj_get(JNode *obj, const char *key) {
     return NULL;
 }
 
-static const char *jobj_str(JNode *obj, const char *key) {
+const char *jobj_str(JNode *obj, const char *key) {
     JNode *v = jobj_get(obj, key);
     return (v && v->kind == J_STR) ? v->u.s : NULL;
 }
@@ -410,7 +390,7 @@ static const char *jobj_str(JNode *obj, const char *key) {
  * Filesystem helpers
  * ═══════════════════════════════════════════════════════════════════════ */
 
-static char *sha256_of_file(const char *path) {
+char *sha256_of_file(const char *path) {
     gchar  *data = NULL;
     gsize   len  = 0;
     GError *err  = NULL;
@@ -466,7 +446,7 @@ static gboolean rm_rf(const char *path) {
 
 /* Shell out to curl. Writes the response body to `dest_path`. Returns
  * TRUE on HTTP 200; false otherwise (including missing curl). */
-static gboolean http_get_to_file(const char *url, const char *dest_path) {
+gboolean http_get_to_file(const char *url, const char *dest_path) {
     const char *argv[] = {
         "curl", "-L", "-fsS",
         "--connect-timeout", "10",

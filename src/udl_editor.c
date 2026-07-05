@@ -561,7 +561,7 @@ static gboolean save_udl(UDLEditor *ui, const char *name) {
     if (!ok && err) g_error_free(err);
     g_free(xml); g_free(path); g_free(dir); g_free(fname); g_free(safe);
     if (ok) {
-        udl_load_all();
+        udl_reload();
         populate_picker(GTK_COMBO_BOX_TEXT(ui->lang_picker));
     }
     return ok;
@@ -630,7 +630,7 @@ static void on_remove_clicked(GtkButton *b, gpointer ud) {
     gchar *p = g_build_filename(npp_user_file("userDefineLangs", ""), f, NULL);
     g_unlink(p);
     g_free(safe); g_free(f); g_free(p);
-    udl_load_all();
+    udl_reload();
     populate_picker(GTK_COMBO_BOX_TEXT(ui->lang_picker));
     clear_all_fields(ui);
 }

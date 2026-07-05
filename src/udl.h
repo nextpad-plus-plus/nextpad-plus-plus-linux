@@ -13,6 +13,9 @@ extern "C" {
  * ~/.config/notetux/userDefineLangs/. Safe to call multiple times (no-op after first). */
 void udl_load_all(void);
 
+/* Force a re-scan (after install / remove / editor save). */
+void udl_reload(void);
+
 /* Return number of loaded UDL definitions. */
 int  udl_count(void);
 

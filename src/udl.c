@@ -480,6 +480,15 @@ static void load_dir(const char *dir_path)
 /* Public API                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Drop the parsed set and re-scan both dirs — required after an
+ * install/remove/edit; udl_load_all() alone is lazy and would keep the
+ * stale set (this silently broke udl_editor's post-save reload too). */
+void udl_reload(void)
+{
+    if (s_defs) { g_ptr_array_free(s_defs, TRUE); s_defs = NULL; }
+    udl_load_all();
+}
+
 void udl_load_all(void)
 {
     if (s_defs) return;

@@ -51,6 +51,7 @@
 #include "run.h"
 #include "plugin.h"
 #include "pluginsadmin.h"
+#include "udladmin.h"
 #include "project.h"
 #include "spell.h"
 #include "changehistory.h"
@@ -577,6 +578,10 @@ static void action_style_editor(GSimpleAction *a, GVariant *p, gpointer u) {
 static void action_column_editor(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
     columneditor_show(GTK_WIDGET(g_window));
+}
+static void action_udl_admin(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a; (void)p; (void)u;
+    udladmin_show(g_window ? GTK_WINDOW(g_window) : NULL);
 }
 static void action_plugins_admin(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
@@ -4831,6 +4836,7 @@ static const GActionEntry kAppActions[] = {
     { "style-editor",     action_style_editor,     NULL, NULL, NULL },
     { "theme-mode",       action_theme_mode,       "s",  NULL, NULL },
     { "column-editor",    action_column_editor,    NULL, NULL, NULL },
+    { "udl-admin",          action_udl_admin,       NULL, NULL, NULL },
     { "plugins-admin",        action_plugins_admin,       NULL, NULL, NULL },
     { "open-plugins-folder",  action_open_plugins_folder, NULL, NULL, NULL },
     /* G11.3 View → Show Symbol / Zoom */
@@ -5204,6 +5210,21 @@ void main_retranslate_menu(void)
     GApplication *app = g_application_get_default();
     if (app) gtk_application_set_menubar(GTK_APPLICATION(app), t);
     g_object_unref(t);
+}
+
+static GMenuModel *build_menu_model(void);
+
+/* Rebuild the whole menubar from scratch — needed when its dynamic
+ * content changes at runtime (UDL install/remove: the Language menu
+ * lists loaded UDLs). Re-runs build_menu_model, then re-applies the
+ * active UI translation. */
+void main_rebuild_menubar(void)
+{
+    GMenuModel *fresh = build_menu_model();
+    if (!fresh) return;
+    if (g_menu_english) g_object_unref(g_menu_english);
+    g_menu_english = fresh;
+    main_retranslate_menu();
 }
 
 /* The Language submenu's model, shared with the status bar's
@@ -6027,6 +6048,8 @@ static GMenuModel *build_menu_model(void)
         g_menu_append(udl, "Nextpad++ User Defined Languages Collection", "app.udl-collection");
         g_menu_append_submenu(lang, "User Defined Language", G_MENU_MODEL(udl));
         g_object_unref(udl);
+        /* Top-level Admin entry, no separator (macOS 426b88c/ad33623). */
+        g_menu_append(lang, "User Defined Language Admin…", "app.udl-admin");
     }
     /* #4 — every loaded User Defined Language as a selectable, radio-checked
      * Language-menu entry (macOS lists them after the UDL submenu, from
