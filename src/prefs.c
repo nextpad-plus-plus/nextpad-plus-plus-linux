@@ -1468,7 +1468,8 @@ static GtkWidget *page_backup(void)
     g_signal_connect(s_backup_interval_spin, "value-changed",
                      G_CALLBACK(on_backup_interval), NULL);
 
-    GtkWidget *info = gtk_label_new("Backup files are written to ~/" APP_CONFIG_DIR "/backup/\n"
+    GtkWidget *info = gtk_label_new("Backup files are written to "
+                                    "~/.local/share/nextpad++/backup/\n"
                                     "and removed when the file is saved or closed.");
     gtk_widget_set_halign(info, GTK_ALIGN_START);
     gtk_widget_set_margin_top(info, 8);

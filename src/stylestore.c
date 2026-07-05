@@ -6,6 +6,7 @@
  * GMarkupParser. Config override at $HOME/" APP_CONFIG_DIR "/stylers.xml.
  */
 #include "stylestore.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "sci_c.h"
@@ -351,14 +352,12 @@ void stylestore_init(const char *xml_path)
     parse_file(model_path);
     fix_default_font();
 
-    /* Overlay user overrides from $HOME/APP_CONFIG_DIR/stylers.xml */
-    const char *home = g_get_home_dir();
-    if (home) {
-        char user_path[512];
-        snprintf(user_path, sizeof(user_path),
-                 "%s/" APP_CONFIG_DIR "/stylers.xml", home);
+    /* Overlay user overrides from the user data dir's stylers.xml */
+    {
+        gchar *user_path = npp_user_file(NULL, "stylers.xml");
         if (g_file_test(user_path, G_FILE_TEST_EXISTS))
             parse_file(user_path);
+        g_free(user_path);
     }
 }
 
@@ -385,15 +384,12 @@ void stylestore_load_theme(const char *path)
 
 void stylestore_save_user(void)
 {
-    const char *home = g_get_home_dir();
-    if (!home) return;
-
-    char dir[512];
-    snprintf(dir, sizeof(dir), "%s/" APP_CONFIG_DIR, home);
+    gchar *dir = npp_user_dir();
     g_mkdir_with_parents(dir, 0755);
 
-    char path[512];
+    char path[1024];
     snprintf(path, sizeof(path), "%s/stylers.xml", dir);
+    g_free(dir);
 
     FILE *f = fopen(path, "w");
     if (!f) { g_warning("stylestore: cannot write %s", path); return; }

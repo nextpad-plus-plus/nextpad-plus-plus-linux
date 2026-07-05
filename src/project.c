@@ -44,6 +44,7 @@
  * project_work_space_dirty (macOS ProjectPanel.mm:1075-1076).
  */
 #include "project.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "npp_menu.h"
 #include "branding.h"
@@ -132,7 +133,7 @@ static void load_icons(void)
 
 static char *config_path(const char *name)
 {
-    return g_build_filename(g_get_home_dir(), APP_CONFIG_DIR, name, NULL);
+    return npp_user_file(NULL, name);
 }
 
 static Workspace *cur(void) { return &s_ws[s_active]; }

@@ -1,4 +1,5 @@
 #include "macro.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "editor.h"
@@ -158,8 +159,7 @@ static int        s_named_count = 0;
 
 static char *macros_path(void)
 {
-    return g_build_filename(g_get_home_dir(), APP_CONFIG_DIR,
-                            "macros.xml", NULL);
+    return npp_user_file(NULL, "macros.xml");
 }
 
 static void named_macros_save(void)

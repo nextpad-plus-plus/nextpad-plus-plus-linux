@@ -1,4 +1,5 @@
 #include "plugin.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "editor.h"
@@ -141,11 +142,10 @@ void plugin_refresh_handles(void)
 void plugin_load_all(void)
 {
     /* User plugins */
-    char user_dir[1024];
-    snprintf(user_dir, sizeof(user_dir),
-             "%s/" APP_CONFIG_DIR "/plugins", g_get_home_dir());
+    gchar *user_dir = npp_user_subdir("plugins");
     g_mkdir_with_parents(user_dir, 0755);
     scan_dir(user_dir);
+    g_free(user_dir);
 
     /* System-wide plugins (optional) */
     scan_dir("/usr/lib/nextpad-plus-plus/plugins");
@@ -323,13 +323,21 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_GETNPPSETTINGSDIRPATH: {
         char *buf = (char *)(intptr_t)lParam;
         if (!buf) return 0L;
-        snprintf(buf, 2048, "%s/%s", g_get_home_dir(), APP_CONFIG_DIR);
+        {
+            gchar *p = npp_user_dir();
+            g_strlcpy(buf, p, 2048);
+            g_free(p);
+        }
         return 1L;
     }
     case NPPM_GETPLUGINSCONFIGDIR: {
         char *buf = (char *)(intptr_t)lParam;
         if (!buf) return 0L;
-        snprintf(buf, 2048, "%s/%s/plugins", g_get_home_dir(), APP_CONFIG_DIR);
+        {
+            gchar *p = npp_user_subdir("plugins");
+            g_strlcpy(buf, p, 2048);
+            g_free(p);
+        }
         return 1L;
     }
     case NPPM_GETPLUGINHOMEPATH: {
@@ -337,7 +345,11 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         if (!buf) return 0L;
         /* Plugins live alongside their .so under .../plugins/<Name>/. We don't
          * track which plugin is calling, so return the parent dir. */
-        snprintf(buf, 2048, "%s/%s/plugins", g_get_home_dir(), APP_CONFIG_DIR);
+        {
+            gchar *p = npp_user_subdir("plugins");
+            g_strlcpy(buf, p, 2048);
+            g_free(p);
+        }
         return 1L;
     }
     case NPPM_GETAPPDATAPLUGINSALLOWED:

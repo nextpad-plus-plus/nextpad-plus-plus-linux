@@ -1,4 +1,5 @@
 #include "run.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "npp_menu.h"
 #include "branding.h"
@@ -21,8 +22,7 @@ static int      s_cmd_count = 0;
 
 static char *cmds_path(void)
 {
-    return g_build_filename(g_get_home_dir(), APP_CONFIG_DIR,
-                            "commands.xml", NULL);
+    return npp_user_file(NULL, "commands.xml");
 }
 
 static void cmds_save(void)

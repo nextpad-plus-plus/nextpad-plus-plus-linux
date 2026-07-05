@@ -3,6 +3,7 @@
  * Algorithm from notetux-plus-plus/linux/src/main.c (GPL-3, Andrea Coi).
  */
 #include "recent.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 
@@ -14,8 +15,7 @@ static GPtrArray *s_recent = NULL;
 
 static char *recent_file_path(void)
 {
-    return g_build_filename(g_get_home_dir(), APP_CONFIG_DIR,
-                            "recentfiles.txt", NULL);
+    return npp_user_file(NULL, "recentfiles.txt");
 }
 
 static void ensure_init(void)
@@ -44,7 +44,7 @@ void recent_save(void)
 {
     ensure_init();
     /* Create the config dir if needed. */
-    char *dir = g_build_filename(g_get_home_dir(), APP_CONFIG_DIR, NULL);
+    char *dir = npp_user_dir();
     g_mkdir_with_parents(dir, 0755);
     g_free(dir);
 

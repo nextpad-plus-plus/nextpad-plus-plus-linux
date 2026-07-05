@@ -31,6 +31,7 @@
  * of the backup subsystem.
  */
 #include "session.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "editor.h"
@@ -70,10 +71,12 @@ void session_stash_geometry(int width, int height, int x, int y,
 
 static const char *session_path(void)
 {
-    static char s_path[512];
-    if (!s_path[0])
-        snprintf(s_path, sizeof(s_path), "%s/" APP_CONFIG_DIR "/session.xml",
-                 g_get_home_dir());
+    static char s_path[1024];
+    if (!s_path[0]) {
+        gchar *p = npp_user_file(NULL, "session.xml");
+        g_strlcpy(s_path, p, sizeof(s_path));
+        g_free(p);
+    }
     return s_path;
 }
 
@@ -264,7 +267,7 @@ void session_save(void)
         "\t</Session>\n"
         "</NotepadPlus>\n");
 
-    gchar *dir = g_build_filename(g_get_home_dir(), APP_CONFIG_DIR, NULL);
+    gchar *dir = npp_user_dir();
     g_mkdir_with_parents(dir, 0755);
     g_free(dir);
 
@@ -387,6 +390,25 @@ static void xml_start(GMarkupParseContext *ctx, const gchar *el,
 
 static GMarkupParser s_parser = { xml_start, NULL, NULL, NULL, NULL };
 
+/* GAP-59 (macOS issue #215): a session written before the config-dir
+ * migration references snapshots under ~/.nextpad++/backup/. When the
+ * recorded path no longer exists, look for a file with the same
+ * basename in the CURRENT backup dir — the migration moved it there.
+ * Returns a path that exists, or NULL. Caller frees. */
+static gchar *resolve_backup_path(const char *recorded)
+{
+    if (!recorded || !*recorded) return NULL;
+    if (g_file_test(recorded, G_FILE_TEST_EXISTS))
+        return g_strdup(recorded);
+    gchar *base = g_path_get_basename(recorded);
+    gchar *cand = npp_user_file("backup", base);
+    g_free(base);
+    if (g_file_test(cand, G_FILE_TEST_EXISTS))
+        return cand;
+    g_free(cand);
+    return NULL;
+}
+
 void session_restore(void)
 {
     gchar *xml = NULL;
@@ -414,12 +436,16 @@ void session_restore(void)
         if (untitled) {
             /* Untitled tab restored from its quit snapshot. The backup
              * is REQUIRED (parser enforced it) — without content there
-             * is nothing to restore. */
+             * is nothing to restore. resolve_backup_path remaps paths
+             * recorded before the config-dir migration (GAP-59). */
             gchar *content = NULL;
-            if (!g_file_get_contents(e->backup_filepath, &content, NULL, NULL)) {
+            gchar *bp = resolve_backup_path(e->backup_filepath);
+            if (!bp || !g_file_get_contents(bp, &content, NULL, NULL)) {
+                g_free(bp);
                 g_free(e->bookmarks); g_free(e->folds);
                 continue;
             }
+            g_free(bp);
             editor_new_doc();
             NppDoc *nd = editor_current_doc();
             if (nd) {
@@ -446,9 +472,13 @@ void session_restore(void)
              * calls backup_clean() and deletes the snapshot from disk.
              * (Verified live — reading after open finds the file gone.) */
             gchar *backup_content = NULL;
-            if (e->backup_filepath[0])
-                g_file_get_contents(e->backup_filepath, &backup_content,
-                                    NULL, NULL);
+            if (e->backup_filepath[0]) {
+                gchar *bp = resolve_backup_path(e->backup_filepath);
+                if (bp) {
+                    g_file_get_contents(bp, &backup_content, NULL, NULL);
+                    g_free(bp);
+                }
+            }
             if (!editor_open_path(e->filepath)) {
                 g_free(backup_content);
                 g_free(e->bookmarks); g_free(e->folds);

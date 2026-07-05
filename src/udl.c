@@ -3,6 +3,7 @@
  * then applies the "user" Lexilla lexer with the proper properties and keyword lists.
  */
 #include "udl.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "sci_c.h"
@@ -488,10 +489,9 @@ void udl_load_all(void)
     snprintf(bundled_dir, sizeof(bundled_dir), "%s/userDefineLangs", RESOURCES_DIR);
     load_dir(bundled_dir);
 
-    const char *home = g_get_home_dir();
-    char user_dir[512];
-    snprintf(user_dir, sizeof(user_dir), "%s/" APP_CONFIG_DIR "/userDefineLangs", home);
+    gchar *user_dir = npp_user_subdir("userDefineLangs");
     load_dir(user_dir);
+    g_free(user_dir);
 }
 
 int udl_count(void)

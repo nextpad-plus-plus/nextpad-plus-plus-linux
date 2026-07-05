@@ -17,6 +17,7 @@
  */
 
 #include "shortcutmap.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 
@@ -474,8 +475,7 @@ static void xml_end(GMarkupParseContext *ctx, const gchar *name,
 }
 
 static gchar *shortcuts_xml_path(void) {
-    return g_build_filename(g_get_home_dir(), APP_CONFIG_DIR,
-                            "shortcuts.xml", NULL);
+    return npp_user_file(NULL, "shortcuts.xml");
 }
 
 static void load_shortcuts_xml(XmlCtx *x) {
@@ -986,7 +986,7 @@ static void xml_append_shortcut_attrs(GString *out, const ShortcutRow *r) {
 }
 
 static void save_shortcuts_xml(void) {
-    gchar *dir = g_build_filename(g_get_home_dir(), APP_CONFIG_DIR, NULL);
+    gchar *dir = npp_user_dir();
     g_mkdir_with_parents(dir, 0700);
     g_free(dir);
     gchar *path = shortcuts_xml_path();

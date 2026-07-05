@@ -13,9 +13,14 @@
 /* Release version — single source for the About dialog and the
  * Help > Check for Updates comparison. */
 #define APP_VERSION       "1.0.6"
-/* User config dir name — matches macOS port: $HOME/.nextpad++ (NOT XDG).
- * Use the npp_user_*() helpers in paths.h instead of building this manually. */
-#define APP_CONFIG_DIR    ".nextpad++"
+/* User data dir name under $XDG_DATA_HOME (default ~/.local/share) —
+ * mirrors macOS issue #67, which moved user data from ~/.nextpad++ to
+ * ~/Library/Application Support/Nextpad++. NEVER build paths from this
+ * manually; use the npp_user_*() helpers in paths.h (they own the
+ * one-time legacy migration). */
+#define APP_USER_SUBDIR   "nextpad++"
+/* The pre-migration location (one-time migration source only). */
+#define APP_LEGACY_CONFIG_DIR ".nextpad++"
 /* System data dir name (used for /usr/share/<name>, /usr/lib/<name>). */
 #define APP_DATA_DIR      "nextpad-plus-plus"
 

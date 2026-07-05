@@ -585,7 +585,7 @@ static void action_plugins_admin(GSimpleAction *a, GVariant *p, gpointer u) {
 /* Q6/Q9 — Open ~/.nextpad++/plugins/ in the file manager. */
 static void action_open_plugins_folder(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
-    gchar *dir = g_build_filename(g_get_home_dir(), ".nextpad++", "plugins", NULL);
+    gchar *dir = npp_user_subdir("plugins");
     g_mkdir_with_parents(dir, 0700);
     gchar *uri = g_filename_to_uri(dir, NULL, NULL);
     if (uri)

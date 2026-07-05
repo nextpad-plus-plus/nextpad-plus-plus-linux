@@ -1,16 +1,17 @@
 /* backup.c — Periodic auto-backup for the Linux GTK3 port.
  *
  * Every g_prefs.backup_interval_secs seconds, any modified (unsaved) document
- * is written to ~/" APP_CONFIG_DIR "/backup/<basename>.  On a clean save or on tab
+ * is written to <user data dir>/backup/<basename>.  On a clean save or on tab
  * close the backup file is removed.
  *
  * Naming:
- *   Saved file  → ~/" APP_CONFIG_DIR "/backup/<basename>
- *   Unsaved doc → ~/" APP_CONFIG_DIR "/backup/new_<N>
+ *   Saved file  → backup/<basename>
+ *   Unsaved doc → backup/new_<N>
  *
  * The timer runs on the GLib main loop; no threading needed.
  */
 #include "backup.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "prefs.h"
@@ -35,7 +36,7 @@ static void backup_path_for(NppDoc *doc, char *out, gsize size)
         snprintf(tmp, sizeof(tmp), "new_%d", doc->new_index);
         leaf = tmp;
     }
-    gchar *dir = g_build_filename(g_get_home_dir(), APP_CONFIG_DIR, "backup", NULL);
+    gchar *dir = npp_user_subdir("backup");
     snprintf(out, size, "%s/%s", dir, leaf);
     g_free(dir);
 }
@@ -90,7 +91,7 @@ static gboolean backup_tick(gpointer data)
 void backup_init(void)
 {
     /* Ensure the backup directory exists */
-    gchar *dir = g_build_filename(g_get_home_dir(), APP_CONFIG_DIR, "backup", NULL);
+    gchar *dir = npp_user_subdir("backup");
     g_mkdir_with_parents(dir, 0755);
     g_free(dir);
 

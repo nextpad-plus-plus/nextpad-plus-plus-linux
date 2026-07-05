@@ -1087,8 +1087,8 @@ static void do_update(AdminUI *ui) {
             c->display, c->version, c->dylib_built);
     }
     g_string_append(names,
-        "\nThe current folder is backed up to ~/" APP_CONFIG_DIR
-        "/plugin-backups/ before being replaced.");
+        "\nThe current folder is backed up to the user data dir's\n"
+        "plugin-backups/ before being replaced.");
     if (!confirm_dialog(GTK_WINDOW(ui->window),
         "Update plugins", names->str)) {
         g_string_free(names, TRUE); g_ptr_array_free(folders, TRUE);
@@ -1139,8 +1139,8 @@ static void do_remove(AdminUI *ui) {
         if (r) g_string_append_printf(names, "  • %s\n", r->display);
     }
     g_string_append(names,
-        "\nThis deletes the plugin folder from "
-        "~/" APP_CONFIG_DIR "/plugins/. Continue?");
+        "\nThis deletes the plugin folder from the user data dir's "
+        "plugins/. Continue?");
     if (!confirm_dialog(GTK_WINDOW(ui->window),
         "Remove plugins", names->str)) {
         g_string_free(names, TRUE); g_ptr_array_free(folders, TRUE);

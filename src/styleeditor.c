@@ -24,6 +24,7 @@
  *  └─────────────────────────────────────────────────────────────────┘
  */
 #include "styleeditor.h"
+#include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "stylestore.h"
@@ -339,11 +340,10 @@ static void populate_theme_combo(SEState *s)
     }
     g_ptr_array_unref(bundled);
 
-    const char *home = g_get_home_dir();
-    if (home) {
-        char udir[512];
-        snprintf(udir, sizeof(udir), "%s/" APP_CONFIG_DIR "/themes", home);
+    {
+        gchar *udir = npp_user_subdir("themes");
         GPtrArray *user = scan_themes(udir);
+        g_free(udir);
         for (guint i = 0; i < user->len; i++) {
             const char *p = (const char *)g_ptr_array_index(user, i);
             char *base = g_path_get_basename(p);

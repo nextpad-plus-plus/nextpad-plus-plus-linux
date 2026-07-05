@@ -1,24 +1,27 @@
 /*
  * paths.h — single source of truth for filesystem paths.
  *
- * Matches macOS port: user config lives at $HOME/.nextpad++/ (NOT XDG
- * $XDG_CONFIG_HOME). System data (bundled themes / model XMLs / icons)
- * lives at RESOURCES_DIR (compile-time) or /usr/share/nextpad-plus-plus/.
+ * User data lives at $XDG_DATA_HOME/nextpad++ (default
+ * ~/.local/share/nextpad++) — the Linux analog of macOS's
+ * ~/Library/Application Support/Nextpad++ (issue #67). A one-time
+ * migration moves any legacy ~/.nextpad++ tree on first launch.
+ * System data (bundled themes / model XMLs / icons) lives at
+ * RESOURCES_DIR (compile-time) or /usr/share/nextpad-plus-plus/.
  *
- * Reference: macOS `MainWindowController.mm:87 — nppConfigDir()`.
+ * Reference: macOS `NppPaths.mm` (Locations service).
  */
 #ifndef PATHS_H
 #define PATHS_H
 
 #include <glib.h>
 
-/* Returns "$HOME/.nextpad++" — caller MUST free with g_free(). */
+/* Returns the user data dir — caller MUST free with g_free(). */
 gchar *npp_user_dir(void);
 
-/* Returns "$HOME/.nextpad++/<subpath>" — caller MUST free. */
+/* Returns "<user data dir>/<subpath>" — caller MUST free. */
 gchar *npp_user_subdir(const char *subpath);
 
-/* Returns "$HOME/.nextpad++/<sub>/<leaf>" — caller MUST free. */
+/* Returns "<user data dir>/<sub>/<leaf>" — caller MUST free. */
 gchar *npp_user_file(const char *subdir_or_null, const char *leaf);
 
 /* Returns RESOURCES_DIR if it exists, else /usr/share/nextpad-plus-plus.
