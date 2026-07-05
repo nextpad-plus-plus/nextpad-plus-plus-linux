@@ -33,6 +33,7 @@
 #include "backup.h"
 #include "doclist.h"
 #include "autocomplete.h"
+#include "acapi.h"
 #include "encoding.h"
 #include "statusbar.h"
 #include "findreplace.h"
@@ -3456,14 +3457,10 @@ static void action_autocomplete_word(GSimpleAction *a, GVariant *p, gpointer u) 
 }
 static void action_function_param_hint(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    /* P3 — gate on the func-params-hint pref. */
-    if (!g_prefs.func_params_hint) return;
     GtkWidget *sci = current_sci(); if (!sci) return;
-    ScintillaObject *s = SCINTILLA(sci);
-    sptr_t pos = scintilla_send_message(s, SCI_GETCURRENTPOS, 0, 0);
-    /* Stub hint — real impl would consult function-signature index per lang. */
-    scintilla_send_message(s, SCI_CALLTIPSHOW, pos,
-        (sptr_t)"function(arg1, arg2)  — parameter hint stub");
+    /* Real API-backed parameter hint (macOS 60422d1); works regardless
+     * of the auto-on-input pref since this is an explicit request. */
+    autocomplete_show_calltip(sci);
 }
 static void action_function_param_hint_cancel(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;

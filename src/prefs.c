@@ -143,6 +143,7 @@ NppPrefs g_prefs = {
     /* Auto-completion */
     .autocomplete_enabled    = TRUE,
     .autocomplete_min_chars  = 1,
+    .ac_mode                 = 2,     /* Function and word (Windows dflt) */
     .func_params_hint        = FALSE,   /* Q-align: macOS default */
     .spell_check             = FALSE,
     /* Searching */
@@ -275,7 +276,12 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         if (!strcmp(attr, "reverseDefaultOrder"))     g_prefs.date_time_reverse      = is_yes(val);
     }
     else if (!strcmp(group, "auto-completion")) {
-        if      (!strcmp(attr, "autoCAction"))        g_prefs.autocomplete_enabled   = (atoi(val) != 0);
+        if      (!strcmp(attr, "autoCAction")) {
+            /* Windows encoding: 0 none, 1 function, 2 word, 3 both. */
+            int v = atoi(val);
+            g_prefs.autocomplete_enabled = (v != 0);
+            if (v >= 1 && v <= 3) g_prefs.ac_mode = v - 1;
+        }
         else if (!strcmp(attr, "triggerFromNbChar"))  g_prefs.autocomplete_min_chars = atoi(val);
         else if (!strcmp(attr, "funcParams"))         g_prefs.func_params_hint       = is_yes(val);
     }
@@ -641,7 +647,10 @@ void prefs_save(void)
     /* auto-completion */
     g_string_append_printf(b,
         "        <GUIConfig name=\"auto-completion\" autoCAction=\"%s\" triggerFromNbChar=\"%d\" funcParams=\"%s\" />\n",
-        g_prefs.autocomplete_enabled ? "3" : "0", g_prefs.autocomplete_min_chars,
+        !g_prefs.autocomplete_enabled ? "0"
+            : g_prefs.ac_mode == 0 ? "1"
+            : g_prefs.ac_mode == 1 ? "2" : "3",
+        g_prefs.autocomplete_min_chars,
         b2yn(g_prefs.func_params_hint));
 
     /* auto-insert */
@@ -923,6 +932,13 @@ static void on_ai_adv(GtkToggleButton *b, gpointer d)             { (void)d; if 
 
 static void on_ac_min(GtkSpinButton *s, gpointer d)
     { (void)d; g_prefs.autocomplete_min_chars = (int)gtk_spin_button_get_value(s); prefs_save(); }
+static void on_ac_mode(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    int i = gtk_combo_box_get_active(c);
+    if (i >= 0 && i <= 2) g_prefs.ac_mode = i;
+    prefs_save();
+}
 
 static void on_caret_w(GtkComboBox *c, gpointer d)
     { (void)d; g_prefs.caret_width = gtk_combo_box_get_active(c) + 1; editor_apply_prefs(); prefs_save(); }
@@ -1202,6 +1218,16 @@ static GtkWidget *page_auto_completion(void)
         g_prefs.autocomplete_enabled, G_CALLBACK(on_ac_enable));
     make_check(g, r++, "Function parameters hint on input",
         g_prefs.func_params_hint, G_CALLBACK(on_fph));
+
+    /* Completion source (macOS Phase 1 / Windows autoCAction). */
+    GtkWidget *md = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), "Function completion");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), "Word completion");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), "Function and word completion");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(md),
+        (g_prefs.ac_mode >= 0 && g_prefs.ac_mode <= 2) ? g_prefs.ac_mode : 2);
+    row(g, r++, "Completion source:", md);
+    g_signal_connect(md, "changed", G_CALLBACK(on_ac_mode), NULL);
 
     GtkWidget *m = gtk_spin_button_new_with_range(1, 10, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(m), g_prefs.autocomplete_min_chars);

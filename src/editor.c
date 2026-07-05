@@ -981,6 +981,14 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         } else {
             sci_msg(sci, SCI_BRACEHIGHLIGHT, (uptr_t)-1, (sptr_t)-1);
         }
+
+        /* API calltip: retarget the highlighted parameter as the caret
+         * moves (macOS _refreshActiveCalltipOnCaretMove). */
+        if (n->updated & (SC_UPDATE_CONTENT | SC_UPDATE_SELECTION))
+            autocomplete_on_update_ui(sci);
+    } else if (code == SCN_CALLTIPCLICK) {
+        /* Up/down arrows in an API calltip cycle through overloads. */
+        autocomplete_on_calltip_click(sci, (int)n->position);
     } else if (code == SCN_MARGINCLICK) {
         /* SCN_MARGINCLICK sets position (line start), not line — derive it */
         int line = (int)sci_msg(sci, SCI_LINEFROMPOSITION, (uptr_t)n->position, 0);

@@ -107,6 +107,7 @@ set(APP_SRCS
     "${SRC}/findinfiles.c"
     # G6 — autocomplete
     "${SRC}/autocomplete.c"
+    "${SRC}/acapi.c"
     # G7 — status bar, git gutter, change history, macro, spell
     "${SRC}/statusbar.c"
     "${SRC}/gitgutter.c"

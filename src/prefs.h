@@ -50,6 +50,9 @@ typedef struct {
     int      caret_width;             /* 1-3 px, default 1 */
     int      line_spacing10;          /* line-spacing multiplier ×10:
                                        * 10/12/13/14/15 (macOS #149) */
+    int      ac_mode;                 /* completion source — 0 Function,
+                                       * 1 Word, 2 Function+Word (maps to
+                                       * Windows autoCAction 1/2/3) */
     int      caret_blink_rate;        /* ms, 0 = no blink, default 600 */
     gboolean scroll_beyond_last_line; /* default FALSE */
     gboolean word_wrap;               /* default FALSE */
