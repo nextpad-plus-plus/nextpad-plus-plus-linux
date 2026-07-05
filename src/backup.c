@@ -71,12 +71,15 @@ static gboolean backup_tick(gpointer data)
     (void)data;
     if (!g_prefs.backup_enabled) return G_SOURCE_CONTINUE;
 
-    int n = editor_page_count();
-    for (int i = 0; i < n; i++) {
-        NppDoc *doc = editor_doc_at(i);
-        if (doc && doc->modified)
+    /* All notebooks — a modified tab moved to a split view must be
+     * backed up too (same blind spot as macOS issue #162). */
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *doc = g_ptr_array_index(docs, i);
+        if (doc->modified)
             backup_write(doc);
     }
+    g_ptr_array_free(docs, TRUE);
     return G_SOURCE_CONTINUE;
 }
 

@@ -34,6 +34,7 @@
 #include "gtk_compat.h"
 #include "branding.h"
 #include "editor.h"
+#include "backup.h"
 #include "sci_c.h"
 #include "prefs.h"
 #include "sci_messages.h"
@@ -142,32 +143,50 @@ static void apply_fold_line(GtkWidget *sci, sptr_t line) {
 /* Save                                                                */
 /* ------------------------------------------------------------------ */
 
+/* A doc belongs in the session if it has a real path (subject to the
+ * keep-absent pref), or is an untitled tab whose content was snapshot
+ * to backup (quit path runs backup_snapshot_now BEFORE session_save,
+ * so backup_filepath is set and the file exists). Untitled docs with
+ * no snapshot have nothing restorable — skip. */
+static gboolean session_wants_doc(NppDoc *d)
+{
+    if (!d) return FALSE;
+    if (d->filepath) {
+        if (!g_prefs.keep_absent_session &&
+            !g_file_test(d->filepath, G_FILE_TEST_EXISTS))
+            return FALSE;
+        return TRUE;
+    }
+    return d->backup_filepath != NULL &&
+           g_file_test(d->backup_filepath, G_FILE_TEST_EXISTS);
+}
+
 void session_save(void)
 {
-    int total  = editor_page_count();
-    int active = editor_current_page();
+    /* ALL docs — primary + both split notebooks. Tabs moved to a split
+     * view were previously invisible to the session (macOS issue #162's
+     * data loss; same bug existed here). Split docs restore flattened
+     * into the primary view for now — content safety first, view
+     * topology later. */
+    GPtrArray *docs = editor_all_docs();
+    NppDoc *active_doc = editor_current_doc();
 
-    int  active_saved = 0;
-    int  saved_count  = 0;
+    int active_saved = 0;
+    {
+        int emitted = 0;
+        for (guint i = 0; i < docs->len; i++) {
+            NppDoc *d = g_ptr_array_index(docs, i);
+            if (!session_wants_doc(d)) continue;
+            if (d == active_doc) { active_saved = emitted; break; }
+            emitted++;
+        }
+        /* active doc not in the saved subset → clamp to 0 (handled by
+         * restore's bounds check anyway). */
+    }
 
     GString *xml = g_string_new(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n"
         "<NotepadPlus>\n");
-
-    /* Active-index recomputed against the SAVED subset so a clamped
-     * value is always a valid <File> entry. */
-    for (int i = 0; i < active; i++) {
-        NppDoc *d = editor_doc_at(i);
-        if (d && d->filepath) saved_count++;
-    }
-    active_saved = saved_count;
-    saved_count = 0;
-    for (int i = 0; i < total; i++) {
-        NppDoc *d = editor_doc_at(i);
-        if (d && d->filepath) saved_count++;
-    }
-    if (active_saved >= saved_count)
-        active_saved = (saved_count > 0) ? saved_count - 1 : 0;
 
     /* Window frame stashed by on_window_delete (main.c) before
      * session_save() ran. If unset, skip the element. */
@@ -184,12 +203,9 @@ void session_save(void)
         "\t\t<mainView activeIndex=\"0\">\n",
         active_saved);
 
-    for (int i = 0; i < total; i++) {
-        NppDoc *doc = editor_doc_at(i);
-        if (!doc || !doc->filepath) continue;
-        if (!g_prefs.keep_absent_session &&
-            !g_file_test(doc->filepath, G_FILE_TEST_EXISTS))
-            continue;
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *doc = g_ptr_array_index(docs, i);
+        if (!session_wants_doc(doc)) continue;
 
         ScintillaObject *s = SCINTILLA(doc->sci);
         sptr_t startPos     = scintilla_send_message(s, SCI_GETSELECTIONSTART, 0, 0);
@@ -202,7 +218,8 @@ void session_save(void)
         gchar *bookmarks = bookmark_lines_csv(doc->sci);
         gchar *folds     = fold_lines_csv(doc->sci);
 
-        gchar *esc_path  = g_markup_escape_text(doc->filepath, -1);
+        gchar *esc_path  = doc->filepath
+            ? g_markup_escape_text(doc->filepath, -1) : g_strdup("");
         gchar *esc_enc   = g_markup_escape_text(doc->encoding ? doc->encoding : "UTF-8", -1);
         gchar *esc_lang  = g_markup_escape_text(doc->language ? doc->language : "", -1);
         gchar *esc_backup= doc->backup_filepath
@@ -210,22 +227,26 @@ void session_save(void)
 
         g_string_append_printf(xml,
             "\t\t\t<File filename=\"%s\""
+            " untitledIndex=\"%d\""
             " firstVisibleLine=\"%ld\" xOffset=\"%ld\""
             " startPos=\"%ld\" endPos=\"%ld\" selMode=\"%ld\""
             " scrollWidth=\"%ld\""
             " encoding=\"%s\" hasBOM=\"%s\""
             " language=\"%s\""
             " userReadOnly=\"%s\""
+            " tabColorId=\"%d\" pinned=\"%s\""
             " backupFilePath=\"%s\""
             " bookmarks=\"%s\""
             " folds=\"%s\" />\n",
             esc_path,
+            doc->filepath ? 0 : doc->new_index,
             (long)first_line, (long)xoffset,
             (long)startPos, (long)endPos, (long)selMode,
             (long)scroll_width,
             esc_enc, doc->has_bom ? "yes" : "no",
             esc_lang,
             doc->user_readonly ? "yes" : "no",
+            doc->color_tag, doc->pinned ? "yes" : "no",
             esc_backup,
             bookmarks, folds);
 
@@ -236,6 +257,7 @@ void session_save(void)
         g_free(esc_lang);
         g_free(esc_backup);
     }
+    g_ptr_array_free(docs, TRUE);
 
     g_string_append(xml,
         "\t\t</mainView>\n"
@@ -260,6 +282,7 @@ void session_save(void)
 
 typedef struct {
     char  filepath[1024];
+    int   untitled_index; /* >0 → untitled tab restored from backup */
     long  first_line;
     long  xoffset;
     long  start_pos;
@@ -270,6 +293,8 @@ typedef struct {
     int   has_bom;
     char  language[32];
     int   user_readonly;
+    int   tab_color;      /* 0 = none, 1..5 */
+    int   pinned;
     char  backup_filepath[1024];
     gchar *bookmarks;     /* heap-allocated CSV */
     gchar *folds;         /* heap-allocated CSV */
@@ -347,11 +372,17 @@ static void xml_start(GMarkupParseContext *ctx, const gchar *el,
         else if (!strcmp(k, "hasBOM"))           e->has_bom = !strcmp(v, "yes");
         else if (!strcmp(k, "language"))         g_strlcpy(e->language, v, sizeof(e->language));
         else if (!strcmp(k, "userReadOnly"))     e->user_readonly = !strcmp(v, "yes");
+        else if (!strcmp(k, "untitledIndex"))    e->untitled_index = atoi(v);
+        else if (!strcmp(k, "tabColorId"))       e->tab_color = atoi(v);
+        else if (!strcmp(k, "pinned"))           e->pinned = !strcmp(v, "yes");
         else if (!strcmp(k, "backupFilePath"))   g_strlcpy(e->backup_filepath, v, sizeof(e->backup_filepath));
         else if (!strcmp(k, "bookmarks"))        e->bookmarks = g_strdup(v);
         else if (!strcmp(k, "folds"))            e->folds = g_strdup(v);
     }
-    if (e->filepath[0]) st->count++;
+    /* Named entries need a path; untitled entries need a backup file to
+     * restore content from. */
+    if (e->filepath[0] || (e->untitled_index > 0 && e->backup_filepath[0]))
+        st->count++;
 }
 
 static GMarkupParser s_parser = { xml_start, NULL, NULL, NULL, NULL };
@@ -378,13 +409,70 @@ void session_restore(void)
 
     for (int i = 0; i < st.count; i++) {
         SessionEntry *e = &st.entries[i];
-        if (!g_file_test(e->filepath, G_FILE_TEST_EXISTS)) {
-            g_free(e->bookmarks); g_free(e->folds);
-            continue;
-        }
-        if (!editor_open_path(e->filepath)) {
-            g_free(e->bookmarks); g_free(e->folds);
-            continue;
+        gboolean untitled = (e->filepath[0] == '\0');
+
+        if (untitled) {
+            /* Untitled tab restored from its quit snapshot. The backup
+             * is REQUIRED (parser enforced it) — without content there
+             * is nothing to restore. */
+            gchar *content = NULL;
+            if (!g_file_get_contents(e->backup_filepath, &content, NULL, NULL)) {
+                g_free(e->bookmarks); g_free(e->folds);
+                continue;
+            }
+            editor_new_doc();
+            NppDoc *nd = editor_current_doc();
+            if (nd) {
+                nd->new_index = e->untitled_index;   /* label re-renders on
+                                                        the modify event */
+                scintilla_send_message(SCINTILLA(nd->sci), SCI_SETTEXT,
+                                       0, (sptr_t)content);
+                /* No SETSAVEPOINT: the buffer is intentionally left in
+                 * the modified state (it has no on-disk home yet).
+                 * Re-snapshot right away so a crash before the next
+                 * clean quit still has an on-disk copy to restore. */
+                backup_snapshot_now(nd);
+            }
+            g_free(content);
+        } else {
+            if (!g_file_test(e->filepath, G_FILE_TEST_EXISTS)) {
+                g_free(e->bookmarks); g_free(e->folds);
+                continue;
+            }
+            /* Unsaved edits snapshot: the session recorded a backup for
+             * this file — its content is NEWER than the disk copy. It
+             * must be read into memory BEFORE editor_open_path: opening
+             * sets a Scintilla savepoint, whose SAVEPOINTREACHED handler
+             * calls backup_clean() and deletes the snapshot from disk.
+             * (Verified live — reading after open finds the file gone.) */
+            gchar *backup_content = NULL;
+            if (e->backup_filepath[0])
+                g_file_get_contents(e->backup_filepath, &backup_content,
+                                    NULL, NULL);
+            if (!editor_open_path(e->filepath)) {
+                g_free(backup_content);
+                g_free(e->bookmarks); g_free(e->folds);
+                continue;
+            }
+            /* Apply the newer backup content over the disk copy and
+             * leave the doc modified — exactly what the quit path
+             * promised ("reload from backup, marked as modified").
+             * Previously the path was stored but never read back,
+             * silently dropping the edits. */
+            if (backup_content) {
+                NppDoc *bd = editor_current_doc();
+                if (bd) {
+                    scintilla_send_message(SCINTILLA(bd->sci),
+                                           SCI_SETTEXT, 0,
+                                           (sptr_t)backup_content);
+                    /* The open-time savepoint deleted the on-disk
+                     * snapshot (SAVEPOINTREACHED → backup_clean).
+                     * Re-snapshot immediately so a crash before the
+                     * next clean quit doesn't lose the edits. */
+                    backup_snapshot_now(bd);
+                }
+                g_free(backup_content);
+            }
         }
 
         NppDoc *doc = editor_current_doc();
@@ -422,6 +510,11 @@ void session_restore(void)
                 g_free(doc->backup_filepath);
                 doc->backup_filepath = g_strdup(e->backup_filepath);
             }
+            /* Tab colour + pin state (macOS session.plist parity). */
+            if (e->tab_color >= 1 && e->tab_color <= 5)
+                editor_set_tab_color(doc->sci, e->tab_color);
+            if (e->pinned)
+                editor_set_tab_pinned(doc->sci, TRUE);
             if (e->bookmarks && *e->bookmarks)
                 apply_csv_lines(doc->sci, e->bookmarks, apply_bookmark_line);
             if (e->folds && *e->folds)
