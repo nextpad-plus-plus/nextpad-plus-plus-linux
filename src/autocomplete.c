@@ -293,11 +293,11 @@ void autocomplete_show_calltip(GtkWidget *sci)
     int param_idx = 0;
     sptr_t name_end = ct_find_call(sci, pos, start_ch, stop_ch, sep_ch,
                                    &param_idx);
-    if (name_end < 0) return;
+    if (name_end < 0) { npp_beep(); return; }
 
     sptr_t name_start = sci_msg(sci, SCI_WORDSTARTPOSITION,
                                 (uptr_t)name_end, 1);
-    if (name_start >= name_end) return;
+    if (name_start >= name_end) { npp_beep(); return; }
     sptr_t name_len = name_end - name_start;
     char *name = g_malloc((gsize)name_len + 1);
     struct Sci_TextRangeFull tr = { { name_start, name_end }, name };

@@ -193,4 +193,8 @@ void prefs_save(void);
 /* Show (or raise) the Preferences dialog */
 void prefs_dialog_show(GtkWidget *parent);
 
+/* Error bell honouring the "Mute all sounds" pref (macOS NSBeep sites).
+ * Safe from any code — no widget required. */
+void npp_beep(void);
+
 #endif /* PREFS_H */

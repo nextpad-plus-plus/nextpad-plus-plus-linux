@@ -161,6 +161,7 @@ static gboolean find_in_sci(gboolean forward)
         return TRUE;
     }
     gtk_label_set_text(GTK_LABEL(s_status), "Not found");
+    npp_beep();
     return FALSE;
 }
 

@@ -1644,3 +1644,10 @@ void prefs_dialog_show(GtkWidget *parent)
     g_signal_connect(s_prefs_dlg, "response", G_CALLBACK(on_prefs_response), NULL);
     gtk_widget_show_all(s_prefs_dlg);
 }
+
+void npp_beep(void)
+{
+    if (g_prefs.mute_sounds) return;
+    GdkDisplay *d = gdk_display_get_default();
+    if (d) gdk_display_beep(d);
+}

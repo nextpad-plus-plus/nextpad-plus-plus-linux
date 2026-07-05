@@ -37,6 +37,7 @@
 #include "findinfiles.h"
 #include "searchresults.h"
 #include "editor.h"
+#include "prefs.h"
 #include "sci_c.h"
 #include <string.h>
 
@@ -338,12 +339,42 @@ static void on_clear_marks(GtkButton *b, gpointer u) {
 }
 static void on_copy_marked(GtkButton *b, gpointer u) {
     (void)b; (void)u;
-    /* Copy lines containing marks — implemented by walking the document
-     * for indicator-31 ranges and emitting unique lines. Deferred. */
-    GtkWidget *d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
-        GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
-        "Copy Marked: not yet implemented.");
-    gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
+    /* Walk the document for indicator-31 (Mark All) ranges and copy the
+     * marked text pieces newline-joined — port of macOS FindWindow.mm
+     * _copyMarked (GAP-56). */
+    NppDoc *doc = editor_current_doc();
+    FW *w = s_fw;
+    if (!doc || !doc->sci || !w) return;
+    ScintillaObject *s = SCINTILLA(doc->sci);
+    sptr_t doc_len = scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
+    GString *copied = g_string_new(NULL);
+    sptr_t pos = 0;
+    while (pos < doc_len) {
+        sptr_t start = scintilla_send_message(s, SCI_INDICATORSTART, 31, pos);
+        sptr_t val   = scintilla_send_message(s, SCI_INDICATORVALUEAT, 31, start);
+        sptr_t end   = scintilla_send_message(s, SCI_INDICATOREND, 31, start);
+        if (end <= start) break;
+        if (val) {
+            sptr_t len = end - start;
+            char *buf = g_malloc((gsize)len + 1);
+            struct Sci_TextRangeFull tr = { { start, end }, buf };
+            scintilla_send_message(s, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
+            buf[len] = '\0';
+            g_string_append(copied, buf);
+            g_string_append_c(copied, '\n');
+            g_free(buf);
+        }
+        pos = end;
+    }
+    if (copied->len) {
+        npp_clipboard_set_text(copied->str);
+        gtk_label_set_text(GTK_LABEL(w->status),
+                           "Marked text copied to clipboard.");
+    } else {
+        gtk_label_set_text(GTK_LABEL(w->status), "No marked text to copy.");
+        npp_beep();
+    }
+    g_string_free(copied, TRUE);
 }
 
 /* Find in Projects: route to findinfiles with each enabled project's
