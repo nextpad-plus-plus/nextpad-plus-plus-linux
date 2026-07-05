@@ -369,26 +369,31 @@ static void action_close_others(GSimpleAction *a, GVariant *p, gpointer ud) {
     editor_close_all_but_current();
 }
 
-/* Q-fix File → Close Multiple Documents (5 items, matches macOS). */
+/* Q-fix File → Close Multiple Documents (5 items, matches macOS).
+ * Each batch threads a local dont-save-all flag so the unsaved-changes
+ * prompt can offer "Don't Save All" (macOS #214). */
 static void action_close_all(GSimpleAction *a, GVariant *p, gpointer ud) {
     (void)a; (void)p; (void)ud;
     GtkWidget *nb = editor_get_notebook();
+    gboolean dsa = FALSE;
     for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(nb)) - 1; i >= 0; i--)
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
 }
 static void action_close_to_left(GSimpleAction *a, GVariant *p, gpointer ud) {
     (void)a; (void)p; (void)ud;
     GtkWidget *nb = editor_get_notebook();
     int keep = gtk_notebook_get_current_page(GTK_NOTEBOOK(nb));
+    gboolean dsa = FALSE;
     for (int i = keep - 1; i >= 0; i--)
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
 }
 static void action_close_to_right(GSimpleAction *a, GVariant *p, gpointer ud) {
     (void)a; (void)p; (void)ud;
     GtkWidget *nb = editor_get_notebook();
     int keep = gtk_notebook_get_current_page(GTK_NOTEBOOK(nb));
+    gboolean dsa = FALSE;
     for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(nb)) - 1; i > keep; i--)
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
 }
 static void action_close_unchanged(GSimpleAction *a, GVariant *p, gpointer ud) {
     (void)a; (void)p; (void)ud;
@@ -2674,7 +2679,10 @@ static int sort_cmp_asc_ci(const void *a, const void *b) {
     return g_ascii_strcasecmp(*(const char **)a, *(const char **)b);
 }
 static int sort_cmp_len(const void *a, const void *b) {
-    return (int)strlen(*(const char **)a) - (int)strlen(*(const char **)b);
+    /* Character count, not byte count — multibyte UTF-8 lines must sort
+     * by their visible length (matches Windows/macOS semantics). */
+    return (int)g_utf8_strlen(*(const char **)a, -1)
+         - (int)g_utf8_strlen(*(const char **)b, -1);
 }
 static void sort_with(int (*cmp)(const void *, const void *)) {
     gsize len; gboolean wd; char *buf = get_sel_or_doc(&len, &wd);
@@ -2700,8 +2708,8 @@ static void action_sort_by_length(GSimpleAction *a, GVariant *p, gpointer u) {
 }
 /* Q-fix sort variants: by-length-desc, random, integer, decimal (8 items). */
 static int sort_cmp_len_desc(const void *a, const void *b) {
-    int la = (int)strlen(*(char *const *)a);
-    int lb = (int)strlen(*(char *const *)b);
+    int la = (int)g_utf8_strlen(*(char *const *)a, -1);
+    int lb = (int)g_utf8_strlen(*(char *const *)b, -1);
     return lb - la;
 }
 static void action_sort_by_length_desc(GSimpleAction *a, GVariant *p, gpointer u) {

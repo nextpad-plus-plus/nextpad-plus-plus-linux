@@ -42,6 +42,12 @@ GtkWidget *editor_init(GtkWidget *window);
 /* Document access */
 NppDoc    *editor_current_doc(void);
 NppDoc    *editor_doc_at(int page);
+
+/* Every open document across the primary AND both split notebooks,
+ * primary first. Tabs moved to a split view are NOT reachable through
+ * editor_doc_at() — any whole-app walk (Save All, quit, session) must
+ * use this. Caller frees the array only: g_ptr_array_free(a, TRUE). */
+GPtrArray *editor_all_docs(void);
 int        editor_page_count(void);
 int        editor_current_page(void);
 GtkWidget *editor_get_notebook(void);
@@ -60,6 +66,13 @@ void       editor_reload_current(void);            /* reload current doc from di
 void       editor_reload_as(const char *encoding); /* re-read with forced encoding */
 gboolean   editor_close_page(int page);            /* -1 = current           */
 gboolean   editor_close_sci(GtkWidget *sci);        /* close one exact tab     */
+
+/* Close-page variant for close-MULTIPLE loops. Callers hold a local
+ * gboolean dsa = FALSE and pass &dsa to every call in the batch: the
+ * unsaved-changes prompt then offers "Don't Save All", which discards
+ * the current doc and suppresses the prompt for the rest of the batch
+ * (macOS issue #214 parity). */
+gboolean   editor_close_page_multi(int page, gboolean *dont_save_all);
 gboolean   editor_close_all_but_current(void);
 void       editor_close_all_quit(GApplication *app);
 

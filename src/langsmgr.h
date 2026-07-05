@@ -44,4 +44,9 @@ const char *langsmgr_comment_end  (const char *lang);
  * strings nor the array; the table is owned by langsmgr. */
 const char **langsmgr_all_languages(int *out_n);
 
+/* First (primary) extension registered for `lang`, without the dot —
+ * e.g. "cpp" → "cpp", "python" → "py". Returns NULL if the language is
+ * unknown or declares no extensions. Caller g_free()s the result. */
+char *langsmgr_first_ext(const char *lang);
+
 #endif /* LANGSMGR_H */

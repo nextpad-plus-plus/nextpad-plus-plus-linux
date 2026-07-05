@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include "statusbar.h"
 #include "lexer.h"
+#include "langsmgr.h"
 #include "findreplace.h"
 #include "toolbar.h"
 #include "stylestore.h"
@@ -459,34 +460,37 @@ static void cb_tabmenu_close(GtkButton *m, gpointer d) {
 static void cb_tabmenu_close_others(GtkButton *m, gpointer d) {
     (void)m;
     int keep = sci_page_num(GTK_WIDGET(d));
+    gboolean dsa = FALSE;
     /* Close right side first so indices don't shift under us. */
     for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--) {
         NppDoc *doc = editor_doc_at(i);
         if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
     }
     for (int i = keep - 1; i >= 0; i--) {
         NppDoc *doc = editor_doc_at(i);
         if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
     }
 }
 static void cb_tabmenu_close_left(GtkButton *m, gpointer d) {
     (void)m;
     int keep = sci_page_num(GTK_WIDGET(d));
+    gboolean dsa = FALSE;
     for (int i = keep - 1; i >= 0; i--) {
         NppDoc *doc = editor_doc_at(i);
         if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
     }
 }
 static void cb_tabmenu_close_right(GtkButton *m, gpointer d) {
     (void)m;
     int keep = sci_page_num(GTK_WIDGET(d));
+    gboolean dsa = FALSE;
     for (int i = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1; i > keep; i--) {
         NppDoc *doc = editor_doc_at(i);
         if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
     }
 }
 static void cb_tabmenu_close_unmodified(GtkButton *m, gpointer d) {
@@ -499,10 +503,11 @@ static void cb_tabmenu_close_unmodified(GtkButton *m, gpointer d) {
 static void cb_tabmenu_close_all(GtkButton *m, gpointer d) {
     (void)m; (void)d;
     int count = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
+    gboolean dsa = FALSE;
     for (int i = count - 1; i >= 0; i--) {
         NppDoc *doc = editor_doc_at(i);
         if (doc && doc->pinned) continue;
-        if (!editor_close_page(i)) return;
+        if (!editor_close_page_multi(i, &dsa)) return;
     }
 }
 static void cb_tabmenu_copy_path(GtkButton *m, gpointer d) {
@@ -1100,10 +1105,19 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
 /* "Ask to save" dialog                                               */
 /* ------------------------------------------------------------------ */
 
-/* Returns TRUE if caller may proceed (saved or discarded), FALSE if cancelled */
-static gboolean ask_save(NppDoc *doc)
+/* Save THE GIVEN doc (not the current tab) — forward decls; bodies live
+ * with the other save functions below. */
+static gboolean save_doc(NppDoc *doc);
+
+/* Returns TRUE if caller may proceed (saved or discarded), FALSE if
+ * cancelled. `dont_save_all` is non-NULL on the close-MULTIPLE paths:
+ * the dialog then grows a "Don't Save All" button (macOS 7ddc6be,
+ * issue #214) which discards this doc AND suppresses the prompt for
+ * every remaining doc in the same batch. */
+static gboolean ask_save_full(NppDoc *doc, gboolean *dont_save_all)
 {
     if (!doc->modified) return TRUE;
+    if (dont_save_all && *dont_save_all) return TRUE;   /* user said so */
 
     const char *name = doc->filepath
         ? g_path_get_basename(doc->filepath)
@@ -1116,6 +1130,10 @@ static gboolean ask_save(NppDoc *doc)
         T("msg.Reload.message", "Save changes to \"%s\"?"), name);
 
     gtk_dialog_add_button(GTK_DIALOG(dlg), TM("cmd.41004", "Close _Without Saving"), GTK_RESPONSE_NO);
+    if (dont_save_all)
+        gtk_dialog_add_button(GTK_DIALOG(dlg),
+                              TM("msg.DontSaveAll", "D_on't Save All"),
+                              GTK_RESPONSE_REJECT);
     gtk_dialog_add_button(GTK_DIALOG(dlg), TM("dlg.Find.2",  "_Cancel"),             GTK_RESPONSE_CANCEL);
     gtk_dialog_add_button(GTK_DIALOG(dlg), TM("cmd.41006",   "_Save"),               GTK_RESPONSE_YES);
     gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_YES);
@@ -1123,9 +1141,24 @@ static gboolean ask_save(NppDoc *doc)
     int resp = gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
 
-    if (resp == GTK_RESPONSE_YES)  return editor_save();
+    /* Save the doc we PROMPTED about — not editor_save(), which acts on
+     * the current tab. The close-multiple paths (Close Others / to the
+     * Left / to the Right, middle-click, Document List) prompt for
+     * BACKGROUND tabs; routing their "Save" through the current tab
+     * saved the wrong document and then discarded the prompted one.
+     * (macOS fixed the same family of bugs in df06cc4.) */
+    if (resp == GTK_RESPONSE_YES)  return save_doc(doc);
     if (resp == GTK_RESPONSE_NO)   return TRUE;
+    if (resp == GTK_RESPONSE_REJECT && dont_save_all) {
+        *dont_save_all = TRUE;
+        return TRUE;
+    }
     return FALSE; /* cancel */
+}
+
+static gboolean ask_save(NppDoc *doc)
+{
+    return ask_save_full(doc, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1298,6 +1331,28 @@ NppDoc *editor_current_doc(void)
     if (p < 0) return NULL;
     GtkWidget *sci = page_to_sci(gtk_notebook_get_nth_page(nb, p));
     return sci ? doc_of_sci(sci) : NULL;
+}
+
+GPtrArray *editor_all_docs(void)
+{
+    /* Primary first, then the vertical and horizontal splits — a stable
+     * order Save All / quit / session can rely on. Tabs MOVED to a split
+     * live only in that secondary notebook, so any walk limited to
+     * s_notebook silently skips them (that was macOS issue #162's data
+     * loss; same bug existed here). */
+    GPtrArray *out = g_ptr_array_new();
+    GtkWidget *nbs[3] = { s_notebook, s_notebook_v, s_notebook_h };
+    for (int k = 0; k < 3; k++) {
+        if (!nbs[k]) continue;
+        GtkNotebook *nb = GTK_NOTEBOOK(nbs[k]);
+        int n = gtk_notebook_get_n_pages(nb);
+        for (int i = 0; i < n; i++) {
+            GtkWidget *sci = page_to_sci(gtk_notebook_get_nth_page(nb, i));
+            NppDoc *d = sci ? doc_of_sci(sci) : NULL;
+            if (d) g_ptr_array_add(out, d);
+        }
+    }
+    return out;
 }
 
 sptr_t editor_send(unsigned int msg, uptr_t wp, sptr_t lp)
@@ -1507,30 +1562,22 @@ static gboolean save_doc_to_path(NppDoc *doc, const char *path)
     return TRUE;
 }
 
-gboolean editor_save(void)
+/* Save-As for a SPECIFIC doc. Brings the doc's tab current first so the
+ * user can see which document the chooser is about (matters when called
+ * from close-multiple prompts on background tabs). */
+static gboolean save_as_dialog_for(NppDoc *doc)
 {
-    NppDoc *doc = editor_current_doc();
     if (!doc) return FALSE;
-    if (!doc->filepath) return editor_save_as_dialog();
-    return save_doc_to_path(doc, doc->filepath);
-}
 
-gboolean editor_save_at(int page)
-{
-    NppDoc *doc = editor_doc_at(page);
-    if (!doc) return FALSE;
-    if (!doc->filepath) {
-        /* Switch to that page, show save-as dialog */
-        gtk_notebook_set_current_page(GTK_NOTEBOOK(editor_get_notebook()), page);
-        return editor_save_as_dialog();
+    /* Make the doc's tab visible/current in whichever notebook holds it. */
+    if (doc->sci) {
+        GtkNotebook *nb = notebook_of(doc->sci);
+        GtkWidget   *sw = gtk_widget_get_parent(doc->sci);
+        if (nb && sw) {
+            int pg = gtk_notebook_page_num(nb, sw);
+            if (pg >= 0) gtk_notebook_set_current_page(nb, pg);
+        }
     }
-    return save_doc_to_path(doc, doc->filepath);
-}
-
-gboolean editor_save_as_dialog(void)
-{
-    NppDoc *doc = editor_current_doc();
-    if (!doc) return FALSE;
 
     GtkWidget *dlg = gtk_file_chooser_dialog_new(
         T("cmd.41008", "Save File As"), GTK_WINDOW(s_window),
@@ -1539,8 +1586,20 @@ gboolean editor_save_as_dialog(void)
         TM("cmd.41006",   "_Save"),   GTK_RESPONSE_ACCEPT,
         NULL);
     gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
-    if (doc->filepath)
+    if (doc->filepath) {
         gtk_file_chooser_set_filename(GTK_FILE_CHOOSER(dlg), doc->filepath);
+    } else {
+        /* Untitled tab: default a sensible file name — the tab's "new N"
+         * plus the language's primary extension, else .txt (macOS parity,
+         * commit a8dc095). */
+        char *ext = doc->language && doc->language[0]
+                        ? langsmgr_first_ext(doc->language) : NULL;
+        char *defname = g_strdup_printf("new %d.%s", doc->new_index,
+                                        ext ? ext : "txt");
+        gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), defname);
+        g_free(defname);
+        g_free(ext);
+    }
 
     gboolean saved = FALSE;
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
@@ -1550,7 +1609,7 @@ gboolean editor_save_as_dialog(void)
             doc->filepath  = path;
             doc->new_index = 0;
             filewatch_start(doc);
-            refresh_tab_label(editor_current_page());
+            refresh_tab_label(sci_page_num(doc->sci));
             update_window_title();
             main_recent_file_add(path);
             main_doclist_refresh();
@@ -1561,6 +1620,30 @@ gboolean editor_save_as_dialog(void)
     }
     gtk_widget_destroy(dlg);
     return saved;
+}
+
+/* Save THE GIVEN doc: existing file → write in place (errors surfaced by
+ * save_doc_to_path, FALSE on failure); untitled → doc-targeted Save-As. */
+static gboolean save_doc(NppDoc *doc)
+{
+    if (!doc) return FALSE;
+    if (!doc->filepath) return save_as_dialog_for(doc);
+    return save_doc_to_path(doc, doc->filepath);
+}
+
+gboolean editor_save(void)
+{
+    return save_doc(editor_current_doc());
+}
+
+gboolean editor_save_at(int page)
+{
+    return save_doc(editor_doc_at(page));
+}
+
+gboolean editor_save_as_dialog(void)
+{
+    return save_as_dialog_for(editor_current_doc());
 }
 
 /* ================================================================== */
@@ -1645,8 +1728,10 @@ static void editor_move_page(GtkWidget *sci, GtkNotebook *dst)
     editor_apply_tab_color(sci);   /* the `tab` CSS node changed */
 }
 
-/* Close one exact tab, in whichever notebook it lives. */
-gboolean editor_close_sci(GtkWidget *sci)
+/* Close one exact tab, in whichever notebook it lives. `dont_save_all`
+ * is non-NULL only on close-multiple paths (threads the "Don't Save
+ * All" batch decision through consecutive prompts). */
+static gboolean close_sci_full(GtkWidget *sci, gboolean *dont_save_all)
 {
     if (!sci) return FALSE;
     GtkWidget   *sw = gtk_widget_get_parent(sci);
@@ -1657,7 +1742,7 @@ gboolean editor_close_sci(GtkWidget *sci)
 
     /* Pinned tabs block close (macOS NppTabBar parity) — unpin first. */
     if (doc && doc->pinned) return FALSE;
-    if (!ask_save(doc)) return FALSE;
+    if (!ask_save_full(doc, dont_save_all)) return FALSE;
 
     filewatch_stop(doc);
     backup_clean(doc);
@@ -1684,6 +1769,11 @@ gboolean editor_close_sci(GtkWidget *sci)
     return TRUE;
 }
 
+gboolean editor_close_sci(GtkWidget *sci)
+{
+    return close_sci_full(sci, NULL);
+}
+
 gboolean editor_close_page(int page)
 {
     GtkWidget *sci;
@@ -1694,6 +1784,11 @@ gboolean editor_close_page(int page)
         sci = sci_of_page(page);    /* primary-notebook index */
     }
     return editor_close_sci(sci);
+}
+
+gboolean editor_close_page_multi(int page, gboolean *dont_save_all)
+{
+    return close_sci_full(sci_of_page(page), dont_save_all);
 }
 
 gboolean editor_split_active(void)
@@ -2003,13 +2098,16 @@ void editor_set_sync_scroll(gboolean vertical, gboolean enable)
 
 gboolean editor_save_all(void)
 {
+    /* All notebooks, not just the primary — a tab moved to a split view
+     * must be saved too. save_doc targets each doc directly, so untitled
+     * docs get a Save-As aimed at the right tab. */
     gboolean ok = TRUE;
-    int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
-    for (int p = 0; p < n; p++) {
-        NppDoc *doc = editor_doc_at(p);
-        if (doc && doc->modified)
-            if (!editor_save_at(p)) ok = FALSE;
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *doc = g_ptr_array_index(docs, i);
+        if (doc->modified && !save_doc(doc)) ok = FALSE;
     }
+    g_ptr_array_free(docs, TRUE);
     return ok;
 }
 
@@ -2025,10 +2123,11 @@ gboolean editor_close_all_but_current(void)
     int cur = editor_current_page();
     /* close from right */
     int n;
+    gboolean dsa = FALSE;
     while ((n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook))) > 1) {
         int target = (n - 1 == cur) ? n - 2 : n - 1;
         if (target < 0) break;
-        if (!editor_close_page(target)) return FALSE;
+        if (!editor_close_page_multi(target, &dsa)) return FALSE;
         if (target < cur) cur--;
     }
     return TRUE;
@@ -2036,46 +2135,74 @@ gboolean editor_close_all_but_current(void)
 
 void editor_close_all_quit(GApplication *app)
 {
-    /* macOS-parity: do NOT prompt for unsaved changes on quit.
-     * Instead, snapshot every dirty document to ~/.nextpad++/backup/
-     * (named "<base>@<timestamp>") and leave it there. session.xml
-     * already records the backupFilePath; on next launch the docs
-     * reload from backup and show marked-as-modified.
-     *
-     * Matches macOS AppDelegate.applicationShouldTerminate:347-360
-     * + MainWindowController.windowShouldClose:8753-8773 — those return
-     * unconditionally; the backup snapshot is the safety net.
-     *
-     * Single-tab Close (editor_close_page) still prompts — only quit /
-     * close-all skips the prompt. */
-    int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
-    for (int i = 0; i < n; i++) {
-        NppDoc *doc = editor_doc_at(i);
-        if (!doc) continue;
-        if (doc->modified) {
-            /* Force a snapshot to disk so the next launch can recover. */
-            extern void backup_snapshot_now(NppDoc *);
-            backup_snapshot_now(doc);
+    GPtrArray *docs = editor_all_docs();
+
+    if (g_prefs.remember_session) {
+        /* Session ON — do NOT prompt for unsaved changes on quit.
+         * Snapshot every dirty document to the backup dir and record
+         * the backupFilePath in session.xml; next launch reloads the
+         * docs from backup, still marked modified. Matches macOS
+         * AppDelegate.applicationShouldTerminate. */
+        for (guint i = 0; i < docs->len; i++) {
+            NppDoc *doc = g_ptr_array_index(docs, i);
+            if (doc->modified) {
+                extern void backup_snapshot_now(NppDoc *);
+                backup_snapshot_now(doc);
+            }
+        }
+        /* Persist the session BEFORE tearing down tabs — main.c's
+         * callers also invoke session_save(); it's idempotent. */
+        extern void session_save(void);
+        session_save();
+    } else {
+        /* Session OFF — the snapshots would be orphaned (nothing
+         * references them on next launch), so quitting would silently
+         * lose the user's edits. Prompt per modified doc instead; the
+         * doc's tab is brought current so the user sees what they're
+         * deciding about. Cancel aborts the quit — both callers treat
+         * a non-dispatched g_application_quit as "user cancelled".
+         * (macOS parity: 51577ad, issue #224.) */
+        for (guint i = 0; i < docs->len; i++) {
+            NppDoc *doc = g_ptr_array_index(docs, i);
+            if (!doc->modified) continue;
+            if (doc->sci) {
+                GtkNotebook *nb = notebook_of(doc->sci);
+                GtkWidget   *sw = gtk_widget_get_parent(doc->sci);
+                if (nb && sw) {
+                    int pg = gtk_notebook_page_num(nb, sw);
+                    if (pg >= 0) gtk_notebook_set_current_page(nb, pg);
+                }
+            }
+            if (!ask_save(doc)) {           /* cancelled → abort quit */
+                g_ptr_array_free(docs, TRUE);
+                return;
+            }
+            /* The user explicitly decided (saved or discarded) — the
+             * periodic auto-backup snapshot is now orphaned junk. */
+            backup_clean(doc);
         }
     }
-    /* Persist the session BEFORE tearing down tabs — main.c's
-     * action_quit calls session_save() before us, but it's idempotent
-     * to call again here. */
-    extern void session_save(void);
-    if (g_prefs.remember_session) session_save();
+    g_ptr_array_free(docs, TRUE);
 
-    while (gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) > 0) {
-        NppDoc *doc = editor_doc_at(0);
-        if (!doc) break;
-        filewatch_stop(doc);
-        /* DO NOT call backup_clean — we want the snapshot to survive
-         * for crash-recovery on next launch. */
-        gtk_notebook_remove_page(GTK_NOTEBOOK(s_notebook), 0);
-        g_free(doc->filepath);
-        g_free(doc->encoding);
-        g_free(doc->language);
-        g_free(doc->backup_filepath);
-        g_free(doc);
+    /* Tear down every notebook (primary + both splits). DO NOT call
+     * backup_clean — with session ON the snapshots must survive for
+     * next-launch recovery. */
+    GtkWidget *nbs[3] = { s_notebook, s_notebook_v, s_notebook_h };
+    for (int k = 0; k < 3; k++) {
+        if (!nbs[k]) continue;
+        GtkNotebook *nb = GTK_NOTEBOOK(nbs[k]);
+        while (gtk_notebook_get_n_pages(nb) > 0) {
+            GtkWidget *sci = page_to_sci(gtk_notebook_get_nth_page(nb, 0));
+            NppDoc *doc = sci ? doc_of_sci(sci) : NULL;
+            if (!doc) break;
+            filewatch_stop(doc);
+            gtk_notebook_remove_page(nb, 0);
+            g_free(doc->filepath);
+            g_free(doc->encoding);
+            g_free(doc->language);
+            g_free(doc->backup_filepath);
+            g_free(doc);
+        }
     }
     g_application_quit(app);
 }

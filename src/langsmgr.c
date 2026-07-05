@@ -53,6 +53,17 @@ static char *lc_dup(const char *s) {
     return o;
 }
 
+char *langsmgr_first_ext(const char *lang)
+{
+    if (!s_initted || !lang || !s_by_lang) return NULL;
+    LangRec *L = g_hash_table_lookup(s_by_lang, lang);
+    if (!L || !L->ext || !L->ext[0]) return NULL;
+    /* First token of the space-separated list. */
+    const char *end = L->ext;
+    while (*end && *end != ' ') end++;
+    return g_strndup(L->ext, (gsize)(end - L->ext));
+}
+
 /* Split a space-separated ext list and register each ext → lang_name. */
 static void register_extensions(const char *ext_list, const char *lang_name) {
     if (!ext_list || !lang_name) return;
