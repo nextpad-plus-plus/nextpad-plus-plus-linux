@@ -104,7 +104,12 @@ NppPrefs g_prefs = {
     .caret_blink_rate        = 500,     /* Q-align: macOS default */
     .scroll_beyond_last_line = FALSE,
     .word_wrap               = FALSE,
-    .auto_close_brackets     = FALSE,
+    .ai_parens               = FALSE,
+    .ai_brackets             = FALSE,
+    .ai_braces               = FALSE,
+    .ai_quotes               = FALSE,
+    .ai_dquotes              = FALSE,
+    .ai_html                 = FALSE,
     .smart_highlight         = TRUE,
     .smart_hilite_case       = FALSE,
     .smart_hilite_word       = FALSE,   /* Q-align: macOS default */
@@ -144,6 +149,8 @@ NppPrefs g_prefs = {
     .autocomplete_enabled    = TRUE,
     .autocomplete_min_chars  = 1,
     .ac_mode                 = 2,     /* Function and word (Windows dflt) */
+    .ac_brief                = FALSE,
+    .ac_ignore_numbers       = FALSE,
     .func_params_hint        = FALSE,   /* Q-align: macOS default */
     .spell_check             = FALSE,
     /* Searching */
@@ -284,11 +291,16 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         }
         else if (!strcmp(attr, "triggerFromNbChar"))  g_prefs.autocomplete_min_chars = atoi(val);
         else if (!strcmp(attr, "funcParams"))         g_prefs.func_params_hint       = is_yes(val);
+        else if (!strcmp(attr, "briefList"))          g_prefs.ac_brief               = is_yes(val);
+        else if (!strcmp(attr, "ignoreNumbers"))      g_prefs.ac_ignore_numbers      = is_yes(val);
     }
     else if (!strcmp(group, "auto-insert")) {
-        /* macOS stores 5 separate booleans; we collapse to one toggle.
-         * Treat ANY of them being "yes" as enabling auto-close. */
-        if (is_yes(val)) g_prefs.auto_close_brackets = TRUE;
+        if      (!strcmp(attr, "parentheses"))   g_prefs.ai_parens   = is_yes(val);
+        else if (!strcmp(attr, "brackets"))      g_prefs.ai_brackets = is_yes(val);
+        else if (!strcmp(attr, "curlyBrackets")) g_prefs.ai_braces   = is_yes(val);
+        else if (!strcmp(attr, "quotes"))        g_prefs.ai_quotes   = is_yes(val);
+        else if (!strcmp(attr, "doubleQuotes"))  g_prefs.ai_dquotes  = is_yes(val);
+        else if (!strcmp(attr, "htmlXmlTag"))    g_prefs.ai_html     = is_yes(val);
     }
     else if (!strcmp(group, "SmartHighLight")) {
         if      (!strcmp(attr, "matchCase"))          g_prefs.smart_hilite_case      = is_yes(val);
@@ -655,18 +667,20 @@ void prefs_save(void)
 
     /* auto-completion */
     g_string_append_printf(b,
-        "        <GUIConfig name=\"auto-completion\" autoCAction=\"%s\" triggerFromNbChar=\"%d\" funcParams=\"%s\" />\n",
+        "        <GUIConfig name=\"auto-completion\" autoCAction=\"%s\" triggerFromNbChar=\"%d\" funcParams=\"%s\" briefList=\"%s\" ignoreNumbers=\"%s\" />\n",
         !g_prefs.autocomplete_enabled ? "0"
             : g_prefs.ac_mode == 0 ? "1"
             : g_prefs.ac_mode == 1 ? "2" : "3",
         g_prefs.autocomplete_min_chars,
-        b2yn(g_prefs.func_params_hint));
+        b2yn(g_prefs.func_params_hint),
+        b2yn(g_prefs.ac_brief), b2yn(g_prefs.ac_ignore_numbers));
 
-    /* auto-insert */
-    const char *acb = b2yn(g_prefs.auto_close_brackets);
+    /* auto-insert (Windows matchedPairConf schema) */
     g_string_append_printf(b,
-        "        <GUIConfig name=\"auto-insert\" parentheses=\"%s\" brackets=\"%s\" curlyBrackets=\"%s\" quotes=\"%s\" doubleQuotes=\"%s\" />\n",
-        acb, acb, acb, acb, acb);
+        "        <GUIConfig name=\"auto-insert\" parentheses=\"%s\" brackets=\"%s\" curlyBrackets=\"%s\" quotes=\"%s\" doubleQuotes=\"%s\" htmlXmlTag=\"%s\" />\n",
+        b2yn(g_prefs.ai_parens), b2yn(g_prefs.ai_brackets),
+        b2yn(g_prefs.ai_braces), b2yn(g_prefs.ai_quotes),
+        b2yn(g_prefs.ai_dquotes), b2yn(g_prefs.ai_html));
 
     /* SmartHighLight */
     g_string_append_printf(b,
@@ -888,7 +902,14 @@ CHK(scroll_past,       scroll_beyond_last_line,    editor_apply_prefs())
 CHK(full_path,         show_full_path_in_title,    main_refresh_title())
 CHK(copy_line,         copy_line_no_selection,     (void)0)
 CHK(word_wrap,         word_wrap,                  editor_apply_prefs())
-CHK(auto_close,        auto_close_brackets,        (void)0)
+CHK(ac_brief,          ac_brief,                   (void)0)
+CHK(ac_ignore_numbers, ac_ignore_numbers,          (void)0)
+CHK(ai_parens,         ai_parens,                  (void)0)
+CHK(ai_brackets,       ai_brackets,                (void)0)
+CHK(ai_braces,         ai_braces,                  (void)0)
+CHK(ai_quotes,         ai_quotes,                  (void)0)
+CHK(ai_dquotes,        ai_dquotes,                 (void)0)
+CHK(ai_html,           ai_html,                    (void)0)
 CHK(smart_hilite,      smart_highlight,            (void)0)
 CHK(smart_case,        smart_hilite_case,          (void)0)
 CHK(smart_word,        smart_hilite_word,          (void)0)
@@ -1242,6 +1263,23 @@ static GtkWidget *page_auto_completion(void)
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(m), g_prefs.autocomplete_min_chars);
     row(g, r++, "From Nth character:", m);
     g_signal_connect(m, "value-changed", G_CALLBACK(on_ac_min), NULL);
+
+    make_check(g, r++, "Make the list brief",
+        g_prefs.ac_brief, G_CALLBACK(on_ac_brief));
+    make_check(g, r++, "Ignore numbers",
+        g_prefs.ac_ignore_numbers, G_CALLBACK(on_ac_ignore_numbers));
+
+    /* Auto-Insert box (macOS Phase 3 / Windows matched-pair conf). */
+    GtkWidget *hdr = gtk_label_new("Auto-Insert:");
+    gtk_widget_set_halign(hdr, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(hdr, 10);
+    gtk_grid_attach(GTK_GRID(g), hdr, 0, r++, 2, 1);
+    make_check(g, r++, "( )",  g_prefs.ai_parens,   G_CALLBACK(on_ai_parens));
+    make_check(g, r++, "[ ]",  g_prefs.ai_brackets, G_CALLBACK(on_ai_brackets));
+    make_check(g, r++, "{ }",  g_prefs.ai_braces,   G_CALLBACK(on_ai_braces));
+    make_check(g, r++, "\" \"",  g_prefs.ai_dquotes,  G_CALLBACK(on_ai_dquotes));
+    make_check(g, r++, "' '",  g_prefs.ai_quotes,   G_CALLBACK(on_ai_quotes));
+    make_check(g, r++, "html/xml close tag", g_prefs.ai_html, G_CALLBACK(on_ai_html));
     return g;
 }
 
@@ -1288,7 +1326,6 @@ static GtkWidget *page_editor(void)
     make_check(g, r++, "Show line numbers",                     g_prefs.show_line_numbers,      G_CALLBACK(on_show_ln));
     make_check(g, r++, "Word wrap",                             g_prefs.word_wrap,              G_CALLBACK(on_word_wrap));
     make_check(g, r++, "Highlight current line",                g_prefs.highlight_current_line, G_CALLBACK(on_hl_line));
-    make_check(g, r++, "Auto-close brackets () [] { }",         g_prefs.auto_close_brackets,    G_CALLBACK(on_auto_close));
     make_check(g, r++, "Enable virtual space",                  g_prefs.virtual_space,          G_CALLBACK(on_virt_space));
     make_check(g, r++, "Scroll beyond last line",               g_prefs.scroll_beyond_last_line,G_CALLBACK(on_scroll_past));
     make_check(g, r++, "Copy/cut line without selection",       g_prefs.copy_line_no_selection, G_CALLBACK(on_copy_line));

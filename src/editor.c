@@ -926,6 +926,176 @@ static void update_window_title(void)
 /* ------------------------------------------------------------------ */
 
 /* GTK4 "sci-notify" passes one boxed SCNotification* — no GTK3 `id` arg. */
+/* ================================================================== */
+/* Auto-Insert matched pairs (GAP-12) — port of Windows                */
+/* AutoCompletion::insertMatchedChars / InsertedMatchedChars /         */
+/* getCloseTag via macOS efbb0a7.                                       */
+/* ================================================================== */
+
+typedef struct { Sci_Position pos; char ch; } AiTracked;
+
+#define AI_TRACK_KEY "npp-ai-track"
+
+static GArray *ai_track(GtkWidget *sci)
+{
+    GArray *a = g_object_get_data(G_OBJECT(sci), AI_TRACK_KEY);
+    if (!a) {
+        a = g_array_new(FALSE, FALSE, sizeof(AiTracked));
+        g_object_set_data_full(G_OBJECT(sci), AI_TRACK_KEY, a,
+                               (GDestroyNotify)g_array_unref);
+    }
+    return a;
+}
+
+/* Keep tracked auto-inserted-closer positions in step with edits; a
+ * deletion that swallows a tracked closer drops its entry. */
+static void auto_insert_track_modified(GtkWidget *sci, Sci_Position pos,
+                                       Sci_Position len, gboolean insert)
+{
+    GArray *a = g_object_get_data(G_OBJECT(sci), AI_TRACK_KEY);
+    if (!a || !a->len) return;
+    for (guint i = a->len; i-- > 0; ) {
+        AiTracked *t = &g_array_index(a, AiTracked, i);
+        if (pos > t->pos) continue;
+        if (insert) {
+            t->pos += len;
+        } else {
+            if (pos + len > t->pos) { g_array_remove_index(a, i); continue; }
+            t->pos -= len;
+        }
+    }
+}
+
+/* Windows semantics: a closer is only auto-inserted when what follows
+ * wouldn't be glued to it — end of line/doc, whitespace, or another
+ * closing/punctuation char. */
+static gboolean ai_next_allows_insert(char next)
+{
+    return next == '\0' || g_ascii_isspace(next) ||
+           strchr(")]},;:.", next) != NULL;
+}
+
+/* Void elements never get a close tag (HTML only; XML closes all). */
+static gboolean ai_void_element(const char *tag)
+{
+    static const char *voids[] = {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr", NULL };
+    for (int i = 0; voids[i]; i++)
+        if (!g_ascii_strcasecmp(tag, voids[i])) return TRUE;
+    return FALSE;
+}
+
+/* '>' typed in an html/xml/php doc: find the matching '<tag' and insert
+ * "</tag>" after the caret (caret stays). Port of Windows getCloseTag. */
+static void ai_close_html_tag(GtkWidget *sci, Sci_Position gt_pos)
+{
+    const char *lang = (const char *)g_object_get_data(G_OBJECT(sci),
+                                                       "npp-lang");
+    if (!lang) return;
+    gboolean is_html = !g_ascii_strcasecmp(lang, "html") ||
+                       !g_ascii_strcasecmp(lang, "php");
+    gboolean is_xml  = !g_ascii_strcasecmp(lang, "xml");
+    if (!is_html && !is_xml) return;
+
+    /* Self-closing "/>"? */
+    if (gt_pos > 0 &&
+        (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)(gt_pos - 1), 0) == '/')
+        return;
+
+    /* Scan back (bounded) for the opening '<'; bail on an intervening '>'. */
+    Sci_Position lt = -1;
+    for (Sci_Position i = gt_pos - 1, lo = gt_pos - 512; i >= 0 && i >= lo; i--) {
+        char c = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)i, 0);
+        if (c == '>') return;
+        if (c == '<') { lt = i; break; }
+    }
+    if (lt < 0) return;
+
+    /* Tag name starts right after '<'; reject </close>, <!doctype/comment>,
+     * <?pi?>. */
+    char tag[64];
+    int  ti = 0;
+    Sci_Position p = lt + 1;
+    char c0 = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)p, 0);
+    if (c0 == '/' || c0 == '!' || c0 == '?') return;
+    while (p < gt_pos && ti < (int)sizeof(tag) - 1) {
+        char c = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)p, 0);
+        if (!(g_ascii_isalnum(c) || c == '-' || c == '_' || c == ':'))
+            break;
+        tag[ti++] = c;
+        p++;
+    }
+    tag[ti] = '\0';
+    if (!ti || !g_ascii_isalpha(tag[0])) return;
+    if (is_html && ai_void_element(tag)) return;
+
+    gchar *close = g_strdup_printf("</%s>", tag);
+    Sci_Position cur = (Sci_Position)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
+    sci_msg(sci, SCI_INSERTTEXT, (uptr_t)cur, (sptr_t)close);
+    g_free(close);
+    /* Caret stays between the tags (SCI_INSERTTEXT at the caret does not
+     * move it). */
+}
+
+/* Main entry — called from SCN_CHARADDED (public so input simulation
+ * and tests can drive the same path real typing takes). */
+void editor_auto_insert_on_char(GtkWidget *sci, int ch)
+{
+    if (ch >= 128) return;
+    Sci_Position cur = (Sci_Position)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
+
+    /* 1. Type-through: typing a closer that we auto-inserted right here
+     * skips over it instead of doubling. The typed char has already
+     * shifted the tracked position, so the entry now sits AT the caret. */
+    if (strchr(")]}\"'", ch)) {
+        GArray *a = g_object_get_data(G_OBJECT(sci), AI_TRACK_KEY);
+        if (a) {
+            for (guint i = 0; i < a->len; i++) {
+                AiTracked *t = &g_array_index(a, AiTracked, i);
+                if (t->pos == cur && t->ch == (char)ch &&
+                    (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)cur, 0)
+                        == (char)ch) {
+                    sci_msg(sci, SCI_DELETERANGE, (uptr_t)cur, 1);
+                    g_array_remove_index(a, i);
+                    return;      /* handled — no pair insertion either */
+                }
+            }
+        }
+    }
+
+    /* 2. html/xml close tag. */
+    if (ch == '>' && g_prefs.ai_html) {
+        ai_close_html_tag(sci, cur - 1);
+        return;
+    }
+
+    /* 3. Matched-pair insertion. */
+    char closer = 0;
+    gboolean is_quote = FALSE;
+    switch (ch) {
+    case '(':  if (g_prefs.ai_parens)   closer = ')';  break;
+    case '[':  if (g_prefs.ai_brackets) closer = ']';  break;
+    case '{':  if (g_prefs.ai_braces)   closer = '}';  break;
+    case '"':  if (g_prefs.ai_dquotes)  { closer = '"';  is_quote = TRUE; } break;
+    case '\'': if (g_prefs.ai_quotes)   { closer = '\''; is_quote = TRUE; } break;
+    }
+    if (!closer) return;
+
+    char next = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)cur, 0);
+    if (!ai_next_allows_insert(next)) return;
+    if (is_quote && cur >= 2) {
+        /* Don't close an apostrophe inside a word ("don't"). */
+        char before = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)(cur - 2), 0);
+        if (g_ascii_isalnum(before) || before == '_') return;
+    }
+
+    char buf[2] = { closer, 0 };
+    sci_msg(sci, SCI_INSERTTEXT, (uptr_t)cur, (sptr_t)buf);
+    AiTracked t = { cur, closer };
+    g_array_append_val(ai_track(sci), t);
+}
+
 static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
 {
     (void)data;
@@ -1001,27 +1171,9 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         }
     } else if (code == SCN_CHARADDED) {
         autocomplete_on_char_added(sci, n->ch);
-        /* P3 — auto-close brackets. Insert the matching closer immediately
-         * after the caret and put the caret back between them. */
-        if (g_prefs.auto_close_brackets) {
-            char closer = 0;
-            switch (n->ch) {
-            case '(':  closer = ')';  break;
-            case '[':  closer = ']';  break;
-            case '{':  closer = '}';  break;
-            case '"':  closer = '"';  break;
-            case '\'': closer = '\''; break;
-            }
-            if (closer) {
-                Sci_Position cur = (Sci_Position)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
-                /* Skip if the next char is alphanumeric (we'd interrupt a word). */
-                char next_ch = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)cur, 0);
-                if (!g_ascii_isalnum(next_ch) && next_ch != '_') {
-                    char buf[2] = { closer, 0 };
-                    sci_msg(sci, SCI_INSERTTEXT, (uptr_t)cur, (sptr_t)buf);
-                }
-            }
-        }
+        /* Auto-Insert matched pairs + html/xml close tag (GAP-12,
+         * macOS efbb0a7 / Windows AutoCompletion::insertMatchedChars). */
+        editor_auto_insert_on_char(sci, n->ch);
         if (g_prefs.auto_indent != AUTO_INDENT_NONE && (n->ch == '\n' || n->ch == '\r')) {
             Sci_Position cur_line = (Sci_Position)sci_msg(sci, SCI_LINEFROMPOSITION,
                 (uptr_t)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0), 0);
@@ -1062,6 +1214,9 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         }
     } else if (code == SCN_MODIFIED &&
                (n->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
+        auto_insert_track_modified(sci,
+            (Sci_Position)n->position, (Sci_Position)n->length,
+            (n->modificationType & SC_MOD_INSERTTEXT) != 0);
         Sci_Position mod_line = (Sci_Position)sci_msg(sci, SCI_LINEFROMPOSITION,
             (uptr_t)n->position, 0);
         changehistory_on_modified(sci, mod_line, n->linesAdded);

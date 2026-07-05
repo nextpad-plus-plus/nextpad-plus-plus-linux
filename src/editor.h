@@ -152,6 +152,10 @@ void   editor_open_and_goto(const char *path, int line);
 void editor_incr_search_show(void);
 void editor_incr_search_close(void);
 
+/* Auto-Insert matched pairs engine (GAP-12) — invoked by the editor's
+ * SCN_CHARADDED handler after `ch` was typed at the caret. */
+void editor_auto_insert_on_char(GtkWidget *sci, int ch);
+
 /* Convenience send to current doc */
 sptr_t editor_send(unsigned int msg, uptr_t wp, sptr_t lp);
 

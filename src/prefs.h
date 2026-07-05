@@ -53,10 +53,19 @@ typedef struct {
     int      ac_mode;                 /* completion source — 0 Function,
                                        * 1 Word, 2 Function+Word (maps to
                                        * Windows autoCAction 1/2/3) */
+    gboolean ac_brief;                /* brief list: prefix subset only */
+    gboolean ac_ignore_numbers;       /* no completion for digit prefix */
     int      caret_blink_rate;        /* ms, 0 = no blink, default 600 */
     gboolean scroll_beyond_last_line; /* default FALSE */
     gboolean word_wrap;               /* default FALSE */
-    gboolean auto_close_brackets;     /* default FALSE */
+    /* Auto-Insert matched pairs (macOS efbb0a7 / Windows
+     * AutoCompletion::insertMatchedChars). */
+    gboolean ai_parens;               /* ( )  default FALSE */
+    gboolean ai_brackets;             /* [ ]  default FALSE */
+    gboolean ai_braces;               /* { }  default FALSE */
+    gboolean ai_quotes;               /* ' '  default FALSE */
+    gboolean ai_dquotes;              /* " "  default FALSE */
+    gboolean ai_html;                 /* </tag> on '>'  default FALSE */
     gboolean smart_highlight;         /* default TRUE */
     gboolean smart_hilite_case;       /* default FALSE */
     gboolean smart_hilite_word;       /* default TRUE */

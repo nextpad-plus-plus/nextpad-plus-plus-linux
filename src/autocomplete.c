@@ -103,6 +103,19 @@ void autocomplete_on_char_added(GtkWidget *sci, int ch)
         prefix[i] = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)(word_start + i), 0);
     prefix[prefix_len] = '\0';
 
+    /* "Ignore numbers" (macOS Phase 2): a purely numeric prefix never
+     * pops a list. */
+    if (g_prefs.ac_ignore_numbers) {
+        gboolean all_digits = TRUE;
+        for (int i = 0; i < prefix_len; i++)
+            if (!g_ascii_isdigit(prefix[i])) { all_digits = FALSE; break; }
+        if (all_digits) {
+            if (sci_msg(sci, SCI_AUTOCACTIVE, 0, 0))
+                sci_msg(sci, SCI_AUTOCCANCEL, 0, 0);
+            return;
+        }
+    }
+
     /* GTree: sorted (case-insensitive), unique words matching prefix */
     GTree *words = g_tree_new_full(cmp_ci, NULL, g_free, NULL);
 
@@ -123,7 +136,17 @@ void autocomplete_on_char_added(GtkWidget *sci, int ch)
         }
     }
     if (g_prefs.ac_mode == 0) {
-        /* Function-only: no keyword/document scan (matches Windows). */
+        /* Function-only: no keyword/document scan (matches Windows).
+         * Non-brief shows the FULL API list and lets Scintilla scroll
+         * to the prefix; "Make the list brief" narrows to the prefix
+         * subset (macOS _showAPICompletion). */
+        if (api && !g_prefs.ac_brief) {
+            g_tree_destroy(words);
+            sci_msg(sci, SCI_AUTOCSETIGNORECASE, api->ignore_case, 0);
+            sci_msg(sci, SCI_AUTOCSHOW, (uptr_t)prefix_len,
+                    (sptr_t)api->joined);
+            return;
+        }
         if (g_tree_nnodes(words) == 0) {
             g_tree_destroy(words);
             if (sci_msg(sci, SCI_AUTOCACTIVE, 0, 0))
