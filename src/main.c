@@ -5209,6 +5209,10 @@ void main_retranslate_menu(void)
     g_object_unref(t);
 }
 
+/* The Language submenu's model, shared with the status bar's
+ * double-click popup (macOS #174). Set by build_menu_model. */
+static GMenu *g_language_menu;
+
 static GMenuModel *build_menu_model(void)
 {
     GMenu *bar = g_menu_new();
@@ -6053,6 +6057,10 @@ static GMenuModel *build_menu_model(void)
         }
     }
     g_menu_append_submenu(bar, "_Language", G_MENU_MODEL(lang));
+    /* Keep a ref for the status bar's double-click popup (macOS #174):
+     * the model is shared, so dynamic UDL entries stay in sync. */
+    if (g_language_menu) g_object_unref(g_language_menu);
+    g_language_menu = g_object_ref(lang);
     g_object_unref(lang);
 
     /* Q-fix: Settings sits between Language and Tools per macOS
@@ -6343,6 +6351,31 @@ static void sresults_panel_close(GtkWidget *frame, gpointer user)
     searchresults_set_visible(FALSE);
 }
 
+/* macOS #174 — double-click on the status bar's language token pops the
+ * live Language menu at the label. One-shot GtkPopoverMenu; teardown is
+ * deferred out of the closed emission (same pattern as npp_menu.c). */
+static gboolean lang_popup_teardown_idle(gpointer w)
+{
+    gtk_widget_unparent(GTK_WIDGET(w));
+    return G_SOURCE_REMOVE;
+}
+static void on_lang_popup_closed(GtkPopover *p, gpointer ud)
+{
+    (void)ud;
+    g_idle_add_full(G_PRIORITY_HIGH, lang_popup_teardown_idle, p, NULL);
+}
+static void statusbar_open_language_menu(GtkWidget *anchor)
+{
+    if (!g_language_menu) return;
+    GtkWidget *pop =
+        gtk_popover_menu_new_from_model(G_MENU_MODEL(g_language_menu));
+    gtk_popover_set_has_arrow(GTK_POPOVER(pop), FALSE);
+    gtk_popover_set_position(GTK_POPOVER(pop), GTK_POS_TOP);
+    gtk_widget_set_parent(pop, anchor);
+    g_signal_connect(pop, "closed", G_CALLBACK(on_lang_popup_closed), NULL);
+    gtk_popover_popup(GTK_POPOVER(pop));
+}
+
 static void build_main_window(GtkApplication *app)
 {
     g_window = GTK_APPLICATION_WINDOW(gtk_application_window_new(app));
@@ -6399,6 +6432,7 @@ static void build_main_window(GtkApplication *app)
     GtkWidget *gitpanel  = gitpanel_init(GTK_WIDGET(g_window));
     GtkWidget *mdpanel   = mdpreview_init(GTK_WIDGET(g_window));
     GtkWidget *statusbar = statusbar_init();
+    statusbar_set_language_dblclick(statusbar_open_language_menu);
 
     /* Q1 — match macOS: editor on LEFT, all side panels packed to RIGHT
      * inside a single side-panel host. macOS: MainWindowController.mm:2665

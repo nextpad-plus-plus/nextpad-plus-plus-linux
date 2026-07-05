@@ -1,5 +1,6 @@
 #include "plugin.h"
 #include "paths.h"
+#include "statusbar.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "editor.h"
@@ -727,6 +728,14 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_ISTOOLBARHIDDEN:   return 0;
     case NPPM_HIDESTATUSBAR:     return 1;
     case NPPM_ISSTATUSBARHIDDEN: return 0;
+    /* Plugin-writable status-bar text. macOS b5b73b2 gives plugins one
+     * dedicated middle field; every STATUSBAR_* id routes there so the
+     * built-in left/right blocks can't be clobbered. */
+    case NPPM_SETSTATUSBAR: {
+        const char *text = (const char *)(intptr_t)lParam;
+        statusbar_set_plugin_text(text);
+        return 1;
+    }
     case NPPM_HIDEMENU:          return 1;
     case NPPM_ISMENUHIDDEN:      return 0;
     case NPPM_SHOWDOCSWITCHER:   return 1;
