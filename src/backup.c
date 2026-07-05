@@ -36,7 +36,7 @@ static void backup_path_for(NppDoc *doc, char *out, gsize size)
         snprintf(tmp, sizeof(tmp), "new_%d", doc->new_index);
         leaf = tmp;
     }
-    gchar *dir = npp_user_subdir("backup");
+    gchar *dir = npp_backup_dir();
     snprintf(out, size, "%s/%s", dir, leaf);
     g_free(dir);
 }
@@ -90,9 +90,8 @@ static gboolean backup_tick(gpointer data)
 
 void backup_init(void)
 {
-    /* Ensure the backup directory exists */
-    gchar *dir = npp_user_subdir("backup");
-    g_mkdir_with_parents(dir, 0755);
+    /* Ensure the backup directory exists (honours the custom path). */
+    gchar *dir = npp_backup_dir();
     g_free(dir);
 
     int interval = g_prefs.backup_interval_secs;

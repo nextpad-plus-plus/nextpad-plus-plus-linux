@@ -24,6 +24,12 @@ gchar *npp_user_subdir(const char *subpath);
 /* Returns "<user data dir>/<sub>/<leaf>" — caller MUST free. */
 gchar *npp_user_file(const char *subdir_or_null, const char *leaf);
 
+/* Backup-class root (macOS NppBackupDir): the user's custom backup path
+ * (prefs "Backup path") when set AND usable — created if missing and
+ * writable — else the default "<user data dir>/backup". Always returns
+ * an existing, writable directory. Caller MUST free. */
+gchar *npp_backup_dir(void);
+
 /* Returns RESOURCES_DIR if it exists, else /usr/share/nextpad-plus-plus.
  * Returned string is owned by the library; do not free. */
 const char *npp_bundle_dir(void);

@@ -142,6 +142,10 @@ typedef struct {
     gboolean tab_close_button;        /* default TRUE */
     gboolean double_click_tab_close;  /* default FALSE */
 
+    /* ── Backup ─────────────────────────────────────────────── */
+    char     backup_custom_dir[1024]; /* "" = default <user>/backup
+                                       * (macOS kPrefBackupDir) */
+
     /* ── Document List panel ────────────────────────────────── */
     gboolean doclist_show_ext;        /* default TRUE  */
     gboolean doclist_show_path;       /* default TRUE  */

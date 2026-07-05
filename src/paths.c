@@ -1,6 +1,7 @@
 #include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
+#include "prefs.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <sys/stat.h>
@@ -30,6 +31,23 @@ gchar *npp_user_file(const char *subdir_or_null, const char *leaf) {
                                 subdir_or_null, leaf, NULL);
     return g_build_filename(g_get_user_data_dir(), APP_USER_SUBDIR,
                             leaf, NULL);
+}
+
+gchar *npp_backup_dir(void)
+{
+    /* Custom path wins when it is usable — re-evaluated on every call
+     * so a fixed permission or replugged drive recovers without a
+     * restart (macOS NppBackupDir semantics). */
+    const char *custom = g_prefs.backup_custom_dir;
+    if (custom && custom[0]) {
+        g_mkdir_with_parents(custom, 0700);
+        if (g_file_test(custom, G_FILE_TEST_IS_DIR) &&
+            g_access(custom, W_OK) == 0)
+            return g_strdup(custom);
+    }
+    gchar *dflt = npp_user_subdir("backup");
+    g_mkdir_with_parents(dflt, 0700);
+    return dflt;
 }
 
 const char *npp_bundle_dir(void) {

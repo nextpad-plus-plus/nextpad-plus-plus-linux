@@ -332,6 +332,11 @@ static void apply_attr(const char *group, const char *attr, const char *val)
     else if (!strcmp(group, "Backup")) {
         if      (!strcmp(attr, "action"))             g_prefs.backup_enabled         = (atoi(val) != 0);
         else if (!strcmp(attr, "snapshotBackupTiming"))g_prefs.backup_interval_secs  = atoi(val) / 1000;
+        else if (!strcmp(attr, "dir")) {
+            strncpy(g_prefs.backup_custom_dir, val,
+                    sizeof(g_prefs.backup_custom_dir) - 1);
+            g_prefs.backup_custom_dir[sizeof(g_prefs.backup_custom_dir) - 1] = '\0';
+        }
     }
     else if (!strcmp(group, "ScintillaPrimaryView")) {
         if      (!strcmp(attr, "lineNumberMargin"))   g_prefs.show_line_numbers      = is_show(val);
@@ -626,10 +631,14 @@ void prefs_save(void)
         encoding_str_to_int(g_prefs.default_encoding));
 
     /* Backup */
-    g_string_append_printf(b,
-        "        <GUIConfig name=\"Backup\" action=\"%s\" isSnapshotMode=\"%s\" snapshotBackupTiming=\"%d\" />\n",
-        g_prefs.backup_enabled ? "2" : "0", b2yn(g_prefs.backup_enabled),
-        g_prefs.backup_interval_secs * 1000);
+    {
+        gchar *esc_bdir = g_markup_escape_text(g_prefs.backup_custom_dir, -1);
+        g_string_append_printf(b,
+            "        <GUIConfig name=\"Backup\" action=\"%s\" isSnapshotMode=\"%s\" snapshotBackupTiming=\"%d\" dir=\"%s\" />\n",
+            g_prefs.backup_enabled ? "2" : "0", b2yn(g_prefs.backup_enabled),
+            g_prefs.backup_interval_secs * 1000, esc_bdir);
+        g_free(esc_bdir);
+    }
 
     /* Caret */
     g_string_append_printf(b,
@@ -1536,6 +1545,61 @@ static GtkWidget *page_performance(void)
     return g;
 }
 
+static GtkWidget *s_backup_dir_entry  = NULL;
+static GtkWidget *s_backup_dir_status = NULL;
+
+/* Live validity feedback: empty = default; otherwise usable (created if
+ * missing + writable) or falling back (macOS Backup pane parity). */
+static void backup_dir_update_status(void)
+{
+    if (!s_backup_dir_status) return;
+    const char *v = g_prefs.backup_custom_dir;
+    if (!v[0]) {
+        gtk_label_set_text(GTK_LABEL(s_backup_dir_status),
+                           "Using the default backup folder.");
+        return;
+    }
+    gchar *resolved = npp_backup_dir();
+    gboolean ok = (strcmp(resolved, v) == 0);
+    gtk_label_set_text(GTK_LABEL(s_backup_dir_status),
+        ok ? "Custom folder is valid and will be used."
+           : "Folder not usable — falling back to the default.");
+    g_free(resolved);
+}
+
+static void on_backup_dir_changed(GtkEditable *e, gpointer d)
+{
+    (void)d;
+    const char *v = gtk_entry_get_text(GTK_ENTRY(e));
+    strncpy(g_prefs.backup_custom_dir, v ? v : "",
+            sizeof(g_prefs.backup_custom_dir) - 1);
+    g_prefs.backup_custom_dir[sizeof(g_prefs.backup_custom_dir) - 1] = '\0';
+    prefs_save();
+    backup_dir_update_status();
+}
+
+static void on_backup_dir_choose(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    GtkWidget *dlg = gtk_file_chooser_dialog_new(
+        "Choose Backup Folder", NULL, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+        "_Cancel", GTK_RESPONSE_CANCEL, "_Select", GTK_RESPONSE_ACCEPT, NULL);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+        char *path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+        if (path && s_backup_dir_entry)
+            gtk_entry_set_text(GTK_ENTRY(s_backup_dir_entry), path);
+        g_free(path);
+    }
+    gtk_widget_destroy(dlg);
+}
+
+static void on_backup_dir_reset(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    if (s_backup_dir_entry)
+        gtk_entry_set_text(GTK_ENTRY(s_backup_dir_entry), "");
+}
+
 static GtkWidget *page_backup(void)
 {
     GtkWidget *g = make_grid();
@@ -1553,9 +1617,32 @@ static GtkWidget *page_backup(void)
     g_signal_connect(s_backup_interval_spin, "value-changed",
                      G_CALLBACK(on_backup_interval), NULL);
 
-    GtkWidget *info = gtk_label_new("Backup files are written to "
-                                    "~/.local/share/nextpad++/backup/\n"
-                                    "and removed when the file is saved or closed.");
+    /* Custom backup location (macOS 7670433 / GAP-16). */
+    s_backup_dir_entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(s_backup_dir_entry), g_prefs.backup_custom_dir);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(s_backup_dir_entry),
+                                   "(default: user data dir/backup)");
+    gtk_widget_set_hexpand(s_backup_dir_entry, TRUE);
+    g_signal_connect(s_backup_dir_entry, "changed",
+                     G_CALLBACK(on_backup_dir_changed), NULL);
+    row(g, 2, "Backup path:", s_backup_dir_entry);
+
+    GtkWidget *bbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *bchoose = gtk_button_new_with_label("Choose…");
+    GtkWidget *breset  = gtk_button_new_with_label("Reset to default");
+    gtk_box_append(GTK_BOX(bbox), bchoose);
+    gtk_box_append(GTK_BOX(bbox), breset);
+    gtk_grid_attach(GTK_GRID(g), bbox, 1, 3, 1, 1);
+    g_signal_connect(bchoose, "clicked", G_CALLBACK(on_backup_dir_choose), NULL);
+    g_signal_connect(breset,  "clicked", G_CALLBACK(on_backup_dir_reset),  NULL);
+
+    s_backup_dir_status = gtk_label_new("");
+    gtk_widget_set_halign(s_backup_dir_status, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), s_backup_dir_status, 1, 4, 1, 1);
+    backup_dir_update_status();
+
+    GtkWidget *info = gtk_label_new("Backups are removed when the file "
+                                    "is saved or closed.");
     gtk_widget_set_halign(info, GTK_ALIGN_START);
     gtk_widget_set_margin_top(info, 8);
     gtk_label_set_line_wrap(GTK_LABEL(info), TRUE);
