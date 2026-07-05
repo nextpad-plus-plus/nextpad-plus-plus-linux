@@ -1799,7 +1799,7 @@ License:             GPL2
         <WidgetStyle name="Bad brace colour" styleID="35" fgColor="F09F9F" bgColor="3F3F3F" fontName="" fontStyle="0" fontSize=""></WidgetStyle>
         <WidgetStyle name="Current line background colour" styleID="0" bgColor="101010"></WidgetStyle>
         <!-- In below rule 'fgColor' attribute for 'Selected text colour' can be unlocked with a enableSelectFgColor.xml file -->
-        <WidgetStyle name="Selected text colour" styleID="0" bgColor="585858" fgColor="000000"></WidgetStyle>
+        <WidgetStyle name="Selected text colour" styleID="0" bgColor="227FAD" fgColor="000000"></WidgetStyle>
         <WidgetStyle name="Multi-selected text color" styleID="0" bgColor="C0C0C0"></WidgetStyle>
         <WidgetStyle name="Caret colour" styleID="2069" fgColor="8FAF9F"></WidgetStyle>
         <WidgetStyle name="Multi-edit carets color" styleID="0" fgColor="808040"></WidgetStyle>

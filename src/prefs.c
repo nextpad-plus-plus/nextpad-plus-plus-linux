@@ -172,6 +172,10 @@ NppPrefs g_prefs = {
     .double_click_tab_close  = FALSE,
     .tab_bar_wrap            = FALSE,
     .tab_max_label_width     = 200,
+    .hide_tab_bar            = FALSE,
+    .line_spacing10          = 10,
+    .doclist_show_ext        = TRUE,
+    .doclist_show_path       = TRUE,
     /* Backup */
     .backup_enabled          = TRUE,
     .backup_interval_secs    = 60,
@@ -242,6 +246,18 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "doubleClick2Close"))  g_prefs.double_click_tab_close = is_yes(val);
         else if (!strcmp(attr, "multiLine"))          g_prefs.tab_bar_wrap           = is_yes(val);
         else if (!strcmp(attr, "tabCompactLabelLen")) g_prefs.tab_max_label_width    = atoi(val);
+        else if (!strcmp(attr, "hide"))               g_prefs.hide_tab_bar           = is_yes(val);
+    }
+    else if (!strcmp(group, "LineSpacing")) {
+        if (!strcmp(attr, "value")) {
+            g_prefs.line_spacing10 = atoi(val);
+            if (g_prefs.line_spacing10 < 10 || g_prefs.line_spacing10 > 15)
+                g_prefs.line_spacing10 = 10;
+        }
+    }
+    else if (!strcmp(group, "DocList")) {
+        if      (!strcmp(attr, "showExt"))  g_prefs.doclist_show_ext  = is_yes(val);
+        else if (!strcmp(attr, "showPath")) g_prefs.doclist_show_path = is_yes(val);
     }
     else if (!strcmp(group, "TabSetting")) {
         if      (!strcmp(attr, "replaceBySpace"))     g_prefs.use_tabs               = !is_yes(val);
@@ -550,9 +566,20 @@ void prefs_save(void)
     g_string_append_printf(b,
         "        <GUIConfig name=\"TabBar\" closeButton=\"%s\" doubleClick2Close=\"%s\" "
         "reduce=\"yes\" dragAndDrop=\"yes\" drawTopBar=\"yes\" drawInactiveTab=\"yes\" "
-        "pinButton=\"yes\" multiLine=\"%s\" tabCompactLabelLen=\"%d\" />\n",
+        "pinButton=\"yes\" multiLine=\"%s\" tabCompactLabelLen=\"%d\" hide=\"%s\" />\n",
         b2yn(g_prefs.tab_close_button), b2yn(g_prefs.double_click_tab_close),
-        b2yn(g_prefs.tab_bar_wrap), g_prefs.tab_max_label_width);
+        b2yn(g_prefs.tab_bar_wrap), g_prefs.tab_max_label_width,
+        b2yn(g_prefs.hide_tab_bar));
+
+    /* Line spacing (macOS #149) */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"LineSpacing\" value=\"%d\" />\n",
+        g_prefs.line_spacing10);
+
+    /* Document List panel columns */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"DocList\" showExt=\"%s\" showPath=\"%s\" />\n",
+        b2yn(g_prefs.doclist_show_ext), b2yn(g_prefs.doclist_show_path));
 
     /* TabSetting */
     g_string_append_printf(b,
@@ -879,6 +906,7 @@ CHK(lf_allow_url,      large_file_allow_url_click,    (void)0)
 CHK(tab_close_btn,     tab_close_button,           (void)0)
 CHK(tab_dclose,        double_click_tab_close,     (void)0)
 CHK(tab_wrap,          tab_bar_wrap,               (void)0)
+CHK(hide_tab_bar,      hide_tab_bar,               editor_apply_prefs())
 CHK(status_visible,    show_status_bar,            statusbar_set_visible(g_prefs.show_status_bar))
 
 static void on_tab_width(GtkSpinButton *s, gpointer d)
@@ -898,6 +926,16 @@ static void on_ac_min(GtkSpinButton *s, gpointer d)
 
 static void on_caret_w(GtkComboBox *c, gpointer d)
     { (void)d; g_prefs.caret_width = gtk_combo_box_get_active(c) + 1; editor_apply_prefs(); prefs_save(); }
+static void on_line_spacing(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    static const int vals[] = { 10, 12, 13, 14, 15 };
+    int i = gtk_combo_box_get_active(c);
+    if (i < 0 || i > 4) i = 0;
+    g_prefs.line_spacing10 = vals[i];
+    editor_apply_prefs();
+    prefs_save();
+}
 static void on_blink(GtkSpinButton *s, gpointer d)
     { (void)d; g_prefs.caret_blink_rate = (int)gtk_spin_button_get_value(s); editor_apply_prefs(); prefs_save(); }
 static void on_font_q(GtkComboBox *c, gpointer d)
@@ -1051,6 +1089,7 @@ static GtkWidget *page_tab_bar(void)
     make_check(g, r++, "Show close button on tabs",      g_prefs.tab_close_button,      G_CALLBACK(on_tab_close_btn));
     make_check(g, r++, "Double-click to close tab",      g_prefs.double_click_tab_close, G_CALLBACK(on_tab_dclose));
     make_check(g, r++, "Wrap tabs to multiple lines",    g_prefs.tab_bar_wrap,          G_CALLBACK(on_tab_wrap));
+    make_check(g, r++, "Hide tab bar",                   g_prefs.hide_tab_bar,          G_CALLBACK(on_hide_tab_bar));
 
     GtkWidget *ml = gtk_spin_button_new_with_range(40, 1000, 10);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ml), g_prefs.tab_max_label_width);
@@ -1231,6 +1270,26 @@ static GtkWidget *page_editor(void)
     gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(cw), "Thick (3px)");
     gtk_combo_box_set_active(GTK_COMBO_BOX(cw), g_prefs.caret_width - 1);
     row(g, r++, "Caret width:", cw);
+
+    /* Line spacing presets (macOS #149). */
+    GtkWidget *ls = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.0 (default)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.2");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.3");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.4");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.5");
+    {
+        int idx = 0;
+        switch (g_prefs.line_spacing10) {
+        case 12: idx = 1; break;
+        case 13: idx = 2; break;
+        case 14: idx = 3; break;
+        case 15: idx = 4; break;
+        }
+        gtk_combo_box_set_active(GTK_COMBO_BOX(ls), idx);
+    }
+    row(g, r++, "Line spacing:", ls);
+    g_signal_connect(ls, "changed", G_CALLBACK(on_line_spacing), NULL);
     g_signal_connect(cw, "changed", G_CALLBACK(on_caret_w), NULL);
 
     GtkWidget *bl = gtk_spin_button_new_with_range(0, 2000, 50);

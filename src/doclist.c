@@ -13,8 +13,9 @@
  * Per-row right-click pops the same XML-driven tab context menu the tab
  * strip uses (ctxmenu_append_tab). Empty-area right-click toggles the
  * Ext / Path column visibility — matching macOS NSTableHeaderView's
- * column-toggle menu. Column visibility prefs are session-scoped for
- * now (TODO: persist via prefs.xml).
+ * column-toggle menu; visibility persists via config.xml
+ * (g_prefs.doclist_show_ext/_show_path). Rows are tinted with the
+ * doc's tab colour at 50% alpha (macOS 252dce9).
  *
  * GTK widget choice: GtkColumnView + GListStore. GtkColumnView is GTK4's
  * column-based list widget (4.10+); it gives us header rendering, click-
@@ -27,6 +28,7 @@
 #include "npp_menu.h"
 #include "ctxmenu.h"
 #include "editor.h"
+#include "prefs.h"
 #include <gtk/gtk.h>
 #include <string.h>
 
@@ -166,6 +168,28 @@ static void name_bind(GtkSignalListItemFactory *f, GObject *li_obj, gpointer ud)
     /* Store the item ptr on the cell so the right-click handler can
      * find which row was clicked via gtk_widget_pick + parent walk. */
     g_object_set_data(G_OBJECT(box), ITEM_DATA_KEY, item);
+
+    /* Tint the ROW with the doc's tab colour (macOS 252dce9). The row
+     * widget is the ancestor whose CSS node is "row"; cells recycle, so
+     * clear all tint classes before applying the current one. */
+    {
+        GtkWidget *rw = gtk_widget_get_parent(box);
+        while (rw && strcmp(gtk_widget_get_css_name(rw), "row") != 0)
+            rw = gtk_widget_get_parent(rw);
+        if (rw) {
+            for (int c = 1; c <= 5; c++) {
+                char cls[24];
+                g_snprintf(cls, sizeof cls, "doclist-color-%d", c);
+                gtk_widget_remove_css_class(rw, cls);
+            }
+            if (item->color_tag >= 1 && item->color_tag <= 5) {
+                char cls[24];
+                g_snprintf(cls, sizeof cls, "doclist-color-%d",
+                           item->color_tag);
+                gtk_widget_add_css_class(rw, cls);
+            }
+        }
+    }
 }
 
 /* Plain text cell — used for Ext and Path columns. */
@@ -281,6 +305,8 @@ static void cb_toggle_ext(GtkButton *b, gpointer ud)
 {
     (void)b; (void)ud;
     s_show_ext = !s_show_ext;
+    g_prefs.doclist_show_ext = s_show_ext;    /* persisted (macOS parity) */
+    prefs_save();
     apply_column_visibility();
 }
 
@@ -288,6 +314,8 @@ static void cb_toggle_path(GtkButton *b, gpointer ud)
 {
     (void)b; (void)ud;
     s_show_path = !s_show_path;
+    g_prefs.doclist_show_path = s_show_path;
+    prefs_save();
     apply_column_visibility();
 }
 
@@ -385,6 +413,13 @@ static void install_doclist_css_once(void)
          * normal foreground (otherwise selected rows would render the
          * gray text macOS uses for selected, which doesn't read on
          * #dcdcdc). */
+        /* Row tint = the doc's tab colour at 50% alpha (macOS 252dce9).
+         * Palette matches editor_tab_color_hex(). Selection wins. */
+        "columnview.doclist-cv > listview > row.doclist-color-1:not(:selected) { background-color: rgba(252,227,134,0.5); }"
+        "columnview.doclist-cv > listview > row.doclist-color-2:not(:selected) { background-color: rgba(169,240,140,0.5); }"
+        "columnview.doclist-cv > listview > row.doclist-color-3:not(:selected) { background-color: rgba(122,201,245,0.5); }"
+        "columnview.doclist-cv > listview > row.doclist-color-4:not(:selected) { background-color: rgba(245,182,122,0.5); }"
+        "columnview.doclist-cv > listview > row.doclist-color-5:not(:selected) { background-color: rgba(240,140,240,0.5); }"
         "columnview.doclist-cv > listview > row:selected,"
         "columnview.doclist-cv > listview > row:selected cell {"
         "  background-color: #dcdcdc;"
@@ -439,6 +474,10 @@ GtkWidget *doclist_init(void)
 
     s_panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_size_request(s_panel, 280, -1);
+
+    /* Column visibility persists via config.xml (GAP-36). */
+    s_show_ext  = g_prefs.doclist_show_ext;
+    s_show_path = g_prefs.doclist_show_path;
 
     GtkWidget *scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),

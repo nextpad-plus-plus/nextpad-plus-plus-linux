@@ -1263,6 +1263,8 @@ GtkWidget *editor_init(GtkWidget *window)
     gtk_widget_add_css_class(s_notebook, "npp-editor-tabs");
     gtk_notebook_set_scrollable(GTK_NOTEBOOK(s_notebook), TRUE);
     gtk_notebook_set_show_border(GTK_NOTEBOOK(s_notebook), FALSE);
+    gtk_notebook_set_show_tabs(GTK_NOTEBOOK(s_notebook),
+                               !g_prefs.hide_tab_bar);   /* macOS #183 */
     g_signal_connect(s_notebook, "switch-page", G_CALLBACK(on_switch_page), NULL);
     editor_new_doc();
 
@@ -1673,6 +1675,8 @@ static GtkWidget *secondary_notebook_new(gboolean vertical)
     gtk_widget_add_css_class(nb, "npp-editor-tabs");
     gtk_notebook_set_scrollable(GTK_NOTEBOOK(nb), TRUE);
     gtk_notebook_set_show_border(GTK_NOTEBOOK(nb), FALSE);
+    gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nb),
+                               !g_prefs.hide_tab_bar);   /* macOS #183 */
     g_signal_connect(nb, "switch-page", G_CALLBACK(on_switch_page), NULL);
     *(vertical ? &s_notebook_v : &s_notebook_h) = nb;
     return nb;
@@ -2211,11 +2215,37 @@ void editor_close_all_quit(GApplication *app)
 /* Apply preferences to all open editors                              */
 /* ------------------------------------------------------------------ */
 
+/* Line spacing (macOS #149): extra ascent/descent derived from the
+ * multiplier and the CURRENT text height. Reset first so repeated
+ * applications don't compound. */
+static void apply_line_spacing(GtkWidget *sci)
+{
+    sci_msg(sci, SCI_SETEXTRAASCENT,  0, 0);
+    sci_msg(sci, SCI_SETEXTRADESCENT, 0, 0);
+    int m10 = g_prefs.line_spacing10;
+    if (m10 <= 10) return;
+    int base  = (int)sci_msg(sci, SCI_TEXTHEIGHT, 0, 0);
+    int extra = (base * (m10 - 10)) / 10;
+    if (extra <= 0) return;
+    sci_msg(sci, SCI_SETEXTRAASCENT,  extra - extra / 2, 0);
+    sci_msg(sci, SCI_SETEXTRADESCENT, extra / 2, 0);
+}
+
 void editor_apply_prefs(void)
 {
-    int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
-    for (int i = 0; i < n; i++) {
-        GtkWidget *sci = sci_of_page(i);
+    /* Hide-tab-bar pref (macOS #183) — all notebooks. */
+    GtkWidget *nbs[3] = { s_notebook, s_notebook_v, s_notebook_h };
+    for (int k = 0; k < 3; k++)
+        if (nbs[k])
+            gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nbs[k]),
+                                       !g_prefs.hide_tab_bar);
+
+    /* ALL docs — primary + splits (tabs moved to a split view must
+     * receive pref changes too). */
+    GPtrArray *docs = editor_all_docs();
+    for (guint di = 0; di < docs->len; di++) {
+        NppDoc *dref = g_ptr_array_index(docs, di);
+        GtkWidget *sci = dref->sci;
         if (!sci) continue;
 
         /* Indentation + caret. P14: per-language override takes precedence. */
@@ -2283,7 +2313,10 @@ void editor_apply_prefs(void)
             int digits = (ln >= 100000) ? 6 : (ln >= 10000) ? 5 : (ln >= 1000) ? 4 : 3;
             sci_msg(sci, SCI_SETMARGINWIDTHN, 0, digits * 10);
         }
+
+        apply_line_spacing(sci);
     }
+    g_ptr_array_free(docs, TRUE);
     statusbar_update_from_sci(
         sci_of_page(gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook))));
 }
@@ -2311,9 +2344,11 @@ void editor_select_all(void) { editor_send(SCI_SELECTALL,  0, 0); }
 
 void editor_reapply_styles(void)
 {
-    int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
-    for (int i = 0; i < n; i++) {
-        GtkWidget *sci = sci_of_page(i);
+    /* ALL docs — split tabs must restyle on theme changes too. */
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        GtkWidget *sci = d->sci;
         if (!sci) continue;
         const char *lang = (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
         stylestore_apply_default(sci);
@@ -2321,7 +2356,11 @@ void editor_reapply_styles(void)
         stylestore_apply_global(sci);
         if (lang && *lang)
             stylestore_apply_lexer(sci, lang);
+        /* Line spacing derives from the (possibly changed) text height —
+         * re-derive after styling (macOS #149). */
+        apply_line_spacing(sci);
     }
+    g_ptr_array_free(docs, TRUE);
 }
 
 void editor_goto_line_dialog(void)

@@ -48,6 +48,8 @@ typedef struct {
     /* ── Editor tab ─────────────────────────────────────────── */
     gboolean highlight_current_line;  /* default TRUE */
     int      caret_width;             /* 1-3 px, default 1 */
+    int      line_spacing10;          /* line-spacing multiplier ×10:
+                                       * 10/12/13/14/15 (macOS #149) */
     int      caret_blink_rate;        /* ms, 0 = no blink, default 600 */
     gboolean scroll_beyond_last_line; /* default FALSE */
     gboolean word_wrap;               /* default FALSE */
@@ -136,8 +138,13 @@ typedef struct {
     /* ── Tab bar (under General) ────────────────────────────── */
     gboolean tab_close_button;        /* default TRUE */
     gboolean double_click_tab_close;  /* default FALSE */
+
+    /* ── Document List panel ────────────────────────────────── */
+    gboolean doclist_show_ext;        /* default TRUE  */
+    gboolean doclist_show_path;       /* default TRUE  */
     gboolean tab_bar_wrap;            /* default FALSE */
     int      tab_max_label_width;     /* px, default 200 */
+    gboolean hide_tab_bar;            /* default FALSE (macOS #183) */
 
     /* ── Backup tab ─────────────────────────────────────────── */
     gboolean backup_enabled;          /* default TRUE */

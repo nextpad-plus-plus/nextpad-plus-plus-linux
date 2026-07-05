@@ -607,10 +607,22 @@ void searchresults_end(int total_hits, int total_files)
     if (!s_lines) return;
 
     /* Insert the search-header row at the block start, now totals are in. */
-    char *hdr = g_strdup_printf("Search \"%s\"  (%d match%s in %d file%s)",
+    /* Timestamped header (macOS 7dc206a). */
+    char tstamp[16] = "";
+    {
+        GDateTime *now = g_date_time_new_now_local();
+        if (now) {
+            gchar *t = g_date_time_format(now, "%H:%M:%S");
+            g_snprintf(tstamp, sizeof tstamp, "%s", t ? t : "");
+            g_free(t);
+            g_date_time_unref(now);
+        }
+    }
+    char *hdr = g_strdup_printf("Search \"%s\"  (%d match%s in %d file%s)  [%s]",
                                 s_needle ? s_needle : "",
                                 total_hits,  total_hits  == 1 ? "" : "es",
-                                total_files, total_files == 1 ? "" : "s");
+                                total_files, total_files == 1 ? "" : "s",
+                                tstamp);
     SRLine L = { SR_SEARCH, hdr, NULL, -1 };
     if (s_block_start >= 0 && (guint)s_block_start <= s_lines->len)
         g_array_insert_val(s_lines, s_block_start, L);
@@ -625,8 +637,14 @@ void searchresults_end(int total_hits, int total_files)
 
     searchresults_set_visible(TRUE);
 
-    /* Reveal everything and scroll to this search's header. */
+    /* Reveal this search fully, then auto-collapse every PREVIOUS
+     * search group (macOS 536b7d4) so the fresh results stand alone. */
     SR_SEND(SCI_FOLDALL, SC_FOLDACTION_EXPAND, 0);
+    for (guint fi = 0; fi < s_lines->len; fi++) {
+        const SRLine *sl = &g_array_index(s_lines, SRLine, fi);
+        if (sl->kind == SR_SEARCH && (int)fi != s_block_start)
+            SR_SEND(SCI_FOLDLINE, fi, SC_FOLDACTION_CONTRACT);
+    }
     if (s_filter_entry)
         on_filter_changed(NULL, NULL);   /* re-apply any active filter */
     SR_SEND(SCI_GOTOLINE, s_block_start, 0);
