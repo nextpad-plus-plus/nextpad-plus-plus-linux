@@ -298,16 +298,27 @@ void theme_modern_reload(void)
         "}\n"
         ".npp-modern notebook.npp-editor-tabs > header > tabs > tab {\n"
         "  background: %s;\n"
+        "  background-image: none;\n"           /* kill Classic's gradient */
         "  border: 1px solid %s;\n"
         "  border-bottom: none;\n"
         "  border-radius: 8px 8px 0 0;\n"
         "  margin: 3px 1px 0 1px;\n"
         "  padding: 1px 10px;\n"
         "}\n"
+        ".npp-modern notebook.npp-editor-tabs > header > tabs > tab:hover {\n"
+        "  background-image: none;\n"
+        "  background-color: alpha(%s, 0.75);\n"
+        "}\n"
+        /* Active tab: FULL warm tint, no stripe — the orange top line was
+         * Classic's inset box-shadow leaking through (user-rejected). */
         ".npp-modern notebook.npp-editor-tabs > header > tabs > tab:checked {\n"
         "  background: %s;\n"
+        "  background-image: none;\n"
+        "  box-shadow: none;\n"
         "}\n",
-        win_bg, tab_bg, capsule_bd, tab_active);
+        win_bg, tab_bg, capsule_bd,
+        dark ? "#4a4a52" : "#ffffff",
+        tab_active);
 
     /* Full-tab colour tint (Tahoe) instead of Classic's 3px stripe. The
      * selectors out-specify the stripe rules from install_tab_color_css. */
