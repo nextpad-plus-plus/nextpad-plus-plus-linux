@@ -99,6 +99,7 @@ NppPrefs g_prefs = {
     .use_tabs                = TRUE,    /* Q-align: macOS default */
     .auto_indent             = AUTO_INDENT_ADVANCED,  /* macOS default — kPrefAutoIndent=@1 */
     .backspace_unindent      = FALSE,
+    .column_sel_to_multi_edit= TRUE,   /* N++/macOS default */
     /* Editor */
     .highlight_current_line  = TRUE,
     .caret_width             = 1,
@@ -441,6 +442,7 @@ static void apply_text(const char *group, const char *text) {
     if      (!strcmp(group, "StatusBar"))                    g_prefs.show_status_bar    = is_show(t);
     else if (!strcmp(group, "MaintainIndent"))               g_prefs.auto_indent        = atoi(t);
     else if (!strcmp(group, "BackspaceUnindent"))            g_prefs.backspace_unindent = is_yes(t);
+    else if (!strcmp(group, "ColumnSel2MultiEdit"))          g_prefs.column_sel_to_multi_edit = is_yes(t);
     else if (!strcmp(group, "RememberLastSession"))          g_prefs.remember_session   = is_yes(t);
     else if (!strcmp(group, "KeepSessionAbsentFileEntries")) g_prefs.keep_absent_session= is_yes(t);
     else if (!strcmp(group, "SaveAllConfirm"))               g_prefs.save_all_confirm   = is_yes(t);
@@ -655,6 +657,7 @@ void prefs_save(void)
     /* MaintainIndent / BackspaceUnindent / Session toggles */
     g_string_append_printf(b, "        <GUIConfig name=\"MaintainIndent\">%d</GUIConfig>\n", g_prefs.auto_indent);
     g_string_append_printf(b, "        <GUIConfig name=\"BackspaceUnindent\">%s</GUIConfig>\n", b2yn(g_prefs.backspace_unindent));
+    g_string_append_printf(b, "        <GUIConfig name=\"ColumnSel2MultiEdit\">%s</GUIConfig>\n", b2yn(g_prefs.column_sel_to_multi_edit));
     g_string_append_printf(b, "        <GUIConfig name=\"RememberLastSession\">%s</GUIConfig>\n", b2yn(g_prefs.remember_session));
     g_string_append_printf(b, "        <GUIConfig name=\"KeepSessionAbsentFileEntries\">%s</GUIConfig>\n", b2yn(g_prefs.keep_absent_session));
     g_string_append_printf(b, "        <GUIConfig name=\"SaveAllConfirm\">%s</GUIConfig>\n", b2yn(g_prefs.save_all_confirm));
@@ -934,6 +937,7 @@ static GtkWidget *make_check(GtkWidget *grid, int r, const char *label, gboolean
     }
 
 CHK(bs_unindent,       backspace_unindent,         (void)0)
+CHK(colsel_medit,      column_sel_to_multi_edit,   (void)0)
 CHK(ac_enable,         autocomplete_enabled,       (void)0)
 CHK(hl_line,           highlight_current_line,     editor_apply_prefs())
 CHK(scroll_past,       scroll_beyond_last_line,    editor_apply_prefs())
@@ -1488,6 +1492,8 @@ static GtkWidget *page_indentation(void)
     g_signal_connect(aa, "toggled", G_CALLBACK(on_ai_adv),   NULL);
 
     make_check(g, r++, "Backspace key removes one indent level", g_prefs.backspace_unindent, G_CALLBACK(on_bs_unindent));
+    /* GAP-41 — label matches macOS for locale-string reuse. */
+    make_check(g, r++, "Column selection switches to multi-editing", g_prefs.column_sel_to_multi_edit, G_CALLBACK(on_colsel_medit));
 
     return g;
 }

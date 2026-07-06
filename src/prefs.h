@@ -138,6 +138,10 @@ typedef struct {
     /* GAP-70 — appearance style: 0 Classic (default, untouched) /
      * 1 Modern (Tahoe-inspired CSS). Restart-gated like macOS. */
     int      appearance_style;
+
+    /* GAP-41 — Backspace/arrows convert a column (rectangular) selection
+     * to multi-caret editing first (N++ default behaviour). */
+    gboolean column_sel_to_multi_edit;
     int      in_sel_threshold;        /* min chars of selection to enable "in selection" */
     char     search_engine_url[256];  /* default "https://duckduckgo.com/?q=%s" */
 

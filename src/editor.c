@@ -146,11 +146,29 @@ static void reload_doc_from_disk_with_enc(NppDoc *doc, const char *forced_enc)
     doc->encoding = g_strdup(enc_name);
     doc->has_bom  = encoding_has_bom(enc_name);
 
-    Sci_Position saved_pos = (Sci_Position)sci_msg(doc->sci, SCI_GETCURRENTPOS, 0, 0);
+    /* GAP-58 — preserve caret (line + column) and the viewport across the
+     * reload (macOS f587f15): a monitored tail -f view must not snap back
+     * to the top or drift when content shifts. Line/column survives edits
+     * better than the previous raw byte position. */
+    sptr_t saved_pos    = sci_msg(doc->sci, SCI_GETCURRENTPOS, 0, 0);
+    sptr_t saved_line   = sci_msg(doc->sci, SCI_LINEFROMPOSITION, (uptr_t)saved_pos, 0);
+    sptr_t saved_column = sci_msg(doc->sci, SCI_GETCOLUMN, (uptr_t)saved_pos, 0);
+    sptr_t saved_first  = sci_msg(doc->sci, SCI_GETFIRSTVISIBLELINE, 0, 0);
+
     sci_msg(doc->sci, SCI_SETTEXT, 0, (sptr_t)utf8);
     sci_msg(doc->sci, SCI_SETSAVEPOINT, 0, 0);
     sci_msg(doc->sci, SCI_EMPTYUNDOBUFFER, 0, 0);
-    sci_msg(doc->sci, SCI_GOTOPOS, (uptr_t)saved_pos, 0);
+
+    /* Clamp to the reloaded file's bounds — the file may have shrunk.
+     * SCI_FINDCOLUMN clamps the column to the target line on its own. */
+    sptr_t line_count  = sci_msg(doc->sci, SCI_GETLINECOUNT, 0, 0);
+    sptr_t target_line = MIN(saved_line, line_count - 1);
+    sptr_t target_pos  = sci_msg(doc->sci, SCI_FINDCOLUMN,
+                                 (uptr_t)target_line, saved_column);
+    sci_msg(doc->sci, SCI_GOTOPOS, (uptr_t)target_pos, 0);
+    /* Restore the viewport last so it wins over GOTOPOS's scroll-to-caret. */
+    sci_msg(doc->sci, SCI_SETFIRSTVISIBLELINE,
+            (uptr_t)MIN(saved_first, line_count - 1), 0);
     g_free(utf8);
 
     lexer_apply_from_path(doc->sci, doc->filepath);
@@ -294,6 +312,43 @@ static gboolean on_sci_zoom_key(GtkEventControllerKey *ctl, guint keyval,
     return FALSE;
 }
 
+/* GAP-41 — convert a rectangular selection to a stream multi-selection
+ * before Scintilla processes keys that should act per caret (N++'s
+ * _columnSel2MultiEdit, macOS fec18f1). Alt is the rectangular-selection
+ * modifier — leave Alt+Shift+Arrow column extension untouched. The
+ * second SetSelectionMode call clears the lingering rectangular anchor
+ * (Neil Hodgson, scintilla bug #2412). Never consumes the key. */
+static gboolean on_sci_colsel_key(GtkEventControllerKey *ctl, guint keyval,
+                                  guint keycode, GdkModifierType state,
+                                  gpointer d)
+{
+    (void)ctl; (void)keycode;
+    GtkWidget *sci = d;
+    if (!g_prefs.column_sel_to_multi_edit) return FALSE;
+    if (state & GDK_ALT_MASK) return FALSE;
+
+    switch (keyval) {
+    case GDK_KEY_BackSpace:
+    case GDK_KEY_Left:  case GDK_KEY_KP_Left:
+    case GDK_KEY_Right: case GDK_KEY_KP_Right:
+    case GDK_KEY_Up:    case GDK_KEY_KP_Up:
+    case GDK_KEY_Down:  case GDK_KEY_KP_Down:
+    case GDK_KEY_Home:  case GDK_KEY_KP_Home:
+    case GDK_KEY_End:   case GDK_KEY_KP_End:
+    case GDK_KEY_Return: case GDK_KEY_KP_Enter:
+        break;
+    default:
+        return FALSE;   /* not a key that should collapse the column sel */
+    }
+
+    sptr_t mode = sci_msg(sci, SCI_GETSELECTIONMODE, 0, 0);
+    if (mode != SC_SEL_RECTANGLE && mode != SC_SEL_THIN) return FALSE;
+
+    sci_msg(sci, SCI_SETSELECTIONMODE, SC_SEL_STREAM, 0);
+    sci_msg(sci, SCI_SETSELECTIONMODE, SC_SEL_STREAM, 0);
+    return FALSE;       /* key still reaches Scintilla */
+}
+
 /* #3 split views: whichever editor view last held keyboard focus is the
  * "active" one — current_sci / editor_current_doc resolve against it. */
 static void on_sci_focus_enter(GtkEventControllerFocus *fc, gpointer data)
@@ -427,6 +482,21 @@ static void setup_sci(GtkWidget *sci)
         GtkEventController *zc = gtk_event_controller_key_new();
         g_signal_connect(zc, "key-pressed", G_CALLBACK(on_sci_zoom_key), NULL);
         gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(zc));
+    }
+    {
+        /* GAP-41 — "column selection to multi-editing" (N++ parity, macOS
+         * fec18f1 #164): before Scintilla sees Backspace/arrows/Home/End/
+         * Return on a rectangular selection, convert it to a stream
+         * multi-selection so the key acts per caret (stock Scintilla
+         * refuses e.g. Backspace across line starts on a column block).
+         * CAPTURE phase so we run before Scintilla's own key handling;
+         * we never consume the key. */
+        GtkEventController *cc = gtk_event_controller_key_new();
+        gtk_event_controller_set_propagation_phase(
+            GTK_EVENT_CONTROLLER(cc), GTK_PHASE_CAPTURE);
+        g_signal_connect(cc, "key-pressed",
+                         G_CALLBACK(on_sci_colsel_key), sci);
+        gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(cc));
     }
     {
         /* #3 — track which split view is active by keyboard focus. */
@@ -2452,6 +2522,11 @@ void editor_apply_prefs(void)
 
         /* P3 — newly-wired prefs. */
         sci_msg(sci, SCI_SETBACKSPACEUNINDENTS, g_prefs.backspace_unindent ? 1 : 0, 0);
+        /* GAP-39 — Tab/Shift+Tab indent/outdent line content. Scintilla's
+         * default is already 1; set explicitly so it can't regress (the
+         * macOS port lost Shift+Tab outdent by tying this to the
+         * backspace-unindent pref — af62a97 #201). */
+        sci_msg(sci, SCI_SETTABINDENTS, 1, 0);
         sci_msg(sci, SCI_SETFONTQUALITY,        (uptr_t)g_prefs.font_quality, 0);
         /* Copy/cut whole line when nothing is selected. SCI_COPYALLOWLINE
          * is a per-call message in Scintilla, not a setter — we rebind the

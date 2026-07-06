@@ -51,6 +51,21 @@ static int           s_next_cmd_id = CMD_ID_BASE;
 /* forward declaration */
 static long host_msg_cb(unsigned int msg, unsigned long wParam, long lParam);
 
+/* GAP-51 — bufferIDs handed to plugins are NppDoc* handles. Before
+ * dereferencing one that came BACK from a plugin, check it is still a
+ * live document (macOS 56b5eff: bogus bufferID must not crash). */
+static NppDoc *validate_buffer_id(void *candidate)
+{
+    if (!candidate) return NULL;
+    NppDoc *found = NULL;
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len && !found; i++)
+        if (g_ptr_array_index(docs, i) == candidate)
+            found = candidate;
+    g_ptr_array_free(docs, TRUE);
+    return found;
+}
+
 /* ------------------------------------------------------------------
  * Load one plugin from a .so path; silently skip if invalid
  * ------------------------------------------------------------------ */
@@ -286,7 +301,10 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         return doc ? (long)(intptr_t)doc : 0L;
     }
     case NPPM_GETFULLPATHFROMBUFFERID: {
-        NppDoc *doc = (NppDoc *)(intptr_t)wParam;
+        /* GAP-51 (macOS 56b5eff): a bufferID is an NppDoc* handle we handed
+         * out earlier — validate it against the live document set before
+         * dereferencing, so a stale/garbage ID from a plugin can't crash. */
+        NppDoc *doc = validate_buffer_id((void *)(intptr_t)wParam);
         char *buf = (char *)(intptr_t)lParam;
         if (!buf) return doc && doc->filepath ? (long)strlen(doc->filepath) : 0;
         if (doc && doc->filepath) snprintf(buf, 2048, "%s", doc->filepath);
@@ -298,9 +316,12 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_GETNBOPENFILES:
         return (long)editor_page_count();
     case NPPM_DOOPEN: {
+        /* GAP-51 (macOS 17eda10): guard NULL/empty/dangling paths — a
+         * plugin passing a stale pointer must not crash the host. */
         const char *path = (const char *)(intptr_t)lParam;
-        if (path && *path) return editor_open_path(path) ? 1 : 0;
-        return 0;
+        if (!path || !*path) return 0;
+        if (!g_file_test(path, G_FILE_TEST_IS_REGULAR)) return 0;
+        return editor_open_path(path) ? 1 : 0;
     }
 
     /* ── Path queries ────────────────────────────────────────────────── */
@@ -562,10 +583,14 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_DMM_REGISTERPANEL: {
         /* lParam → tTbData struct (NSView*/ /*hClient on macOS). On Linux this is
          * a GtkWidget *. Stub: track it but don't show. G21 wires actual
-         * floating/docking. */
+         * floating/docking.
+         * GAP-51 (macOS fa85edf): reject NULL / non-widget pointers at
+         * registration so a bogus handle can't crash later show/hide. */
         if (s_plugin_panel_count >= 32) return 0;
+        void *w = (void *)(intptr_t)lParam;
+        if (!w || !GTK_IS_WIDGET(w)) return 0;
         PluginPanel *p = &s_plugin_panels[s_plugin_panel_count++];
-        p->panel_widget = (void *)(intptr_t)lParam;
+        p->panel_widget = w;
         p->visible = 0;
         return (long)s_plugin_panel_count;  /* opaque handle */
     }
@@ -573,7 +598,8 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         int idx = (int)wParam - 1;
         if (idx < 0 || idx >= s_plugin_panel_count) return 0;
         s_plugin_panels[idx].visible = 1;
-        if (s_plugin_panels[idx].panel_widget)
+        if (s_plugin_panels[idx].panel_widget &&
+            GTK_IS_WIDGET(s_plugin_panels[idx].panel_widget))
             gtk_widget_show(GTK_WIDGET(s_plugin_panels[idx].panel_widget));
         return 1;
     }
