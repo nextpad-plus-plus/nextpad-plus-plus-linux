@@ -36,6 +36,7 @@
 #include "branding.h"
 #include "editor.h"
 #include "backup.h"
+#include "changehistory.h"
 #include "sci_c.h"
 #include "prefs.h"
 #include "sci_messages.h"
@@ -453,6 +454,9 @@ void session_restore(void)
                                                         the modify event */
                 scintilla_send_message(SCINTILLA(nd->sci), SCI_SETTEXT,
                                        0, (sptr_t)content);
+                /* Restoring is not editing — clear the solid-yellow
+                 * change-history margin the SETTEXT just produced. */
+                changehistory_clear(nd->sci);
                 /* No SETSAVEPOINT: the buffer is intentionally left in
                  * the modified state (it has no on-disk home yet).
                  * Re-snapshot right away so a crash before the next
@@ -495,6 +499,7 @@ void session_restore(void)
                     scintilla_send_message(SCINTILLA(bd->sci),
                                            SCI_SETTEXT, 0,
                                            (sptr_t)backup_content);
+                    changehistory_clear(bd->sci);
                     /* The open-time savepoint deleted the on-disk
                      * snapshot (SAVEPOINTREACHED → backup_clean).
                      * Re-snapshot immediately so a crash before the

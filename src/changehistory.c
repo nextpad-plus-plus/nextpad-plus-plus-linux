@@ -30,6 +30,9 @@ void changehistory_setup(GtkWidget *sci)
 void changehistory_on_modified(GtkWidget *sci, Sci_Position line_start,
                                 Sci_Position lines_added)
 {
+    if (g_getenv("NPP_CH_DEBUG"))
+        g_message("ch: modified line=%ld added=%ld", (long)line_start,
+                  (long)lines_added);
     Sci_Position count = (lines_added > 0 ? lines_added : 0) + 1;
     for (Sci_Position i = 0; i < count; i++) {
         Sci_Position line = line_start + i;
@@ -93,6 +96,7 @@ void changehistory_revert_recent(GtkWidget *sci)
 
 void changehistory_clear(GtkWidget *sci)
 {
+    if (g_getenv("NPP_CH_DEBUG")) g_message("ch: CLEAR");
     sci_msg(sci, SCI_MARKERDELETEALL, CH_MARK_UNSAVED, 0);
     sci_msg(sci, SCI_MARKERDELETEALL, CH_MARK_SAVED,   0);
 }

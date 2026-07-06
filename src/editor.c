@@ -47,6 +47,33 @@ static GtkWidget *page_to_sci(GtkWidget *page)
     return page;
 }
 
+/* GAP-37 — link re-marking is deferred to idle (see SCN_UPDATEUI) and
+ * skipped when neither the visible range nor the content changed since
+ * the last pass ("npp-link-gen" bumps on every insert/delete). */
+static gboolean link_update_idle(gpointer data)
+{
+    GtkWidget *sci = data;
+    g_object_set_data(G_OBJECT(sci), "npp-link-idle", NULL);
+    editor_update_clickable_links(sci);
+    g_object_unref(sci);
+    return G_SOURCE_REMOVE;
+}
+
+static void link_update_schedule(GtkWidget *sci)
+{
+    if (g_object_get_data(G_OBJECT(sci), "npp-link-idle")) return;
+    g_object_set_data(G_OBJECT(sci), "npp-link-idle", GINT_TO_POINTER(1));
+    g_idle_add(link_update_idle, g_object_ref(sci));
+}
+
+static void link_gen_bump(GtkWidget *sci)
+{
+    int gen = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(sci),
+                                                "npp-link-gen"));
+    g_object_set_data(G_OBJECT(sci), "npp-link-gen",
+                      GINT_TO_POINTER(gen + 1));
+}
+
 /* Forward decls for the watermark block (defined later in this file). */
 static sptr_t sci_msg(GtkWidget *sci, unsigned int msg, uptr_t w, sptr_t l);
 static NppDoc *doc_of_sci(GtkWidget *sci);
@@ -228,6 +255,9 @@ static void reload_doc_from_disk_with_enc(NppDoc *doc, const char *forced_enc)
     sci_msg(doc->sci, SCI_SETTEXT, 0, (sptr_t)utf8);
     sci_msg(doc->sci, SCI_SETSAVEPOINT, 0, 0);
     sci_msg(doc->sci, SCI_EMPTYUNDOBUFFER, 0, 0);
+    /* The SETTEXT above fired SCN_MODIFIED for every line — a reload is
+     * not a user edit; the margin must not turn solid yellow. */
+    changehistory_clear(doc->sci);
 
     /* Clamp to the reloaded file's bounds — the file may have shrunk.
      * SCI_FINDCOLUMN clamps the column to the target line on its own. */
@@ -535,6 +565,28 @@ void editor_update_clickable_links(GtkWidget *sci)
     sptr_t end   = sci_msg(sci, SCI_GETLINEENDPOSITION, (uptr_t)doc_last, 0);
     if (end <= start) return;
 
+    /* Same viewport, same content → the marks are already right; do not
+     * clear + re-fill (each pass invalidates the range and forces a
+     * repaint, which made smooth scrolling stutter). +1 offsets keep 0
+     * distinguishable from "no data yet". */
+    {
+        GObject *o = G_OBJECT(sci);
+        int gen = GPOINTER_TO_INT(g_object_get_data(o, "npp-link-gen"));
+        if (GPOINTER_TO_INT(g_object_get_data(o, "npp-link-last-start"))
+                == (int)start + 1 &&
+            GPOINTER_TO_INT(g_object_get_data(o, "npp-link-last-end"))
+                == (int)end + 1 &&
+            GPOINTER_TO_INT(g_object_get_data(o, "npp-link-last-gen"))
+                == gen + 1)
+            return;
+        g_object_set_data(o, "npp-link-last-start",
+                          GINT_TO_POINTER((int)start + 1));
+        g_object_set_data(o, "npp-link-last-end",
+                          GINT_TO_POINTER((int)end + 1));
+        g_object_set_data(o, "npp-link-last-gen",
+                          GINT_TO_POINTER(gen + 1));
+    }
+
     /* Bound the scan on pathologically long lines (minified bundles,
      * one-line JSON): cap to a byte budget, backed off to a UTF-8 char
      * boundary so the buffer decodes cleanly. */
@@ -591,6 +643,7 @@ void editor_refresh_clickable_links(void)
         sci_msg(d->sci, SCI_SETINDICATORCURRENT, NPP_LINK_INDICATOR, 0);
         sci_msg(d->sci, SCI_INDICATORCLEARRANGE, 0,
                 sci_msg(d->sci, SCI_GETLENGTH, 0, 0));
+        link_gen_bump(d->sci);   /* bypass the unchanged-skip cache */
         editor_update_clickable_links(d->sci);
     }
     g_ptr_array_free(docs, TRUE);
@@ -1506,10 +1559,14 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
             autocomplete_on_update_ui(sci);
 
         /* GAP-37 — re-mark clickable links only when content or the
-         * viewport changed (a bare caret move can't shift link spans). */
+         * viewport changed (a bare caret move can't shift link spans).
+         * DEFERRED: SCN_UPDATEUI is delivered from INSIDE Editor::Paint
+         * (Editor.cxx:1887), so mutating indicators here abandons the
+         * in-flight paint — every wheel notch logged "abandoned paint"
+         * and repainted twice. One coalesced idle per editor instead. */
         if (n->updated & (SC_UPDATE_CONTENT | SC_UPDATE_V_SCROLL |
                           SC_UPDATE_H_SCROLL))
-            editor_update_clickable_links(sci);
+            link_update_schedule(sci);
     } else if (code == SCN_DOUBLECLICK) {
         /* GAP-37 — plain double-click on a marked link opens it. */
         link_double_click(sci, (sptr_t)n->position, (int)n->modifiers);
@@ -1577,6 +1634,7 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         Sci_Position mod_line = (Sci_Position)sci_msg(sci, SCI_LINEFROMPOSITION,
             (uptr_t)n->position, 0);
         changehistory_on_modified(sci, mod_line, n->linesAdded);
+        link_gen_bump(sci);
         if (doc->filepath)
             gitgutter_update(sci, doc->filepath);
         funclist_schedule_update(sci);
@@ -1653,13 +1711,13 @@ static gboolean ask_save_full(NppDoc *doc, gboolean *dont_save_all)
         GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
         T("msg.Reload.message", "Save changes to \"%s\"?"), name);
 
-    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("cmd.41004", "Close _Without Saving"), GTK_RESPONSE_NO);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("msg.DontSave", "_Don't Save"), GTK_RESPONSE_NO);
     if (dont_save_all)
         gtk_dialog_add_button(GTK_DIALOG(dlg),
                               TM("msg.DontSaveAll", "D_on't Save All"),
                               GTK_RESPONSE_REJECT);
-    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("dlg.Find.2",  "_Cancel"),             GTK_RESPONSE_CANCEL);
-    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("cmd.41006",   "_Save"),               GTK_RESPONSE_YES);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("msg.Cancel", "_Cancel"), GTK_RESPONSE_CANCEL);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("msg.Save",   "_Save"),   GTK_RESPONSE_YES);
     gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_YES);
 
     int resp = gtk_dialog_run(GTK_DIALOG(dlg));
@@ -1994,6 +2052,9 @@ gboolean editor_open_path(const char *path)
     sci_msg(sci, SCI_SETTEXT, 0, (sptr_t)utf8);
     sci_msg(sci, SCI_SETSAVEPOINT, 0, 0);
     sci_msg(sci, SCI_EMPTYUNDOBUFFER, 0, 0);
+    /* Loading is not editing — start with a clean change-history
+     * margin (macOS parity: ChangeHistorySet runs post-load there). */
+    changehistory_clear(sci);
 
     /* G3.9a: EOL auto-detection. Sample the first 4 KB of the decoded UTF-8
      * (LF/CR are single-byte ASCII so encoding doesn't matter) and count
