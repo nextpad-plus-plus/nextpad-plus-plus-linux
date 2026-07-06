@@ -296,25 +296,30 @@ void theme_modern_reload(void)
         ".npp-modern notebook.npp-editor-tabs > header {\n"
         "  background: %s; border: none; box-shadow: none;\n"
         "}\n"
+        /* Inactive tabs sit 3px lower than the active one — macOS
+         * NppTabBar kActiveBoost = 3.0 (active tab is slightly taller).
+         * Bottoms stay flush (margin-bottom 0); the boost comes off the
+         * top edge, exactly like the macOS drawing. */
         ".npp-modern notebook.npp-editor-tabs > header > tabs > tab {\n"
         "  background: %s;\n"
         "  background-image: none;\n"           /* kill Classic's gradient */
         "  border: 1px solid %s;\n"
         "  border-bottom: none;\n"
         "  border-radius: 8px 8px 0 0;\n"
-        "  margin: 3px 1px 0 1px;\n"
+        "  margin: 6px 1px 0 1px;\n"
         "  padding: 1px 10px;\n"
         "}\n"
         ".npp-modern notebook.npp-editor-tabs > header > tabs > tab:hover {\n"
         "  background-image: none;\n"
         "  background-color: alpha(%s, 0.75);\n"
         "}\n"
-        /* Active tab: FULL warm tint, no stripe — the orange top line was
-         * Classic's inset box-shadow leaking through (user-rejected). */
+        /* Active tab: FULL warm tint, no stripe (the orange top line was
+         * Classic's inset box-shadow leaking through), and 3px taller. */
         ".npp-modern notebook.npp-editor-tabs > header > tabs > tab:checked {\n"
         "  background: %s;\n"
         "  background-image: none;\n"
         "  box-shadow: none;\n"
+        "  margin-top: 3px;\n"
         "}\n",
         win_bg, tab_bg, capsule_bd,
         dark ? "#4a4a52" : "#ffffff",
