@@ -48,6 +48,87 @@ static void udl_styler_clicked(GtkButton *b, gpointer ud);
 /* Field state                                                            */
 /* ────────────────────────────────────────────────────────────────────── */
 
+/* ── Per-style attributes (Styler dialog, GAP-45) ─────────────────────
+ * One slot per UDL WordsStyle, same order as the <Styles> block. The
+ * parse/emit pair is pure (no widgets) so the round-trip is testable. */
+#define UDL_N_STYLES 24
+typedef struct {
+    char fg[8];        /* "RRGGBB" */
+    char bg[8];
+    char font_name[64];
+    char font_size[8]; /* "" = inherit */
+    int  font_style;   /* bit 1 bold, 2 italic, 4 underline */
+    int  color_style;  /* fg/bg enable bits; N++ default 1 */
+    long nesting;      /* SCE_USER_MASK_NESTING_* bitmask */
+} UdlStyleDef;
+
+static const char *UDL_STYLE_NAMES[UDL_N_STYLES] = {
+    "DEFAULT","COMMENTS","LINE COMMENTS","NUMBERS",
+    "KEYWORDS1","KEYWORDS2","KEYWORDS3","KEYWORDS4",
+    "KEYWORDS5","KEYWORDS6","KEYWORDS7","KEYWORDS8",
+    "OPERATORS","FOLDER IN CODE1","FOLDER IN CODE2","FOLDER IN COMMENT",
+    "DELIMITERS1","DELIMITERS2","DELIMITERS3","DELIMITERS4",
+    "DELIMITERS5","DELIMITERS6","DELIMITERS7","DELIMITERS8",
+};
+enum { UDL_ST_DEFAULT = 0, UDL_ST_COMMENTS, UDL_ST_LINE_COMMENTS,
+       UDL_ST_NUMBERS, UDL_ST_KEYWORDS1, /* …+7 */
+       UDL_ST_OPERATORS = 12, UDL_ST_FOLDER_CODE1, UDL_ST_FOLDER_CODE2,
+       UDL_ST_FOLDER_COMMENT, UDL_ST_DELIMITERS1 = 16 /* …+7 */ };
+
+void udlstyle_reset(UdlStyleDef st[UDL_N_STYLES])
+{
+    for (int i = 0; i < UDL_N_STYLES; i++) {
+        g_strlcpy(st[i].fg, "000000", sizeof st[i].fg);
+        g_strlcpy(st[i].bg, "FFFFFF", sizeof st[i].bg);
+        st[i].font_name[0] = st[i].font_size[0] = '\0';
+        st[i].font_style = 0;
+        st[i].color_style = 1;
+        st[i].nesting = 0;
+    }
+}
+
+/* Fill one slot from a <WordsStyle> attribute row. */
+void udlstyle_parse_row(const char **names, const char **vals,
+                        UdlStyleDef st[UDL_N_STYLES])
+{
+    const char *nm = NULL;
+    for (int i = 0; names[i]; i++)
+        if (!g_strcmp0(names[i], "name")) nm = vals[i];
+    if (!nm) return;
+    int idx = -1;
+    for (int i = 0; i < UDL_N_STYLES; i++)
+        if (!g_ascii_strcasecmp(nm, UDL_STYLE_NAMES[i])) { idx = i; break; }
+    if (idx < 0) return;
+    UdlStyleDef *d = &st[idx];
+    for (int i = 0; names[i]; i++) {
+        const char *k = names[i], *v = vals[i];
+        if      (!g_strcmp0(k, "fgColor") && v[0]) g_strlcpy(d->fg, v, sizeof d->fg);
+        else if (!g_strcmp0(k, "bgColor") && v[0]) g_strlcpy(d->bg, v, sizeof d->bg);
+        else if (!g_strcmp0(k, "fontName"))   g_strlcpy(d->font_name, v, sizeof d->font_name);
+        else if (!g_strcmp0(k, "fontSize"))   g_strlcpy(d->font_size, v, sizeof d->font_size);
+        else if (!g_strcmp0(k, "fontStyle"))  d->font_style  = atoi(v);
+        else if (!g_strcmp0(k, "colorStyle")) d->color_style = atoi(v);
+        else if (!g_strcmp0(k, "nesting"))    d->nesting     = atol(v);
+    }
+}
+
+/* Emit the whole <Styles> block (indented like the rest of ui_to_xml). */
+void udlstyle_emit(GString *s, const UdlStyleDef st[UDL_N_STYLES])
+{
+    g_string_append(s, "        <Styles>\n");
+    for (int i = 0; i < UDL_N_STYLES; i++) {
+        gchar *fn = g_markup_escape_text(st[i].font_name, -1);
+        g_string_append_printf(s,
+            "            <WordsStyle name=\"%s\" fgColor=\"%s\" "
+            "bgColor=\"%s\" colorStyle=\"%d\" fontName=\"%s\" "
+            "fontStyle=\"%d\" fontSize=\"%s\" nesting=\"%ld\" />\n",
+            UDL_STYLE_NAMES[i], st[i].fg, st[i].bg, st[i].color_style,
+            fn, st[i].font_style, st[i].font_size, st[i].nesting);
+        g_free(fn);
+    }
+    g_string_append(s, "        </Styles>\n");
+}
+
 typedef struct {
     /* Top bar */
     GtkWidget *lang_picker;
@@ -84,6 +165,10 @@ typedef struct {
     GtkWidget *op1, *op2;
     /* 8 delimiters × (open / escape / close) */
     GtkWidget *delim_open[8], *delim_escape[8], *delim_close[8];
+
+    /* Styler dialog model + parent handle (GAP-45). */
+    UdlStyleDef style[UDL_N_STYLES];
+    GtkWidget  *dialog;
 } UDLEditor;
 
 /* ────────────────────────────────────────────────────────────────────── */
@@ -113,13 +198,15 @@ static GtkWidget *labeled_entry_row(const char *label, GtkWidget **entry_out) {
     return row;
 }
 
-static GtkWidget *styler_button(void) {
+static GtkWidget *styler_button(UDLEditor *ui, int style_idx,
+                                gboolean nesting) {
     GtkWidget *b = gtk_button_new_with_label("Styler");
     gtk_widget_set_halign(b, GTK_ALIGN_START);
-    /* Wire to Style Configurator action; the user picks the right style
-     * for the section there. Keeps this dialog focused on syntax data. */
+    g_object_set_data(G_OBJECT(b), "style-idx", GINT_TO_POINTER(style_idx));
+    g_object_set_data(G_OBJECT(b), "style-nesting",
+                      GINT_TO_POINTER(nesting ? 1 : 0));
     g_signal_connect(b, "clicked",
-                     G_CALLBACK(udl_styler_clicked), NULL);
+                     G_CALLBACK(udl_styler_clicked), ui);
     return b;
 }
 
@@ -136,12 +223,171 @@ static void add_styler_topright(GtkWidget *inner) {
     npp_box_pack(GTK_BOX(inner), row, FALSE, 0);
 }
 
+static void hex_to_rgba(const char *hex, GdkRGBA *out)
+{
+    unsigned rgb = 0;
+    if (hex && strlen(hex) >= 6) rgb = (unsigned)strtoul(hex, NULL, 16);
+    out->red   = ((rgb >> 16) & 0xFF) / 255.0;
+    out->green = ((rgb >>  8) & 0xFF) / 255.0;
+    out->blue  = ( rgb        & 0xFF) / 255.0;
+    out->alpha = 1.0;
+}
+
+static void rgba_to_hex(const GdkRGBA *c, char out[8])
+{
+    g_snprintf(out, 8, "%02X%02X%02X",
+               (int)(c->red * 255 + 0.5), (int)(c->green * 255 + 0.5),
+               (int)(c->blue * 255 + 0.5));
+}
+
+/* The 21 nesting checkboxes, macOS UDLStylerDialog column layout;
+ * masks are SCE_USER_MASK_NESTING_* (SciLexer.h 2453-2480). */
+static const struct { const char *label; long mask; } UDL_NEST[] = {
+    { "Delimiter 1", 0x1 },      { "Delimiter 2", 0x2 },
+    { "Delimiter 3", 0x4 },      { "Delimiter 4", 0x8 },
+    { "Delimiter 5", 0x10 },     { "Delimiter 6", 0x20 },
+    { "Delimiter 7", 0x40 },     { "Delimiter 8", 0x80 },
+    { "Keyword 1", 0x400 },      { "Keyword 2", 0x800 },
+    { "Keyword 3", 0x1000 },     { "Keyword 4", 0x2000 },
+    { "Keyword 5", 0x4000 },     { "Keyword 6", 0x8000 },
+    { "Keyword 7", 0x10000 },    { "Keyword 8", 0x20000 },
+    { "Comment", 0x100 },        { "Comment line", 0x200 },
+    { "Operators 1", 0x1000000 },{ "Operators 2", 0x2000000 },
+    { "Numbers", 0x4000000 },
+};
+
+/* Modal per-style Styler dialog — port of macOS UDLStylerDialog.mm:
+ * Font options (name/size/bold/italic/underline, fg/bg wells) plus a
+ * Nesting grid for delimiter/comment styles. OK commits into
+ * ui->style[idx]; Cancel leaves it untouched. */
+static void run_styler_dialog(UDLEditor *ui, int idx, gboolean nesting)
+{
+    UdlStyleDef *d = &ui->style[idx];
+    gchar *title = g_strdup_printf("Styler — %s", UDL_STYLE_NAMES[idx]);
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(title,
+        ui->dialog ? GTK_WINDOW(ui->dialog) : NULL, GTK_DIALOG_MODAL,
+        "_Cancel", GTK_RESPONSE_CANCEL, "_OK", GTK_RESPONSE_OK, NULL);
+    g_free(title);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
+    GtkWidget *root = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(root), 10);
+
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 10);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
+    npp_box_pack(GTK_BOX(root), grid, FALSE, 0);
+    int r = 0;
+
+    /* Font name (empty = inherit) + size (0 = inherit). */
+    GtkWidget *font = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(font), "");
+    {
+        PangoFontMap *fm = pango_cairo_font_map_get_default();
+        PangoFontFamily **fams = NULL;
+        int nfam = 0, sel = 0;
+        pango_font_map_list_families(fm, &fams, &nfam);
+        GPtrArray *names = g_ptr_array_new_with_free_func(g_free);
+        for (int i = 0; i < nfam; i++)
+            g_ptr_array_add(names,
+                g_strdup(pango_font_family_get_name(fams[i])));
+        g_free(fams);
+        g_ptr_array_sort(names, (GCompareFunc)g_ascii_strcasecmp);
+        for (guint i = 0; i < names->len; i++) {
+            const char *nm = g_ptr_array_index(names, i);
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(font), nm);
+            if (d->font_name[0] && !g_ascii_strcasecmp(nm, d->font_name))
+                sel = (int)i + 1;
+        }
+        g_ptr_array_free(names, TRUE);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(font), sel);
+    }
+    gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Name:"), 0, r, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), font, 1, r++, 2, 1);
+
+    GtkWidget *size = gtk_spin_button_new_with_range(0, 99, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(size), atoi(d->font_size));
+    gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Size:"), 0, r, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), size, 1, r++, 1, 1);
+
+    GtkWidget *bold = gtk_check_button_new_with_label("Bold");
+    GtkWidget *ital = gtk_check_button_new_with_label("Italic");
+    GtkWidget *und  = gtk_check_button_new_with_label("Underline");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bold), d->font_style & 1);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ital), d->font_style & 2);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(und),  d->font_style & 4);
+    GtkWidget *fsrow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    npp_box_pack(GTK_BOX(fsrow), bold, FALSE, 0);
+    npp_box_pack(GTK_BOX(fsrow), ital, FALSE, 0);
+    npp_box_pack(GTK_BOX(fsrow), und,  FALSE, 0);
+    gtk_grid_attach(GTK_GRID(grid), fsrow, 1, r++, 2, 1);
+
+    GdkRGBA fg, bg;
+    hex_to_rgba(d->fg, &fg);
+    hex_to_rgba(d->bg, &bg);
+    GtkWidget *fgb = gtk_color_button_new_with_rgba(&fg);
+    GtkWidget *bgb = gtk_color_button_new_with_rgba(&bg);
+    gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Foreground colour:"), 0, r, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), fgb, 1, r++, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Background colour:"), 0, r, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), bgb, 1, r++, 1, 1);
+
+    GtkWidget *nest_check[G_N_ELEMENTS(UDL_NEST)] = { NULL };
+    if (nesting) {
+        GtkWidget *nf_inner = NULL;
+        GtkWidget *nf = frame_with_inner("Nesting", &nf_inner);
+        GtkWidget *ngrid = gtk_grid_new();
+        gtk_grid_set_column_spacing(GTK_GRID(ngrid), 16);
+        npp_box_pack(GTK_BOX(nf_inner), ngrid, FALSE, 0);
+        for (guint i = 0; i < G_N_ELEMENTS(UDL_NEST); i++) {
+            GtkWidget *cb =
+                gtk_check_button_new_with_label(UDL_NEST[i].label);
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(cb),
+                (d->nesting & UDL_NEST[i].mask) != 0);
+            nest_check[i] = cb;
+            gtk_grid_attach(GTK_GRID(ngrid), cb,
+                            (int)(i / 8), (int)(i % 8), 1, 1);
+        }
+        npp_box_pack(GTK_BOX(root), nf, FALSE, 0);
+    }
+
+    gtk_widget_show_all(dlg);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_OK) {
+        gchar *fam = gtk_combo_box_text_get_active_text(
+                         GTK_COMBO_BOX_TEXT(font));
+        g_strlcpy(d->font_name, fam ? fam : "", sizeof d->font_name);
+        g_free(fam);
+        int sz = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(size));
+        if (sz > 0) g_snprintf(d->font_size, sizeof d->font_size, "%d", sz);
+        else        d->font_size[0] = '\0';
+        d->font_style =
+            (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bold)) ? 1 : 0) |
+            (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ital)) ? 2 : 0) |
+            (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(und))  ? 4 : 0);
+        GdkRGBA c;
+        gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(fgb), &c);
+        rgba_to_hex(&c, d->fg);
+        gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(bgb), &c);
+        rgba_to_hex(&c, d->bg);
+        if (nesting) {
+            long m = 0;
+            for (guint i = 0; i < G_N_ELEMENTS(UDL_NEST); i++)
+                if (gtk_toggle_button_get_active(
+                        GTK_TOGGLE_BUTTON(nest_check[i])))
+                    m |= UDL_NEST[i].mask;
+            d->nesting = m;
+        }
+    }
+    gtk_widget_destroy(dlg);
+}
+
 static void udl_styler_clicked(GtkButton *b, gpointer ud) {
-    (void)b; (void)ud;
-    /* Open Style Configurator. */
-    GApplication *app = g_application_get_default();
-    if (app) g_action_group_activate_action(G_ACTION_GROUP(app),
-                                            "style-editor", NULL);
+    UDLEditor *ui = ud;
+    int idx = GPOINTER_TO_INT(
+        g_object_get_data(G_OBJECT(b), "style-idx"));
+    gboolean nesting = GPOINTER_TO_INT(
+        g_object_get_data(G_OBJECT(b), "style-nesting")) != 0;
+    if (ui && idx >= 0 && idx < UDL_N_STYLES)
+        run_styler_dialog(ui, idx, nesting);
 }
 
 static const char *entry_text_get(GtkWidget *e) {
@@ -224,7 +470,7 @@ static GtkWidget *build_tab_folder(UDLEditor *ui) {
         GtkWidget *ds_fr = frame_with_inner("Default style", &ds_inner);
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
         gtk_widget_set_halign(row, GTK_ALIGN_CENTER);
-        GtkWidget *btn = styler_button();
+        GtkWidget *btn = styler_button(ui, UDL_ST_DEFAULT, FALSE);
         gtk_widget_set_halign(btn, GTK_ALIGN_CENTER);
         npp_box_pack(GTK_BOX(row), btn, FALSE, 0);
         npp_box_pack(GTK_BOX(ds_inner), row, FALSE, 0);
@@ -302,7 +548,7 @@ static GtkWidget *build_tab_keywords(UDLEditor *ui) {
         ui->kw_buf[i] = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv));
 
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        GtkWidget *st  = styler_button();
+        GtkWidget *st  = styler_button(ui, UDL_ST_KEYWORDS1 + i, FALSE);
         ui->kw_prefix[i] = gtk_check_button_new_with_label("Prefix mode");
         npp_box_pack(GTK_BOX(row), st, FALSE, 0);
         npp_box_pack(GTK_BOX(row), ui->kw_prefix[i], FALSE, 0);
@@ -380,7 +626,7 @@ static GtkWidget *build_tab_comment_number(UDLEditor *ui) {
     GtkWidget *num = frame_with_inner("Number style", &num_inner);
     GtkWidget *num_styler_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_halign(num_styler_row, GTK_ALIGN_END);
-    npp_box_pack(GTK_BOX(num_styler_row), styler_button(), FALSE, 0);
+    npp_box_pack(GTK_BOX(num_styler_row), styler_button(ui, UDL_ST_NUMBERS, FALSE), FALSE, 0);
     npp_box_pack(GTK_BOX(num_inner), num_styler_row, FALSE, 0);
 
     /* Two columns × 4 rows of fields. */
@@ -435,7 +681,7 @@ static GtkWidget *build_tab_operators(UDLEditor *ui) {
     /* Operators style frame at the top. */
     GtkWidget *op_inner = NULL;
     GtkWidget *op_frame = frame_with_inner("Operators style", &op_inner);
-    npp_box_pack(GTK_BOX(op_inner), styler_button(), FALSE, 0);
+    npp_box_pack(GTK_BOX(op_inner), styler_button(ui, UDL_ST_OPERATORS, FALSE), FALSE, 0);
 
     GtkWidget *op_grid = gtk_grid_new();
     gtk_grid_set_column_spacing(GTK_GRID(op_grid), 12);
@@ -473,7 +719,7 @@ static GtkWidget *build_tab_operators(UDLEditor *ui) {
         npp_box_pack(GTK_BOX(fields), labeled_entry_row("Escape:", &ui->delim_escape[i]), FALSE, 0);
         npp_box_pack(GTK_BOX(fields), labeled_entry_row("Close:",  &ui->delim_close[i]), FALSE, 0);
         npp_box_pack(GTK_BOX(content), fields, TRUE, 0);
-        npp_box_pack(GTK_BOX(content), styler_button(), FALSE, 0);
+        npp_box_pack(GTK_BOX(content), styler_button(ui, UDL_ST_DELIMITERS1 + i, TRUE), FALSE, 0);
         npp_box_pack(GTK_BOX(inner), content, FALSE, 0);
 
         gtk_widget_set_hexpand(fr, TRUE);
@@ -768,23 +1014,9 @@ static gchar *ui_to_xml(UDLEditor *ui) {
     g_string_append(s, "</Keywords>\n");
     g_string_append(s, "        </KeywordLists>\n");
 
-    /* Stub Styles block — let Style Configurator drive these. */
-    g_string_append(s, "        <Styles>\n");
-    static const char *styles[] = {
-        "DEFAULT","COMMENTS","LINE COMMENTS","NUMBERS",
-        "KEYWORDS1","KEYWORDS2","KEYWORDS3","KEYWORDS4",
-        "KEYWORDS5","KEYWORDS6","KEYWORDS7","KEYWORDS8",
-        "OPERATORS","FOLDER IN CODE1","FOLDER IN CODE2","FOLDER IN COMMENT",
-        "DELIMITERS1","DELIMITERS2","DELIMITERS3","DELIMITERS4",
-        "DELIMITERS5","DELIMITERS6","DELIMITERS7","DELIMITERS8",
-    };
-    for (size_t i = 0; i < G_N_ELEMENTS(styles); i++) {
-        g_string_append_printf(s,
-            "            <WordsStyle name=\"%s\" fgColor=\"000000\" "
-            "bgColor=\"FFFFFF\" colorStyle=\"1\" fontName=\"\" fontStyle=\"0\" "
-            "nesting=\"0\" />\n", styles[i]);
-    }
-    g_string_append(s, "        </Styles>\n");
+    /* Real per-style attributes — previously a hardcoded stub, which
+     * RESET every style to black-on-white on each save (GAP-45). */
+    udlstyle_emit(s, ui->style);
     g_string_append(s, "    </UserLang>\n</NotepadPlus>\n");
     return g_string_free(s, FALSE);
 }
@@ -810,6 +1042,8 @@ static void ld_start(GMarkupParseContext *c, const char *el,
                 gtk_entry_set_text(GTK_ENTRY(ui->ext_entry), v[i]);
             }
         }
+    } else if (!g_strcmp0(el, "WordsStyle")) {
+        udlstyle_parse_row(n, v, ui->style);
     } else if (!g_strcmp0(el, "Global")) {
         for (int i = 0; n[i]; i++) {
             gboolean on = !g_strcmp0(v[i], "yes");
@@ -909,6 +1143,7 @@ static void ld_end(GMarkupParseContext *c, const char *el,
 static gboolean load_udl_into_fields(UDLEditor *ui, const char *path) {
     gchar *xml = NULL;
     if (!g_file_get_contents(path, &xml, NULL, NULL)) return FALSE;
+    udlstyle_reset(ui->style);   /* don't leak styles across languages */
     LoadCtx ctx = { ui, "", NULL };
     GMarkupParser p = { ld_start, ld_end, ld_text, NULL, NULL };
     GMarkupParseContext *gp = g_markup_parse_context_new(&p, 0, &ctx, NULL);
@@ -984,6 +1219,7 @@ static void on_export_clicked(GtkButton *btn, gpointer ud) {
 
 void udl_editor_show(GtkWindow *parent) {
     UDLEditor *ui = g_new0(UDLEditor, 1);
+    udlstyle_reset(ui->style);
     GtkWidget *dlg = gtk_dialog_new_with_buttons("User Defined Language v.2.1",
         parent, GTK_DIALOG_MODAL,
         "_Close", GTK_RESPONSE_CLOSE, NULL);
@@ -997,6 +1233,7 @@ void udl_editor_show(GtkWindow *parent) {
         gtk_widget_set_margin_end(close_btn, 5);
     }
 
+    ui->dialog = dlg;
     GtkWidget *root = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
     gtk_container_set_border_width(GTK_CONTAINER(root), 8);
 
@@ -1061,3 +1298,4 @@ void udl_editor_show(GtkWindow *parent) {
     gtk_widget_destroy(dlg);
     g_free(ui);
 }
+
