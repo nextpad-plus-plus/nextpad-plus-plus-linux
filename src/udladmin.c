@@ -340,8 +340,11 @@ static void refresh_from_remote(void)
 /* Window                                                              */
 /* ------------------------------------------------------------------ */
 
-enum { COL_IDX, COL_NAME, COL_SOURCE, COL_AC, COL_SIZE, COL_VERSION,
-       N_COLS };
+/* macOS UDLAdminWindowController columns: install checkbox, Language,
+ * Source, UDL (✓ when the entry carries a UDL file), AC Sources
+ * (count), Status. Size/version live in the detail pane. */
+enum { COL_IDX, COL_CHECK, COL_NAME, COL_SOURCE, COL_UDL, COL_AC,
+       COL_STATUS, N_COLS };
 
 typedef struct {
     GtkWidget    *window;
@@ -366,7 +369,7 @@ static UdlState tab_state(int tab)
 static void refill_stores(void)
 {
     if (!s_ui) return;
-    const char *needle = gtk_entry_get_text(GTK_ENTRY(s_ui->search));
+    const char *needle = gtk_editable_get_text(GTK_EDITABLE(s_ui->search));
     gchar *nlc = needle && *needle ? g_utf8_strdown(needle, -1) : NULL;
 
     for (int t = 0; t < 3; t++) gtk_list_store_clear(s_ui->store[t]);
@@ -384,35 +387,36 @@ static void refill_stores(void)
               : e->state == UDL_STATE_INSTALLED     ? 1 : 2;
         counts[t]++;
 
-        gint64 total = e->udl ? e->udl->bytes : 0;
-        int    n_ac  = 0;
-        for (guint k = 0; e->ac && k < e->ac->len; k++) {
-            const UdlAsset *a = g_ptr_array_index(e->ac, k);
-            total += a->bytes;
-            n_ac++;
-        }
-        gchar *size = total >= 1024 * 1024
-            ? g_strdup_printf("%.1f MB", total / (1024.0 * 1024.0))
-            : g_strdup_printf("%.1f KB", total / 1024.0);
-        gchar *ac = n_ac ? g_strdup_printf("%d", n_ac) : g_strdup("—");
+        int n_ac = e->ac ? (int)e->ac->len : 0;
+        gchar *ac = n_ac ? g_strdup_printf("%d", n_ac) : g_strdup("");
+        /* macOS shows "Notepad++" / "Sublime"; the catalog stores
+         * lowercase identifiers. */
+        const char *src = e->source ? e->source : "";
+        const char *src_disp = !g_ascii_strcasecmp(src, "notepad++")
+                                   ? "Notepad++"
+                             : !g_ascii_strcasecmp(src, "sublime")
+                                   ? "Sublime" : src;
+        const char *status = t == 0 ? "Available"
+                           : t == 1 ? "Installed" : "Update available";
 
         GtkTreeIter it;
         gtk_list_store_append(s_ui->store[t], &it);
         gtk_list_store_set(s_ui->store[t], &it,
                            COL_IDX, i,
+                           COL_CHECK, FALSE,
                            COL_NAME, e->display,
-                           COL_SOURCE, e->source ? e->source : "",
+                           COL_SOURCE, src_disp,
+                           COL_UDL, e->udl ? "\u2713" : "",
                            COL_AC, ac,
-                           COL_SIZE, size,
-                           COL_VERSION, e->version ? e->version : "",
+                           COL_STATUS, status,
                            -1);
-        g_free(size); g_free(ac);
+        g_free(ac);
     }
     g_free(nlc);
 
     gchar *st = g_strdup_printf(
-        "%d languages — %d available, %d installed, %d updates",
-        udladmin_catalog_count(), counts[0], counts[1], counts[2]);
+        "%d languages \u00b7 %d installed \u00b7 %d updates",
+        udladmin_catalog_count(), counts[1], counts[2]);
     gtk_label_set_text(GTK_LABEL(s_ui->status), st);
     g_free(st);
 }
@@ -434,6 +438,7 @@ static const UdlEntry *selected_entry(int *tab_out)
 
 static void update_detail(void)
 {
+    if (!s_ui) return;   /* fires during window destroy (crash guard) */
     const UdlEntry *e = selected_entry(NULL);
     if (!e) {
         gtk_label_set_text(GTK_LABEL(s_ui->detail), "");
@@ -443,9 +448,11 @@ static void update_detail(void)
     GString *d = g_string_new(NULL);
     g_string_append_printf(d, "%s", e->display);
     if (e->author && e->author[0])
-        g_string_append_printf(d, "  —  %s", e->author);
+        g_string_append_printf(d, "  \u2014  %s", e->author);
     if (e->descr && e->descr[0])
         g_string_append_printf(d, "\n%s", e->descr);
+    if (e->language && e->language[0])
+        g_string_append_printf(d, "\n\nLanguage: %s", e->language);
     if (e->udl && e->udl->file) {
         gchar *b = g_path_get_basename(e->udl->file);
         g_string_append_printf(d, "\nUDL: %s (%.1f KB)",
@@ -467,44 +474,89 @@ static void update_detail(void)
 
 static void update_action_label(void)
 {
+    if (!s_ui) return;
     int t = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_ui->notebook));
     gtk_button_set_label(GTK_BUTTON(s_ui->btn_action),
         t == 0 ? "Install" : t == 1 ? "Remove" : "Update");
     update_detail();
 }
 
+/* Collect the catalog indices of all checked rows on tab t. */
+static GArray *checked_entries(int t)
+{
+    GArray *out = g_array_new(FALSE, FALSE, sizeof(int));
+    GtkTreeModel *m = GTK_TREE_MODEL(s_ui->store[t]);
+    GtkTreeIter it;
+    gboolean valid = gtk_tree_model_get_iter_first(m, &it);
+    while (valid) {
+        gboolean chk = FALSE; int idx = -1;
+        gtk_tree_model_get(m, &it, COL_CHECK, &chk, COL_IDX, &idx, -1);
+        if (chk && idx >= 0) g_array_append_val(out, idx);
+        valid = gtk_tree_model_iter_next(m, &it);
+    }
+    return out;
+}
+
 static void on_action(GtkButton *b, gpointer u)
 {
     (void)b; (void)u;
-    int tab = 0;
-    const UdlEntry *e = selected_entry(&tab);
-    if (!e) return;
+    if (!s_ui) return;
+    int tab = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_ui->notebook));
+    if (tab < 0 || tab > 2) return;
 
-    gboolean ok;
-    char *err = NULL;
-    if (tab == 1) {
-        ok = udladmin_remove(e);
-    } else {
-        gtk_label_set_text(GTK_LABEL(s_ui->status), "Downloading…");
-        while (g_main_context_iteration(NULL, FALSE)) {}
-        ok = udladmin_install(e, &err);
+    /* macOS behaviour: the action applies to every CHECKED row; with
+     * nothing checked it falls back to the selected row. */
+    GArray *targets = checked_entries(tab);
+    if (targets->len == 0) {
+        const UdlEntry *e = selected_entry(NULL);
+        if (!e) { g_array_free(targets, TRUE); return; }
+        for (int i = 0; i < udladmin_catalog_count(); i++)
+            if (udladmin_catalog_entry(i) == e) {
+                g_array_append_val(targets, i);
+                break;
+            }
     }
-    if (!ok) {
+
+    GString *errors = g_string_new(NULL);
+    for (guint k = 0; k < targets->len; k++) {
+        const UdlEntry *e =
+            udladmin_catalog_entry(g_array_index(targets, int, k));
+        if (!e) continue;
+        char *err = NULL;
+        gboolean ok;
+        if (tab == 1) {
+            ok = udladmin_remove(e);
+        } else {
+            gchar *msg = g_strdup_printf("Downloading %s\u2026 (%u/%u)",
+                                         e->display, k + 1, targets->len);
+            gtk_label_set_text(GTK_LABEL(s_ui->status), msg);
+            g_free(msg);
+            while (g_main_context_iteration(NULL, FALSE)) {}
+            ok = udladmin_install(e, &err);
+        }
+        if (!ok)
+            g_string_append_printf(errors, "%s%s", errors->len ? "\n" : "",
+                                   err ? err : e->display);
+        g_free(err);
+        if (!s_ui) break;   /* window closed mid-batch */
+    }
+    g_array_free(targets, TRUE);
+
+    if (s_ui && errors->len) {
         GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(s_ui->window),
             GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
-            "%s failed%s%s", tab == 1 ? "Remove" : "Install",
-            err ? ":\n" : ".", err ? err : "");
+            "%s failed:\n%s", tab == 1 ? "Remove" : "Install", errors->str);
         gtk_dialog_run(GTK_DIALOG(d));
         gtk_widget_destroy(d);
     }
-    g_free(err);
-    refill_stores();
-    update_detail();
+    g_string_free(errors, TRUE);
+    if (s_ui) { refill_stores(); update_detail(); }
 }
 
 static void on_search_changed(GtkEditable *e, gpointer u)
 {
     (void)e; (void)u;
+    if (!s_ui) return;
     refill_stores();
 }
 
@@ -512,39 +564,79 @@ static void on_tab_switched(GtkNotebook *nb, GtkWidget *pg, guint n,
                             gpointer u)
 {
     (void)nb; (void)pg; (void)n; (void)u;
+    if (!s_ui) return;
     update_action_label();
 }
 
 static void on_selection_changed(GtkTreeSelection *sel, gpointer u)
 {
     (void)sel; (void)u;
+    if (!s_ui) return;
     update_detail();
+}
+
+static gboolean free_ui_idle(gpointer u)
+{
+    g_free(u);
+    return G_SOURCE_REMOVE;
 }
 
 static gboolean on_window_close(GtkWidget *w, gpointer u)
 {
     (void)w; (void)u;
-    s_ui->window = NULL;   /* rebuilt on next open */
-    g_free(s_ui);
+    /* CRASH FIX: destroying the tree views clears their selections,
+     * which re-enters on_selection_changed → update_detail DURING the
+     * destroy. NULL s_ui first (every handler guards on it) and free
+     * the struct only after the destroy completes, from idle. */
+    UdlUi *dead = s_ui;
     s_ui = NULL;
+    g_idle_add(free_ui_idle, dead);
     return FALSE;          /* let GTK destroy */
+}
+
+/* Row checkbox toggled — flip the model flag; Install acts on every
+ * checked row (falling back to the selected row when none checked). */
+static void on_check_toggled(GtkCellRendererToggle *cr, gchar *path_str,
+                             gpointer store)
+{
+    (void)cr;
+    if (!s_ui) return;
+    GtkTreeIter it;
+    GtkTreePath *path = gtk_tree_path_new_from_string(path_str);
+    if (gtk_tree_model_get_iter(GTK_TREE_MODEL(store), &it, path)) {
+        gboolean v = FALSE;
+        gtk_tree_model_get(GTK_TREE_MODEL(store), &it, COL_CHECK, &v, -1);
+        gtk_list_store_set(GTK_LIST_STORE(store), &it, COL_CHECK, !v, -1);
+    }
+    gtk_tree_path_free(path);
 }
 
 static GtkWidget *make_tab(int t)
 {
-    s_ui->store[t] = gtk_list_store_new(N_COLS, G_TYPE_INT, G_TYPE_STRING,
+    s_ui->store[t] = gtk_list_store_new(N_COLS, G_TYPE_INT, G_TYPE_BOOLEAN,
                                         G_TYPE_STRING, G_TYPE_STRING,
-                                        G_TYPE_STRING, G_TYPE_STRING);
+                                        G_TYPE_STRING, G_TYPE_STRING,
+                                        G_TYPE_STRING);
     GtkWidget *tv = gtk_tree_view_new_with_model(
         GTK_TREE_MODEL(s_ui->store[t]));
     s_ui->view[t] = tv;
 
+    {   /* install checkbox (macOS leading column) */
+        GtkCellRenderer *cr = gtk_cell_renderer_toggle_new();
+        g_signal_connect(cr, "toggled", G_CALLBACK(on_check_toggled),
+                         s_ui->store[t]);
+        GtkTreeViewColumn *c = gtk_tree_view_column_new_with_attributes(
+            "", cr, "active", COL_CHECK, NULL);
+        gtk_tree_view_column_set_fixed_width(c, 28);
+        gtk_tree_view_append_column(GTK_TREE_VIEW(tv), c);
+    }
+
     static const struct { const char *title; int col; int expand; } cols[] = {
-        { "Name",    COL_NAME,    1 },
-        { "Source",  COL_SOURCE,  0 },
-        { "AC",      COL_AC,      0 },
-        { "Size",    COL_SIZE,    0 },
-        { "Version", COL_VERSION, 0 },
+        { "Language",   COL_NAME,   1 },
+        { "Source",     COL_SOURCE, 0 },
+        { "UDL",        COL_UDL,    0 },
+        { "AC Sources", COL_AC,     0 },
+        { "Status",     COL_STATUS, 0 },
     };
     for (unsigned i = 0; i < G_N_ELEMENTS(cols); i++) {
         GtkCellRenderer *r = gtk_cell_renderer_text_new();
@@ -598,17 +690,20 @@ void udladmin_show(GtkWindow *parent)
     gtk_widget_set_margin_start(vbox, 8);
     gtk_widget_set_margin_end(vbox, 8);
 
+    /* macOS layout: tabs and the search field share one row — the
+     * search entry rides in the notebook's action-widget slot. */
     s_ui->search = gtk_search_entry_new();
-    gtk_widget_set_hexpand(s_ui->search, TRUE);
+    gtk_widget_set_size_request(s_ui->search, 260, -1);
     g_signal_connect(s_ui->search, "changed",
                      G_CALLBACK(on_search_changed), NULL);
-    gtk_box_append(GTK_BOX(vbox), s_ui->search);
 
     s_ui->notebook = gtk_notebook_new();
     static const char *tabs[3] = { "Available", "Installed", "Updates" };
     for (int t = 0; t < 3; t++)
         gtk_notebook_append_page(GTK_NOTEBOOK(s_ui->notebook), make_tab(t),
                                  gtk_label_new(tabs[t]));
+    gtk_notebook_set_action_widget(GTK_NOTEBOOK(s_ui->notebook),
+                                   s_ui->search, GTK_PACK_END);
     gtk_widget_set_vexpand(s_ui->notebook, TRUE);
     g_signal_connect(s_ui->notebook, "switch-page",
                      G_CALLBACK(on_tab_switched), NULL);
@@ -620,16 +715,22 @@ void udladmin_show(GtkWindow *parent)
     gtk_widget_set_size_request(s_ui->detail, -1, 72);
     gtk_box_append(GTK_BOX(vbox), s_ui->detail);
 
+    /* macOS bottom bar: Install left, status centered, Close right. */
     GtkWidget *hb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    s_ui->status = gtk_label_new("");
-    gtk_widget_set_hexpand(s_ui->status, TRUE);
-    gtk_label_set_xalign(GTK_LABEL(s_ui->status), 0.0f);
-    gtk_box_append(GTK_BOX(hb), s_ui->status);
     s_ui->btn_action = gtk_button_new_with_label("Install");
     gtk_widget_set_sensitive(s_ui->btn_action, FALSE);
     g_signal_connect(s_ui->btn_action, "clicked",
                      G_CALLBACK(on_action), NULL);
     gtk_box_append(GTK_BOX(hb), s_ui->btn_action);
+    s_ui->status = gtk_label_new("");
+    gtk_widget_set_hexpand(s_ui->status, TRUE);
+    gtk_label_set_xalign(GTK_LABEL(s_ui->status), 0.5f);
+    gtk_box_append(GTK_BOX(hb), s_ui->status);
+    GtkWidget *btn_close = gtk_button_new_with_label("Close");
+    g_signal_connect_swapped(btn_close, "clicked",
+                             G_CALLBACK(gtk_window_close),
+                             s_ui->window);
+    gtk_box_append(GTK_BOX(hb), btn_close);
     gtk_box_append(GTK_BOX(vbox), hb);
 
     gtk_window_set_child(GTK_WINDOW(s_ui->window), vbox);

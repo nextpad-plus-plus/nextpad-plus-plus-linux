@@ -507,7 +507,7 @@ static gboolean filter_visible(GtkTreeModel *m, GtkTreeIter *iter, gpointer ud)
 static void on_search_changed(GtkSearchEntry *entry, gpointer ud)
 {
     (void)ud;
-    const char *txt = gtk_entry_get_text(GTK_ENTRY(entry));
+    const char *txt = gtk_editable_get_text(GTK_EDITABLE(entry));
     g_free(s_needle);
     s_needle = txt && *txt ? g_ascii_strdown(txt, -1) : NULL;
     if (s_filter) gtk_tree_model_filter_refilter(s_filter);

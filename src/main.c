@@ -5452,6 +5452,24 @@ void main_retranslate_menu(void)
 
 static GMenuModel *build_menu_model(void);
 
+/* NPP_MENU_DUMP=1 — print the built menu tree to stderr (debug aid). */
+static void menu_dump(GMenuModel *m, int depth)
+{
+    if (!m) return;
+    int n = g_menu_model_get_n_items(m);
+    for (int i = 0; i < n; i++) {
+        gchar *label = NULL;
+        g_menu_model_get_item_attribute(m, i, "label", "s", &label);
+        if (label)
+            fprintf(stderr, "%*s%s\n", depth * 2, "", label);
+        GMenuModel *sec = g_menu_model_get_item_link(m, i, G_MENU_LINK_SECTION);
+        if (sec) { menu_dump(sec, depth); g_object_unref(sec); }
+        GMenuModel *sub = g_menu_model_get_item_link(m, i, G_MENU_LINK_SUBMENU);
+        if (sub) { menu_dump(sub, depth + 1); g_object_unref(sub); }
+        g_free(label);
+    }
+}
+
 /* Rebuild the whole menubar from scratch — needed when its dynamic
  * content changes at runtime (UDL install/remove: the Language menu
  * lists loaded UDLs). Re-runs build_menu_model, then re-applies the
@@ -5462,6 +5480,7 @@ void main_rebuild_menubar(void)
     if (!fresh) return;
     if (g_menu_english) g_object_unref(g_menu_english);
     g_menu_english = fresh;
+    if (g_getenv("NPP_MENU_DUMP")) menu_dump(g_menu_english, 0);
     main_retranslate_menu();
 }
 
@@ -7160,6 +7179,7 @@ static void on_startup(GtkApplication *app, gpointer ud)
      * menu index and for live retranslation; the app menubar itself uses a
      * translated copy in the current UI language (#7). */
     g_menu_english = build_menu_model();
+    if (g_getenv("NPP_MENU_DUMP")) menu_dump(g_menu_english, 0);
     GMenuModel *translated = i18n_translate_menu(g_menu_english);
     gtk_application_set_menubar(app, translated);
 

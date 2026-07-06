@@ -489,6 +489,13 @@ void udl_reload(void)
     udl_load_all();
 }
 
+static gint udl_def_cmp_name(gconstpointer a, gconstpointer b)
+{
+    const UdlDefInternal *da = *(UdlDefInternal * const *)a;
+    const UdlDefInternal *db = *(UdlDefInternal * const *)b;
+    return g_ascii_strcasecmp(da->name, db->name);
+}
+
 void udl_load_all(void)
 {
     if (s_defs) return;
@@ -501,6 +508,26 @@ void udl_load_all(void)
     gchar *user_dir = npp_user_subdir("userDefineLangs");
     load_dir(user_dir);
     g_free(user_dir);
+
+    /* Dedup by language name — a user-dir copy of a bundled UDL (the
+     * preinstalled Markdown pair, typically) must not appear twice in
+     * the Language menu. Later registration wins: the user dir loads
+     * after the bundle, so the user's version overrides. */
+    for (guint i = 0; i < s_defs->len; i++) {
+        UdlDefInternal *di = g_ptr_array_index(s_defs, i);
+        for (guint j = i + 1; j < s_defs->len; j++) {
+            UdlDefInternal *dj = g_ptr_array_index(s_defs, j);
+            if (strcmp(di->name, dj->name) == 0) {
+                g_ptr_array_remove_index(s_defs, i);   /* keep the later */
+                i--;
+                break;
+            }
+        }
+    }
+
+    /* Alphabetical, like macOS (NSFileManager enumerates sorted; our
+     * readdir order is arbitrary — with 50 UDLs the menu was chaos). */
+    g_ptr_array_sort(s_defs, udl_def_cmp_name);
 }
 
 int udl_count(void)
