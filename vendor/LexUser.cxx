@@ -2336,11 +2336,27 @@ static void FoldUserDoc(Sci_PositionU /* startPos */, Sci_Position /* length */,
     // }
 }
 
+/* MUST match MAPPER_TOTAL (15): ColouriseUserDoc indexes kwLists[0..14]
+ * unconditionally, and LexerSimple only allocates as many WordLists as
+ * this array describes — a shorter list left kwLists[4..14] NULL and
+ * selecting any UDL over a non-empty buffer crashed in
+ * WordList::Length(this=0x0). Order = maskMapper/styleMapper. */
 static const char * const userDefineWordLists[] = {
-            "Primary keywords and identifiers",
-            "Secondary keywords and identifiers",
-            "Documentation comment keywords",
-            "Fold header keywords",
+            "Operators 2",
+            "Folders in code 2 (open)",
+            "Folders in code 2 (middle)",
+            "Folders in code 2 (close)",
+            "Folders in comment (open)",
+            "Folders in comment (middle)",
+            "Folders in comment (close)",
+            "Keywords 1",
+            "Keywords 2",
+            "Keywords 3",
+            "Keywords 4",
+            "Keywords 5",
+            "Keywords 6",
+            "Keywords 7",
+            "Keywords 8",
             0,
         };
 
