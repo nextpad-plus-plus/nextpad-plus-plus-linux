@@ -359,11 +359,18 @@ typedef struct {
 
 static UdlUi *s_ui = NULL;
 
-static UdlState tab_state(int tab)
+/* macOS UDLAdminWindowController filter rules:
+ *   Available → only NOT_INSTALLED;
+ *   Installed → everything installed (incl. update-available);
+ *   Updates   → only UPDATE_AVAILABLE.
+ * An outdated entry therefore appears in BOTH Installed and Updates. */
+static gboolean entry_in_tab(const UdlEntry *e, int tab)
 {
-    return tab == 0 ? UDL_STATE_NOT_INSTALLED
-         : tab == 1 ? UDL_STATE_INSTALLED
-                    : UDL_STATE_UPDATE_AVAILABLE;
+    switch (tab) {
+        case 0:  return e->state == UDL_STATE_NOT_INSTALLED;
+        case 1:  return e->state != UDL_STATE_NOT_INSTALLED;
+        default: return e->state == UDL_STATE_UPDATE_AVAILABLE;
+    }
 }
 
 static void refill_stores(void)
@@ -374,18 +381,20 @@ static void refill_stores(void)
 
     for (int t = 0; t < 3; t++) gtk_list_store_clear(s_ui->store[t]);
 
-    int counts[3] = { 0, 0, 0 };
+    int installed = 0, updates = 0;
     for (int i = 0; i < udladmin_catalog_count(); i++) {
         const UdlEntry *e = udladmin_catalog_entry(i);
+        if (e->state == UDL_STATE_INSTALLED) installed++;
+        else if (e->state == UDL_STATE_UPDATE_AVAILABLE) {
+            installed++;   /* an outdated entry is still installed */
+            updates++;
+        }
         if (nlc) {
             gchar *dlc = g_utf8_strdown(e->display, -1);
             gboolean hit = strstr(dlc, nlc) != NULL;
             g_free(dlc);
             if (!hit) continue;
         }
-        int t = e->state == UDL_STATE_NOT_INSTALLED ? 0
-              : e->state == UDL_STATE_INSTALLED     ? 1 : 2;
-        counts[t]++;
 
         int n_ac = e->ac ? (int)e->ac->len : 0;
         gchar *ac = n_ac ? g_strdup_printf("%d", n_ac) : g_strdup("");
@@ -396,27 +405,34 @@ static void refill_stores(void)
                                    ? "Notepad++"
                              : !g_ascii_strcasecmp(src, "sublime")
                                    ? "Sublime" : src;
-        const char *status = t == 0 ? "Available"
-                           : t == 1 ? "Installed" : "Update available";
+        /* Per-row status from the ENTRY state (macOS: "Update" rows in
+         * the Installed tab too). */
+        const char *status =
+            e->state == UDL_STATE_INSTALLED        ? "Installed"
+          : e->state == UDL_STATE_UPDATE_AVAILABLE ? "Update"
+                                                   : "Available";
 
-        GtkTreeIter it;
-        gtk_list_store_append(s_ui->store[t], &it);
-        gtk_list_store_set(s_ui->store[t], &it,
-                           COL_IDX, i,
-                           COL_CHECK, FALSE,
-                           COL_NAME, e->display,
-                           COL_SOURCE, src_disp,
-                           COL_UDL, e->udl ? "\u2713" : "",
-                           COL_AC, ac,
-                           COL_STATUS, status,
-                           -1);
+        for (int t = 0; t < 3; t++) {
+            if (!entry_in_tab(e, t)) continue;
+            GtkTreeIter it;
+            gtk_list_store_append(s_ui->store[t], &it);
+            gtk_list_store_set(s_ui->store[t], &it,
+                               COL_IDX, i,
+                               COL_CHECK, FALSE,
+                               COL_NAME, e->display,
+                               COL_SOURCE, src_disp,
+                               COL_UDL, e->udl ? "\u2713" : "",
+                               COL_AC, ac,
+                               COL_STATUS, status,
+                               -1);
+        }
         g_free(ac);
     }
     g_free(nlc);
 
     gchar *st = g_strdup_printf(
         "%d languages \u00b7 %d installed \u00b7 %d updates",
-        udladmin_catalog_count(), counts[1], counts[2]);
+        udladmin_catalog_count(), installed, updates);
     gtk_label_set_text(GTK_LABEL(s_ui->status), st);
     g_free(st);
 }
@@ -472,10 +488,15 @@ static void update_detail(void)
     gtk_widget_set_sensitive(s_ui->btn_action, TRUE);
 }
 
-static void update_action_label(void)
+/* tab < 0 → query the notebook. During a "switch-page" emission the
+ * notebook still reports the OLD page, so the signal handler must pass
+ * the incoming page number explicitly (the button used to lag one tab
+ * behind: Installed showed "Install", Available showed "Remove"). */
+static void update_action_label(int tab)
 {
     if (!s_ui) return;
-    int t = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_ui->notebook));
+    int t = tab >= 0 ? tab
+          : gtk_notebook_get_current_page(GTK_NOTEBOOK(s_ui->notebook));
     gtk_button_set_label(GTK_BUTTON(s_ui->btn_action),
         t == 0 ? "Install" : t == 1 ? "Remove" : "Update");
     update_detail();
@@ -563,9 +584,9 @@ static void on_search_changed(GtkEditable *e, gpointer u)
 static void on_tab_switched(GtkNotebook *nb, GtkWidget *pg, guint n,
                             gpointer u)
 {
-    (void)nb; (void)pg; (void)n; (void)u;
+    (void)nb; (void)pg; (void)u;
     if (!s_ui) return;
-    update_action_label();
+    update_action_label((int)n);
 }
 
 static void on_selection_changed(GtkTreeSelection *sel, gpointer u)
@@ -596,6 +617,19 @@ static gboolean on_window_close(GtkWidget *w, gpointer u)
 
 /* Row checkbox toggled — flip the model flag; Install acts on every
  * checked row (falling back to the selected row when none checked). */
+static gboolean any_checked(GtkTreeModel *m)
+{
+    GtkTreeIter it;
+    gboolean valid = gtk_tree_model_get_iter_first(m, &it);
+    while (valid) {
+        gboolean chk = FALSE;
+        gtk_tree_model_get(m, &it, COL_CHECK, &chk, -1);
+        if (chk) return TRUE;
+        valid = gtk_tree_model_iter_next(m, &it);
+    }
+    return FALSE;
+}
+
 static void on_check_toggled(GtkCellRendererToggle *cr, gchar *path_str,
                              gpointer store)
 {
@@ -609,6 +643,11 @@ static void on_check_toggled(GtkCellRendererToggle *cr, gchar *path_str,
         gtk_list_store_set(GTK_LIST_STORE(store), &it, COL_CHECK, !v, -1);
     }
     gtk_tree_path_free(path);
+    /* Checked rows are actionable even without a list selection. */
+    if (any_checked(GTK_TREE_MODEL(store)))
+        gtk_widget_set_sensitive(s_ui->btn_action, TRUE);
+    else
+        update_detail();   /* falls back to selection-based sensitivity */
 }
 
 static GtkWidget *make_tab(int t)
@@ -735,7 +774,7 @@ void udladmin_show(GtkWindow *parent)
 
     gtk_window_set_child(GTK_WINDOW(s_ui->window), vbox);
     refill_stores();
-    update_action_label();
+    update_action_label(-1);
     gtk_window_present(GTK_WINDOW(s_ui->window));
 
     /* Refresh the catalog from the network after first paint; offline
