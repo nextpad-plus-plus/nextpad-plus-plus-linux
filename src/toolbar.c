@@ -17,6 +17,7 @@
 #include "funclist.h"
 #include "sci_c.h"
 #include "toolbarconf.h"
+#include "prefs.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -538,6 +539,140 @@ void toolbar_apply_theme(void)
     if (s_toolbar) reload_icons_recursive(s_toolbar);
 }
 
+/* ================================================================== */
+/* GAP-70 — Tahoe capsule toolbar (Modern appearance).                 */
+/* Port of macOS tahoeToolbarGroups(): each semantic group becomes a   */
+/* rounded capsule card holding its PRIMARY icon buttons with the      */
+/* group label beneath; when the group has overflow commands the       */
+/* label is a ▾ menu button exposing them. No separators (by design).  */
+/* ================================================================== */
+
+/* One capsule: appends it to `tb`, returns the icon row to fill. When
+ * `overflow` is non-NULL the label becomes a ▾ menu button (takes
+ * ownership of the menu). */
+static GtkWidget *capsule_begin(GtkWidget *tb, const char *label,
+                                GMenu *overflow)
+{
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(v, "npp-capsule");
+    gtk_widget_set_valign(v, GTK_ALIGN_CENTER);
+
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_halign(row, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(v), row);
+
+    if (overflow) {
+        GtkWidget *mb = gtk_menu_button_new();
+        gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(mb),
+                                       G_MENU_MODEL(overflow));
+        gtk_menu_button_set_label(GTK_MENU_BUTTON(mb), label);
+        gtk_menu_button_set_always_show_arrow(GTK_MENU_BUTTON(mb), TRUE);
+        gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(mb), FALSE);
+        gtk_widget_add_css_class(mb, "npp-capsule-label");
+        gtk_widget_set_halign(mb, GTK_ALIGN_CENTER);
+        gtk_box_append(GTK_BOX(v), mb);
+        g_object_unref(overflow);
+    } else {
+        GtkWidget *l = gtk_label_new(label);
+        gtk_widget_add_css_class(l, "npp-capsule-label");
+        gtk_box_append(GTK_BOX(v), l);
+    }
+    gtk_box_append(GTK_BOX(tb), v);
+    return row;
+}
+
+/* Build the Modern layout. Same widgets/callbacks as Classic (the same
+ * make_btn/make_toggle calls assign the same statics, so sensitivity and
+ * toggle mirroring keep working); only grouping and chrome differ.
+ * Groups + primary/overflow split mirror macOS tahoeToolbarGroups(). */
+static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row;
+    GMenu *m;
+
+    /* File: primary New Open Save Print · overflow SaveAll Close CloseAll */
+    m = g_menu_new();
+    g_menu_append(m, "Save All",  "app.save-all");
+    g_menu_append(m, "Close",     "app.close");
+    g_menu_append(m, "Close All", "app.close-all");
+    row = capsule_begin(tb, "File", m);
+    gtk_box_append(GTK_BOX(row), make_btn("new",  "New (Ctrl+N)",    G_CALLBACK(on_new),  NULL));
+    gtk_box_append(GTK_BOX(row), make_btn("open", "Open… (Ctrl+O)",  G_CALLBACK(on_open), NULL));
+    s_btn_save = make_btn("save", "Save (Ctrl+S)", G_CALLBACK(on_save), NULL);
+    gtk_box_append(GTK_BOX(row), s_btn_save);
+    gtk_box_append(GTK_BOX(row), make_btn("print", "Print… (Ctrl+P)", G_CALLBACK(on_print), NULL));
+
+    /* Edit: primary Copy Paste Undo Redo · overflow Cut */
+    m = g_menu_new();
+    g_menu_append(m, "Cut", "app.cut");
+    row = capsule_begin(tb, "Edit", m);
+    gtk_box_append(GTK_BOX(row), make_btn("copy",  "Copy (Ctrl+C)",  G_CALLBACK(on_copy),  NULL));
+    gtk_box_append(GTK_BOX(row), make_btn("paste", "Paste (Ctrl+V)", G_CALLBACK(on_paste), NULL));
+    s_btn_undo = make_btn("undo", "Undo (Ctrl+Z)",       G_CALLBACK(on_undo), NULL);
+    s_btn_redo = make_btn("redo", "Redo (Ctrl+Shift+Z)", G_CALLBACK(on_redo), NULL);
+    gtk_box_append(GTK_BOX(row), s_btn_undo);
+    gtk_box_append(GTK_BOX(row), s_btn_redo);
+
+    /* Find: primary Find · overflow Replace */
+    m = g_menu_new();
+    g_menu_append(m, "Replace…", "app.replace");
+    row = capsule_begin(tb, "Find", m);
+    gtk_box_append(GTK_BOX(row), make_btn("find", "Find… (Ctrl+F)", G_CALLBACK(on_find), parent_window));
+
+    /* Zoom: primary In Out · no overflow */
+    row = capsule_begin(tb, "Zoom", NULL);
+    gtk_box_append(GTK_BOX(row), make_btn("zoomIn",  "Zoom In",  G_CALLBACK(on_zoom_in),  NULL));
+    gtk_box_append(GTK_BOX(row), make_btn("zoomOut", "Zoom Out", G_CALLBACK(on_zoom_out), NULL));
+
+    /* View: primary Wrap IndentGuide · overflow AllChars */
+    m = g_menu_new();
+    g_menu_append(m, "Show All Characters", "app.show-all-chars");
+    row = capsule_begin(tb, "View", m);
+    s_tgl_wrap   = make_toggle("wrap",        "Toggle Word Wrap",    G_CALLBACK(on_wrap),   NULL);
+    s_tgl_indent = make_toggle("indentGuide", "Toggle Indent Guide", G_CALLBACK(on_indent), NULL);
+    gtk_box_append(GTK_BOX(row), s_tgl_wrap);
+    gtk_box_append(GTK_BOX(row), s_tgl_indent);
+
+    /* Sync: primary SyncV · overflow SyncH */
+    m = g_menu_new();
+    g_menu_append(m, "Synchronise Horizontal Scrolling", "app.sync-scroll-h");
+    row = capsule_begin(tb, "Sync", m);
+    gtk_box_append(GTK_BOX(row), make_toggle("syncV",
+        "Synchronise Vertical Scrolling", G_CALLBACK(on_syncv), NULL));
+
+    /* Panels: primary DocList FileBrowser FuncList · overflow the rest */
+    m = g_menu_new();
+    g_menu_append(m, "Define Your Language…", "app.udl-define");
+    g_menu_append(m, "Document Map",          "app.toggle-docmap");
+    g_menu_append(m, "Character Panel",       "app.toggle-charpanel");
+    g_menu_append(m, "Clipboard History",     "app.toggle-cliphistory");
+    g_menu_append(m, "Project Panels",        "app.toggle-project");
+    row = capsule_begin(tb, "Panels", m);
+    s_tgl_doclist   = make_toggle("docList",     "Document List",       G_CALLBACK(on_tgl_doclist),   NULL);
+    s_tgl_workspace = make_toggle("fileBrowser", "Folder as Workspace", G_CALLBACK(on_tgl_workspace), NULL);
+    s_tgl_funclist  = make_toggle("funcList",    "Function List",       G_CALLBACK(on_tgl_funclist),  NULL);
+    gtk_box_append(GTK_BOX(row), s_tgl_doclist);
+    gtk_box_append(GTK_BOX(row), s_tgl_workspace);
+    gtk_box_append(GTK_BOX(row), s_tgl_funclist);
+
+    /* Monitor: standalone toggle · no overflow */
+    row = capsule_begin(tb, "Monitor", NULL);
+    s_tgl_monitoring = make_toggle("monitoring",
+        "File Monitoring (tail -f)", G_CALLBACK(on_tgl_monitoring), NULL);
+    gtk_box_append(GTK_BOX(row), s_tgl_monitoring);
+
+    /* Macro: primary Start Stop · overflow Play/PlayMulti/Save */
+    m = g_menu_new();
+    g_menu_append(m, "Playback",                          "app.macro-play");
+    g_menu_append(m, "Run a Macro Multiple Times…",       "app.macro-play-n");
+    g_menu_append(m, "Save Current Recorded Macro…",      "app.macro-save-as");
+    row = capsule_begin(tb, "Macro", m);
+    s_btn_startrecord = make_btn("startrecord", "Start Recording (Ctrl+Shift+R)", G_CALLBACK(on_macro_start), NULL);
+    s_btn_stoprecord  = make_btn("stoprecord",  "Stop Recording",                 G_CALLBACK(on_macro_stop),  NULL);
+    gtk_box_append(GTK_BOX(row), s_btn_startrecord);
+    gtk_box_append(GTK_BOX(row), s_btn_stoprecord);
+}
+
 GtkWidget *toolbar_init(GtkWidget *parent_window)
 {
     s_window = parent_window;
@@ -547,6 +682,14 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
     s_toolbar = tb;
 
     apply_toolbar_css();
+
+    /* GAP-70 — Modern appearance: Tahoe capsule layout instead of the
+     * flat Classic strip. Same widgets and behavior, different grouping. */
+    if (g_prefs.appearance_style == 1) {
+        build_modern_toolbar(tb, parent_window);
+        toolbar_update_macro_buttons();
+        return tb;
+    }
 
 #define ADD(item) gtk_box_append(GTK_BOX(tb), (item))
 
@@ -647,8 +790,12 @@ void toolbar_update_macro_buttons(void)
     gboolean has_macro = macro_has_macro();
     gtk_widget_set_sensitive(s_btn_startrecord, !recording);
     gtk_widget_set_sensitive(s_btn_stoprecord,   recording);
-    gtk_widget_set_sensitive(s_btn_play,         !recording && has_macro);
-    gtk_widget_set_sensitive(s_btn_playn,        !recording && has_macro);
+    /* Play/PlayN/Save live in the Macro capsule's overflow menu under the
+     * Modern layout (GAP-70) — the widgets are NULL there. */
+    if (s_btn_play)
+        gtk_widget_set_sensitive(s_btn_play,     !recording && has_macro);
+    if (s_btn_playn)
+        gtk_widget_set_sensitive(s_btn_playn,    !recording && has_macro);
     if (s_btn_saverecord)
         gtk_widget_set_sensitive(s_btn_saverecord, !recording && has_macro);
 }
