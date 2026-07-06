@@ -205,8 +205,19 @@ static void on_file_changed(GFileMonitor *mon, GFile *file, GFile *other,
         return;
     }
 
-    /* Monitoring mode: reload silently without prompting */
-    if (doc->monitoring) {
+    /* GAP-27 — File Status Auto-Detection (macOS 45add16 #116). Off →
+     * ignore external changes entirely; a per-tab tail -f monitor is an
+     * explicit opt-in independent of the global setting. */
+    if (!g_prefs.file_auto_detect && !doc->monitoring)
+        return;
+
+    /* Reload silently when this tab is monitoring (tail -f), or when
+     * "Update silently" is on and the buffer has no unsaved edits. Dirty
+     * buffers always fall through to the prompt so unsaved changes are
+     * never discarded silently. (Caret + viewport survive the reload —
+     * GAP-58.) */
+    if (doc->monitoring ||
+        (g_prefs.file_update_silently && !doc->modified)) {
         reload_doc_from_disk(doc);
         return;
     }
@@ -347,6 +358,203 @@ static gboolean on_sci_colsel_key(GtkEventControllerKey *ctl, guint keyval,
     sci_msg(sci, SCI_SETSELECTIONMODE, SC_SEL_STREAM, 0);
     sci_msg(sci, SCI_SETSELECTIONMODE, SC_SEL_STREAM, 0);
     return FALSE;       /* key still reaches Scintilla */
+}
+
+/* ================================================================== */
+/* GAP-37 — clickable links (macOS 7c579bc #133 / Windows addHotSpot). */
+/* Indicator 19 marks URLs in the visible range; re-marked on content  */
+/* and scroll changes; a plain double-click on a marked range opens    */
+/* the URL. Style follows the Cloud-and-Link prefs.                    */
+/* ================================================================== */
+#define NPP_LINK_INDICATOR 19
+
+static void link_indicator_configure(GtkWidget *sci)
+{
+    /* INDIC_TEXTFORE colors the text without an underline ("No
+     * underline"); INDIC_PLAIN underlines. Fullbox mode fills on hover. */
+    int base  = g_prefs.clickable_link_no_underline ? INDIC_TEXTFORE
+                                                    : INDIC_PLAIN;
+    int hover = g_prefs.clickable_link_fullbox ? INDIC_FULLBOX : base;
+    sci_msg(sci, SCI_INDICSETSTYLE,        NPP_LINK_INDICATOR, base);
+    sci_msg(sci, SCI_INDICSETHOVERSTYLE,   NPP_LINK_INDICATOR, hover);
+    sci_msg(sci, SCI_INDICSETFORE,         NPP_LINK_INDICATOR, 0xCC6600); /* #0066CC BGR */
+    sci_msg(sci, SCI_INDICSETALPHA,        NPP_LINK_INDICATOR, 60);
+    sci_msg(sci, SCI_INDICSETOUTLINEALPHA, NPP_LINK_INDICATOR, 120);
+}
+
+/* Standard web/mail links — GLib regex stands in for NSDataDetector. */
+static GRegex *link_std_regex(void)
+{
+    static GRegex *rx = NULL;
+    if (!rx)
+        rx = g_regex_new("(?:https?://|ftp://|mailto:|www\\.)[^\\s<>\"'`]+",
+                         G_REGEX_CASELESS | G_REGEX_OPTIMIZE, 0, NULL);
+    return rx;
+}
+
+/* Custom URI schemes from prefs (svn:// git:// …) — cached on the
+ * schemes string so we don't recompile on every scroll. */
+static GRegex *link_scheme_regex(void)
+{
+    static GRegex *rx = NULL;
+    static char *cached_src = NULL;
+    if (cached_src && strcmp(cached_src, g_prefs.clickable_link_schemes) == 0)
+        return rx;
+    g_free(cached_src);
+    cached_src = g_strdup(g_prefs.clickable_link_schemes);
+    if (rx) { g_regex_unref(rx); rx = NULL; }
+
+    gchar **toks = g_strsplit_set(g_prefs.clickable_link_schemes, " \t\n", -1);
+    GString *alt = g_string_new(NULL);
+    for (int i = 0; toks[i]; i++) {
+        if (!*toks[i]) continue;
+        gchar *esc = g_regex_escape_string(toks[i], -1);
+        if (alt->len) g_string_append_c(alt, '|');
+        g_string_append(alt, esc);
+        g_free(esc);
+    }
+    g_strfreev(toks);
+    if (alt->len) {
+        gchar *pat = g_strdup_printf("(?:%s)[^\\s<>\"'`]+", alt->str);
+        rx = g_regex_new(pat, G_REGEX_CASELESS | G_REGEX_OPTIMIZE, 0, NULL);
+        g_free(pat);
+    }
+    g_string_free(alt, TRUE);
+    return rx;
+}
+
+/* Trailing sentence/markup punctuation isn't part of the URL. */
+static gsize link_trim_trailing(const char *text, gsize start, gsize end)
+{
+    while (end > start && strchr(".,;:!?)]}>'\"", text[end - 1]))
+        end--;
+    return end;
+}
+
+static gboolean link_gating_off(GtkWidget *sci)
+{
+    if (!g_prefs.clickable_link_enable) return TRUE;
+    /* Large-file gate (pre-existing pref pair). */
+    if (g_prefs.large_file_enabled && !g_prefs.large_file_allow_url_click) {
+        sptr_t len = sci_msg(sci, SCI_GETLENGTH, 0, 0);
+        if (len > (sptr_t)g_prefs.large_file_size_mb * 1024 * 1024)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* Re-mark clickable links within the visible viewport (cheap — only the
+ * on-screen byte range is scanned). */
+void editor_update_clickable_links(GtkWidget *sci)
+{
+    if (!sci) return;
+    link_indicator_configure(sci);
+
+    /* Visible byte range — fold/wrap-aware via SCI_DOCLINEFROMVISIBLE. */
+    sptr_t first_vis = sci_msg(sci, SCI_GETFIRSTVISIBLELINE, 0, 0);
+    sptr_t on_screen = sci_msg(sci, SCI_LINESONSCREEN, 0, 0);
+    sptr_t lines     = sci_msg(sci, SCI_GETLINECOUNT, 0, 0);
+    sptr_t doc_first = sci_msg(sci, SCI_DOCLINEFROMVISIBLE, (uptr_t)first_vis, 0);
+    sptr_t doc_last  = sci_msg(sci, SCI_DOCLINEFROMVISIBLE,
+                               (uptr_t)(first_vis + on_screen + 1), 0);
+    if (doc_first < 0) doc_first = 0;
+    if (doc_last >= lines) doc_last = lines - 1;
+    if (doc_last < doc_first) return;
+
+    sptr_t start = sci_msg(sci, SCI_POSITIONFROMLINE,   (uptr_t)doc_first, 0);
+    sptr_t end   = sci_msg(sci, SCI_GETLINEENDPOSITION, (uptr_t)doc_last, 0);
+    if (end <= start) return;
+
+    /* Bound the scan on pathologically long lines (minified bundles,
+     * one-line JSON): cap to a byte budget, backed off to a UTF-8 char
+     * boundary so the buffer decodes cleanly. */
+    static const sptr_t kMaxScanBytes = 128 * 1024;
+    if (end - start > kMaxScanBytes) {
+        end = start + kMaxScanBytes;
+        while (end > start &&
+               ((guchar)sci_msg(sci, SCI_GETCHARAT, (uptr_t)end, 0) & 0xC0) == 0x80)
+            end--;
+        if (end <= start) return;
+    }
+
+    sci_msg(sci, SCI_SETINDICATORCURRENT, NPP_LINK_INDICATOR, 0);
+    sci_msg(sci, SCI_INDICATORCLEARRANGE, (uptr_t)start, end - start);
+
+    if (link_gating_off(sci)) return;
+
+    sptr_t len = end - start;
+    char *buf = g_malloc((gsize)len + 1);
+    struct Sci_TextRangeFull tr = { { start, end }, buf };
+    sci_msg(sci, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
+    buf[len] = '\0';
+
+    /* GRegex match offsets on the UTF-8 buffer ARE byte offsets — no
+     * UTF-16 mapping dance needed (unlike the macOS NSString path). */
+    GRegex *rxs[2] = { link_std_regex(), link_scheme_regex() };
+    for (int i = 0; i < 2; i++) {
+        if (!rxs[i]) continue;
+        GMatchInfo *mi = NULL;
+        g_regex_match_full(rxs[i], buf, len, 0, 0, &mi, NULL);
+        while (mi && g_match_info_matches(mi)) {
+            gint mstart = 0, mend = 0;
+            if (g_match_info_fetch_pos(mi, 0, &mstart, &mend) && mend > mstart) {
+                gsize e = link_trim_trailing(buf, (gsize)mstart, (gsize)mend);
+                if (e > (gsize)mstart)
+                    sci_msg(sci, SCI_INDICATORFILLRANGE,
+                            (uptr_t)(start + mstart), (sptr_t)(e - mstart));
+            }
+            g_match_info_next(mi, NULL);
+        }
+        g_match_info_free(mi);
+    }
+    g_free(buf);
+}
+
+/* Pref change: full-clear every document's indicator (so a live
+ * toggle-off wipes stale links everywhere), then re-mark the viewport. */
+void editor_refresh_clickable_links(void)
+{
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (!d || !d->sci) continue;
+        sci_msg(d->sci, SCI_SETINDICATORCURRENT, NPP_LINK_INDICATOR, 0);
+        sci_msg(d->sci, SCI_INDICATORCLEARRANGE, 0,
+                sci_msg(d->sci, SCI_GETLENGTH, 0, 0));
+        editor_update_clickable_links(d->sci);
+    }
+    g_ptr_array_free(docs, TRUE);
+}
+
+/* Plain double-click on a marked range opens the URL. Returns TRUE when
+ * handled (macOS collapses the word selection Scintilla made first). */
+static gboolean link_double_click(GtkWidget *sci, sptr_t pos, int modifiers)
+{
+    if (modifiers != 0) return FALSE;          /* plain double-click only */
+    if (link_gating_off(sci)) return FALSE;
+    if (pos < 0) return FALSE;
+    if (!sci_msg(sci, SCI_INDICATORVALUEAT, NPP_LINK_INDICATOR, pos))
+        return FALSE;
+
+    sptr_t s = sci_msg(sci, SCI_INDICATORSTART, NPP_LINK_INDICATOR, pos);
+    sptr_t e = sci_msg(sci, SCI_INDICATOREND,   NPP_LINK_INDICATOR, pos);
+    if (e <= s || e - s > 4096) return FALSE;
+
+    char *text = g_malloc((gsize)(e - s) + 1);
+    struct Sci_TextRangeFull tr = { { s, e }, text };
+    sci_msg(sci, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
+    text[e - s] = '\0';
+
+    /* Collapse the word selection made by the double-click (macOS/Windows
+     * parity), then open. Bare www. hosts get an http:// scheme. */
+    sci_msg(sci, SCI_SETSEL, (uptr_t)pos, pos);
+    gchar *uri = g_ascii_strncasecmp(text, "www.", 4) == 0
+        ? g_strconcat("http://", text, NULL)
+        : g_strdup(text);
+    gtk_show_uri_on_window(NULL, uri, GDK_CURRENT_TIME, NULL);
+    g_free(uri);
+    g_free(text);
+    return TRUE;
 }
 
 /* #3 split views: whichever editor view last held keyboard focus is the
@@ -1226,6 +1434,15 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
          * moves (macOS _refreshActiveCalltipOnCaretMove). */
         if (n->updated & (SC_UPDATE_CONTENT | SC_UPDATE_SELECTION))
             autocomplete_on_update_ui(sci);
+
+        /* GAP-37 — re-mark clickable links only when content or the
+         * viewport changed (a bare caret move can't shift link spans). */
+        if (n->updated & (SC_UPDATE_CONTENT | SC_UPDATE_V_SCROLL |
+                          SC_UPDATE_H_SCROLL))
+            editor_update_clickable_links(sci);
+    } else if (code == SCN_DOUBLECLICK) {
+        /* GAP-37 — plain double-click on a marked link opens it. */
+        link_double_click(sci, (sptr_t)n->position, (int)n->modifiers);
     } else if (code == SCN_CALLTIPCLICK) {
         /* Up/down arrows in an API calltip cycle through overloads. */
         autocomplete_on_calltip_click(sci, (int)n->position);

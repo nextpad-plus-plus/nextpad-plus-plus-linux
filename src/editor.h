@@ -56,6 +56,11 @@ GtkWidget *editor_get_notebook(void);
 void       editor_new_doc(void);
 gboolean   editor_open_dialog(void);               /* shows GTK open dialog */
 gboolean   editor_open_path(const char *path);     /* open a specific file   */
+
+/* GAP-37 — clickable links: re-mark the visible range of one editor /
+ * full-clear + re-mark every editor after a pref change. */
+void       editor_update_clickable_links(GtkWidget *sci);
+void       editor_refresh_clickable_links(void);
 gboolean   editor_save(void);                      /* save current doc       */
 gboolean   editor_save_at(int page);               /* save specific page     */
 gboolean   editor_save_all(void);                  /* save all modified docs  */

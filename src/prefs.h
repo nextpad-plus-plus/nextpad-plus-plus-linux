@@ -142,6 +142,20 @@ typedef struct {
     /* GAP-41 — Backspace/arrows convert a column (rectangular) selection
      * to multi-caret editing first (N++ default behaviour). */
     gboolean column_sel_to_multi_edit;
+
+    /* GAP-27 — File Status Auto-Detection (macOS 45add16 #116). When
+     * detection is off, external on-disk changes are ignored (a per-tab
+     * tail -f monitor still works). "Update silently" reloads clean
+     * buffers without prompting; dirty buffers always prompt. */
+    gboolean file_auto_detect;        /* default TRUE  */
+    gboolean file_update_silently;    /* default FALSE */
+
+    /* GAP-37 — clickable links (macOS Cloud-and-Link pane; defaults
+     * match Windows urlUnderLineFg behaviour). */
+    gboolean clickable_link_enable;       /* default TRUE  */
+    gboolean clickable_link_no_underline; /* default FALSE */
+    gboolean clickable_link_fullbox;      /* default FALSE */
+    char     clickable_link_schemes[512]; /* space-separated URI schemes */
     int      in_sel_threshold;        /* min chars of selection to enable "in selection" */
     char     search_engine_url[256];  /* default "https://duckduckgo.com/?q=%s" */
 

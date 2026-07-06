@@ -4330,74 +4330,193 @@ static void action_incremental_search(GSimpleAction *a, GVariant *p, gpointer u)
  * Floating dialog enumerating all GActions; fuzzy filter + arrow nav.
  * ────────────────────────────────────────────────────────────────────── */
 
-typedef struct { char *name; char *label; } CmdEntry;
+/* GAP-63 — the palette indexes the MENU TREE (like macOS
+ * CommandPalettePanel): every leaf menu item becomes an entry carrying
+ * its localized label, a "File ▸ Open Recent" breadcrumb path, the
+ * detailed action name (for accel lookup + target-aware activation),
+ * and its shortcut label. Matching is typo-tolerant fuzzy (the shared
+ * rapidfuzz engine), ranked by score. */
+#include "fuzzy_bridge.h"
+
+typedef struct {
+    char  *detailed;    /* "app.tab-goto(3)" — activation + accel lookup */
+    char  *label;       /* localized item title                          */
+    char  *path;        /* breadcrumb "Edit ▸ Line Operations" (or "")   */
+    char  *accel;       /* "Ctrl+S" or NULL                              */
+    char  *haystack;    /* casefolded "path label" for matching          */
+    double score;       /* fuzzy score of the current query              */
+} CmdEntry;
 static GArray *g_cmd_entries = NULL;
 static GtkWidget *g_cmd_dialog = NULL;
 static GtkWidget *g_cmd_search = NULL;
 static GtkWidget *g_cmd_list   = NULL;
 
-/* Pretty-print an action name: "case-upper" → "Case Upper" */
-static char *cmd_humanize(const char *name) {
-    GString *s = g_string_sized_new(strlen(name));
-    gboolean cap = TRUE;
-    for (const char *p = name; *p; p++) {
-        if (*p == '-' || *p == '_') { g_string_append_c(s, ' '); cap = TRUE; }
-        else if (cap) { g_string_append_c(s, g_ascii_toupper(*p)); cap = FALSE; }
-        else g_string_append_c(s, *p);
-    }
+/* Defined in the menu-construction section below (tentative decl). */
+static GMenuModel *g_menu_english;
+
+static void cmd_entry_clear(CmdEntry *e) {
+    g_free(e->detailed); g_free(e->label); g_free(e->path);
+    g_free(e->accel); g_free(e->haystack);
+}
+
+/* Strip the "_" mnemonic markers menu labels carry. */
+static char *cmd_strip_mnemonic(const char *label) {
+    GString *s = g_string_sized_new(strlen(label));
+    for (const char *p = label; *p; p++)
+        if (*p != '_') g_string_append_c(s, *p);
     return g_string_free(s, FALSE);
 }
-static void cmd_populate(void) {
-    if (!g_app) return;
-    if (g_cmd_entries) {
-        for (guint i = 0; i < g_cmd_entries->len; i++) {
-            CmdEntry *e = &g_array_index(g_cmd_entries, CmdEntry, i);
-            g_free(e->name); g_free(e->label);
+
+static void cmd_index_menu(GMenuModel *model, const char *path) {
+    int n = g_menu_model_get_n_items(model);
+    for (int i = 0; i < n; i++) {
+        gchar *raw = NULL;
+        g_menu_model_get_item_attribute(model, i, "label", "s", &raw);
+        gchar *label = raw ? cmd_strip_mnemonic(i18n_translate(raw)) : NULL;
+
+        GMenuModel *section = g_menu_model_get_item_link(model, i,
+                                                         G_MENU_LINK_SECTION);
+        GMenuModel *submenu = g_menu_model_get_item_link(model, i,
+                                                         G_MENU_LINK_SUBMENU);
+        if (section) {
+            cmd_index_menu(section, path);          /* same breadcrumb */
+            g_object_unref(section);
+        } else if (submenu) {
+            gchar *sub_path = (label && *label)
+                ? (*path ? g_strdup_printf("%s \342\226\270 %s", path, label)
+                         : g_strdup(label))
+                : g_strdup(path);
+            cmd_index_menu(submenu, sub_path);
+            g_free(sub_path);
+            g_object_unref(submenu);
+        } else if (label && *label) {
+            gchar *action = NULL;
+            g_menu_model_get_item_attribute(model, i, "action", "s", &action);
+            if (action) {
+                GVariant *target = g_menu_model_get_item_attribute_value(
+                    model, i, "target", NULL);
+                gchar *detailed;
+                if (target) {
+                    gchar *tstr = g_variant_print(target, FALSE);
+                    detailed = g_strdup_printf("%s(%s)", action, tstr);
+                    g_free(tstr);
+                    g_variant_unref(target);
+                } else {
+                    detailed = g_strdup(action);
+                }
+
+                gchar *accel = NULL;
+                gchar **accels = gtk_application_get_accels_for_action(
+                    GTK_APPLICATION(g_app), detailed);
+                if (accels && accels[0] && *accels[0]) {
+                    guint kv = 0;
+                    GdkModifierType mods = 0;
+                    gtk_accelerator_parse(accels[0], &kv, &mods);
+                    if (kv) accel = gtk_accelerator_get_label(kv, mods);
+                }
+                if (accels) g_strfreev(accels);
+
+                gchar *hay_src = *path
+                    ? g_strdup_printf("%s %s", path, label)
+                    : g_strdup(label);
+                CmdEntry e = {
+                    .detailed = detailed,
+                    .label    = g_strdup(label),
+                    .path     = g_strdup(path),
+                    .accel    = accel,
+                    .haystack = g_utf8_casefold(hay_src, -1),
+                    .score    = 0.0,
+                };
+                g_free(hay_src);
+                g_array_append_val(g_cmd_entries, e);
+                g_free(action);
+            }
         }
+        g_free(label);
+        g_free(raw);
+    }
+}
+
+static void cmd_populate(void) {
+    if (!g_app || !g_menu_english) return;
+    if (g_cmd_entries) {
+        for (guint i = 0; i < g_cmd_entries->len; i++)
+            cmd_entry_clear(&g_array_index(g_cmd_entries, CmdEntry, i));
         g_array_set_size(g_cmd_entries, 0);
     } else {
         g_cmd_entries = g_array_new(FALSE, FALSE, sizeof(CmdEntry));
     }
-    gchar **actions = g_action_group_list_actions(G_ACTION_GROUP(g_app));
-    for (int i = 0; actions[i]; i++) {
-        CmdEntry e = { g_strdup(actions[i]), cmd_humanize(actions[i]) };
-        g_array_append_val(g_cmd_entries, e);
-    }
-    g_strfreev(actions);
+    cmd_index_menu(g_menu_english, "");
 }
-static gboolean cmd_match(const char *label, const char *query) {
-    /* Substring fuzzy: each query char must appear in order in label
-     * (case-insensitive). */
-    if (!query || !*query) return TRUE;
-    const char *l = label, *q = query;
-    while (*l && *q) {
-        if (g_ascii_tolower(*l) == g_ascii_tolower(*q)) q++;
-        l++;
-    }
-    return *q == '\0';
+
+static gint cmd_score_cmp(gconstpointer a, gconstpointer b) {
+    const CmdEntry *ea = a, *eb = b;
+    if (ea->score != eb->score) return (ea->score > eb->score) ? -1 : 1;
+    return 0;   /* stable sort keeps menu order for ties */
 }
+
 static void cmd_refresh_list(const char *query) {
     GList *children = gtk_container_get_children(GTK_CONTAINER(g_cmd_list));
     for (GList *l = children; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
     g_list_free(children);
 
+    /* Score every entry; empty query shows everything in menu order. */
+    gboolean filtering = (query && *query);
+    if (filtering) {
+        NppFuzzyQuery *q = npp_fuzzy_query_new(query, FALSE);
+        for (guint i = 0; i < g_cmd_entries->len; i++) {
+            CmdEntry *e = &g_array_index(g_cmd_entries, CmdEntry, i);
+            int b0, b1; double sc = 0.0;
+            e->score = (q && npp_fuzzy_query_score(q, e->haystack,
+                            (int)strlen(e->haystack), &b0, &b1, &sc))
+                       ? sc : 0.0;
+        }
+        if (q) npp_fuzzy_query_free(q);
+        g_array_sort(g_cmd_entries, cmd_score_cmp);
+    }
+
     int shown = 0;
     for (guint i = 0; i < g_cmd_entries->len && shown < 50; i++) {
         CmdEntry *e = &g_array_index(g_cmd_entries, CmdEntry, i);
-        if (cmd_match(e->label, query)) {
-            GtkWidget *row = gtk_list_box_row_new();
-            GtkWidget *lbl = gtk_label_new(e->label);
-            gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-            gtk_widget_set_margin_start(lbl, 8);
-            gtk_widget_set_margin_end(lbl, 8);
-            gtk_widget_set_margin_top(lbl, 4);
-            gtk_widget_set_margin_bottom(lbl, 4);
-            gtk_container_add(GTK_CONTAINER(row), lbl);
-            g_object_set_data_full(G_OBJECT(row), "action-name",
-                                    g_strdup(e->name), g_free);
-            gtk_list_box_insert(GTK_LIST_BOX(g_cmd_list), row, -1);
-            shown++;
+        if (filtering && e->score <= 0.0) continue;
+
+        GtkWidget *row = gtk_list_box_row_new();
+        GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_margin_start(h, 8);
+        gtk_widget_set_margin_end(h, 8);
+        gtk_widget_set_margin_top(h, 4);
+        gtk_widget_set_margin_bottom(h, 4);
+
+        GtkWidget *lbl = gtk_label_new(e->label);
+        gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+        npp_box_pack(GTK_BOX(h), lbl, FALSE, 0);
+
+        if (e->path && *e->path) {
+            GtkWidget *crumb = gtk_label_new(NULL);
+            gchar *esc = g_markup_escape_text(e->path, -1);
+            gchar *m = g_strdup_printf("<span size='small' alpha='55%%'>%s</span>", esc);
+            gtk_label_set_markup(GTK_LABEL(crumb), m);
+            g_free(m); g_free(esc);
+            gtk_widget_set_halign(crumb, GTK_ALIGN_START);
+            npp_box_pack(GTK_BOX(h), crumb, FALSE, 0);
         }
+
+        if (e->accel) {
+            GtkWidget *acc = gtk_label_new(NULL);
+            gchar *esc = g_markup_escape_text(e->accel, -1);
+            gchar *m = g_strdup_printf("<span size='small' alpha='70%%'>%s</span>", esc);
+            gtk_label_set_markup(GTK_LABEL(acc), m);
+            g_free(m); g_free(esc);
+            gtk_widget_set_halign(acc, GTK_ALIGN_END);
+            gtk_widget_set_hexpand(acc, TRUE);
+            npp_box_pack(GTK_BOX(h), acc, TRUE, 0);
+        }
+
+        gtk_container_add(GTK_CONTAINER(row), h);
+        g_object_set_data_full(G_OBJECT(row), "action-name",
+                               g_strdup(e->detailed), g_free);
+        gtk_list_box_insert(GTK_LIST_BOX(g_cmd_list), row, -1);
+        shown++;
     }
     gtk_widget_show_all(g_cmd_list);
     GtkListBoxRow *first = gtk_list_box_get_row_at_index(GTK_LIST_BOX(g_cmd_list), 0);
@@ -4410,13 +4529,23 @@ static void cmd_on_search_changed(GtkEntry *e, gpointer u) {
 static void cmd_activate_selected(void) {
     GtkListBoxRow *row = gtk_list_box_get_selected_row(GTK_LIST_BOX(g_cmd_list));
     if (!row) return;
-    const char *name = g_object_get_data(G_OBJECT(row), "action-name");
-    if (!name) return;
+    const char *detailed = g_object_get_data(G_OBJECT(row), "action-name");
+    if (!detailed) return;
     gtk_widget_hide(g_cmd_dialog);
     /* The dialog steals focus; restore to editor first, then activate so
      * focus-aware actions (incremental search, etc.) target the editor. */
     GtkWidget *sci = current_sci(); if (sci) gtk_widget_grab_focus(sci);
-    g_action_group_activate_action(G_ACTION_GROUP(g_app), name, NULL);
+    /* GAP-63 — entries come from the menu tree, so they may carry a
+     * target ("tab-goto(3)", "macro-play-named(0)"). */
+    gchar *name = NULL;
+    GVariant *target = NULL;
+    const char *plain = g_str_has_prefix(detailed, "app.") ? detailed + 4
+                                                           : detailed;
+    if (g_action_parse_detailed_name(plain, &name, &target, NULL)) {
+        g_action_group_activate_action(G_ACTION_GROUP(g_app), name, target);
+        if (target) g_variant_unref(target);
+        g_free(name);
+    }
 }
 static void cmd_on_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointer u) {
     (void)box; (void)row; (void)u;
@@ -4771,7 +4900,9 @@ static void action_command_palette(GSimpleAction *a, GVariant *p, gpointer u) {
         npp_box_pack(GTK_BOX(content), scrolled, TRUE, 0);
     }
     cmd_populate();
-    gtk_entry_set_text(GTK_ENTRY(g_cmd_search), "");
+    /* GtkSearchEntry is not a GtkEntry in GTK4 — go through GtkEditable
+     * directly (the GTK_ENTRY cast fired a GObject CRITICAL on open). */
+    gtk_editable_set_text(GTK_EDITABLE(g_cmd_search), "");
     cmd_refresh_list("");
     gtk_widget_show_all(g_cmd_dialog);
     gtk_widget_grab_focus(g_cmd_search);

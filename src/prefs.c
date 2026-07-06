@@ -100,6 +100,15 @@ NppPrefs g_prefs = {
     .auto_indent             = AUTO_INDENT_ADVANCED,  /* macOS default — kPrefAutoIndent=@1 */
     .backspace_unindent      = FALSE,
     .column_sel_to_multi_edit= TRUE,   /* N++/macOS default */
+    .file_auto_detect        = TRUE,
+    .file_update_silently    = FALSE,
+    .clickable_link_enable   = TRUE,
+    .clickable_link_no_underline = FALSE,
+    .clickable_link_fullbox  = FALSE,
+    .clickable_link_schemes  =
+        "svn:// cvs:// git:// imap:// irc:// irc6:// ircs:// ldap:// ldaps:// news: "
+        "telnet:// gopher:// ssh:// sftp:// smb:// skype: snmp:// spotify: steam:// "
+        "sms: slack:// chrome:// bitcoin:",
     /* Editor */
     .highlight_current_line  = TRUE,
     .caret_width             = 1,
@@ -326,6 +335,14 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "always"))  g_prefs.find_transp_always  = is_yes(val);
         else if (!strcmp(attr, "alpha"))   g_prefs.find_transp_alpha   = CLAMP(atoi(val), 20, 90);
     }
+    else if (!strcmp(group, "ClickableLink")) {            /* GAP-37 */
+        if      (!strcmp(attr, "enable"))      g_prefs.clickable_link_enable = is_yes(val);
+        else if (!strcmp(attr, "noUnderline")) g_prefs.clickable_link_no_underline = is_yes(val);
+        else if (!strcmp(attr, "fullBox"))     g_prefs.clickable_link_fullbox = is_yes(val);
+        else if (!strcmp(attr, "schemes"))
+            strncpy(g_prefs.clickable_link_schemes, val,
+                    sizeof(g_prefs.clickable_link_schemes) - 1);
+    }
     else if (!strcmp(group, "AppearanceStyle")) {          /* GAP-70 */
         if (!strcmp(attr, "style"))
             g_prefs.appearance_style = (g_ascii_strcasecmp(val, "modern") == 0);
@@ -349,6 +366,8 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "disableTextDragDrop"))g_prefs.disable_text_drag_drop = is_yes(val);
         else if (!strcmp(attr, "spellCheck"))         g_prefs.spell_check            = is_yes(val);
         else if (!strcmp(attr, "panelKeepState"))     g_prefs.panel_keep_state       = is_yes(val);
+        else if (!strcmp(attr, "fileStatusAutoDetection"))  g_prefs.file_auto_detect     = is_yes(val);
+        else if (!strcmp(attr, "fileStatusUpdateSilently")) g_prefs.file_update_silently = is_yes(val);
     }
     else if (!strcmp(group, "NewDocDefaultSettings")) {
         if      (!strcmp(attr, "format"))             g_prefs.default_eol            = mac_eol_to_sc(atoi(val));
@@ -753,9 +772,11 @@ void prefs_save(void)
     /* MISC */
     g_string_append_printf(b,
         "        <GUIConfig name=\"MISC\" muteSounds=\"%s\" disableTextDragDrop=\"%s\" "
-        "spellCheck=\"%s\" panelKeepState=\"%s\" funcListUseXML=\"yes\" />\n",
+        "spellCheck=\"%s\" panelKeepState=\"%s\" funcListUseXML=\"yes\" "
+        "fileStatusAutoDetection=\"%s\" fileStatusUpdateSilently=\"%s\" />\n",
         b2yn(g_prefs.mute_sounds), b2yn(g_prefs.disable_text_drag_drop),
-        b2yn(g_prefs.spell_check), b2yn(g_prefs.panel_keep_state));
+        b2yn(g_prefs.spell_check), b2yn(g_prefs.panel_keep_state),
+        b2yn(g_prefs.file_auto_detect), b2yn(g_prefs.file_update_silently));
 
     /* ScintillaPrimaryView */
     char edgeCol[32], edgeModeAttr[32];
@@ -832,6 +853,18 @@ void prefs_save(void)
         b2yn(g_prefs.find_transp_enabled), b2yn(g_prefs.find_transp_always),
         g_prefs.find_transp_alpha);
 
+    /* GAP-37 — clickable links. */
+    {
+        gchar *sch = g_markup_escape_text(g_prefs.clickable_link_schemes, -1);
+        g_string_append_printf(b,
+            "        <GUIConfig name=\"ClickableLink\" enable=\"%s\" "
+            "noUnderline=\"%s\" fullBox=\"%s\" schemes=\"%s\" />\n",
+            b2yn(g_prefs.clickable_link_enable),
+            b2yn(g_prefs.clickable_link_no_underline),
+            b2yn(g_prefs.clickable_link_fullbox), sch);
+        g_free(sch);
+    }
+
     /* GAP-70 — appearance style (Classic default / Modern opt-in). */
     g_string_append_printf(b,
         "        <GUIConfig name=\"AppearanceStyle\" style=\"%s\" />\n",
@@ -869,6 +902,7 @@ void prefs_save(void)
 /* ------------------------------------------------------------------ */
 
 void editor_apply_prefs(void);
+void editor_refresh_clickable_links(void);   /* GAP-37 */
 void main_refresh_title(void);
 void statusbar_set_visible(gboolean v);   /* defined in statusbar.c */
 void toolbar_apply_icon_scale(int scale); /* may be stubbed */
@@ -938,6 +972,22 @@ static GtkWidget *make_check(GtkWidget *grid, int r, const char *label, gboolean
 
 CHK(bs_unindent,       backspace_unindent,         (void)0)
 CHK(colsel_medit,      column_sel_to_multi_edit,   (void)0)
+CHK(file_silent,       file_update_silently,       (void)0)
+/* GAP-37 — link style changes re-mark every open editor live. */
+CHK(link_enable,       clickable_link_enable,       editor_refresh_clickable_links())
+CHK(link_nounder,      clickable_link_no_underline, editor_refresh_clickable_links())
+CHK(link_fullbox,      clickable_link_fullbox,      editor_refresh_clickable_links())
+
+/* GAP-27 — parent toggle also greys the dependent "Update silently"
+ * checkbox (widget stashed on the button; matches Windows/macOS). */
+static void on_file_autodetect(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    g_prefs.file_auto_detect = gtk_toggle_button_get_active(b);
+    GtkWidget *child = g_object_get_data(G_OBJECT(b), "npp-dependent");
+    if (child) gtk_widget_set_sensitive(child, g_prefs.file_auto_detect);
+    prefs_save();
+}
 CHK(ac_enable,         autocomplete_enabled,       (void)0)
 CHK(hl_line,           highlight_current_line,     editor_apply_prefs())
 CHK(scroll_past,       scroll_beyond_last_line,    editor_apply_prefs())
@@ -1359,6 +1409,12 @@ static GtkWidget *page_misc(void)
     GtkWidget *g = make_grid();
     int r = 0;
     make_check(g, r++, "Mute all sounds",                        g_prefs.mute_sounds,           G_CALLBACK(on_mute));
+    /* GAP-27 — labels match macOS for locale-string reuse. */
+    GtkWidget *fad = make_check(g, r++, "File Status Auto-Detection", g_prefs.file_auto_detect,   G_CALLBACK(on_file_autodetect));
+    GtkWidget *fus = make_check(g, r++, "Update silently",           g_prefs.file_update_silently,G_CALLBACK(on_file_silent));
+    gtk_widget_set_margin_start(fus, 20);
+    gtk_widget_set_sensitive(fus, g_prefs.file_auto_detect);
+    g_object_set_data(G_OBJECT(fad), "npp-dependent", fus);
     make_check(g, r++, "Confirm before Save All",                g_prefs.save_all_confirm,      G_CALLBACK(on_save_all_conf));
     make_check(g, r++, "Reverse default date/time order",        g_prefs.date_time_reverse,     G_CALLBACK(on_date_reverse));
     make_check(g, r++, "Keep absent file entries in session",    g_prefs.keep_absent_session,   G_CALLBACK(on_keep_absent));
@@ -1634,6 +1690,24 @@ static GtkWidget *page_delimiter(void)
     return g;
 }
 
+/* GAP-37 — Cloud and Link page (Link half; the Cloud seam is GAP-17).
+ * Layout and labels mirror macOS _buildCloudLinkPage. */
+static GtkWidget *page_cloud_link(void)
+{
+    GtkWidget *g = make_grid();
+    int r = 0;
+    GtkWidget *h = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(h), "<b>Clickable Link Settings</b>");
+    gtk_widget_set_halign(h, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), h, 0, r++, 2, 1);
+    make_check(g, r++, "Enable",              g_prefs.clickable_link_enable,       G_CALLBACK(on_link_enable));
+    make_check(g, r++, "No underline",        g_prefs.clickable_link_no_underline, G_CALLBACK(on_link_nounder));
+    make_check(g, r++, "Enable fullbox mode", g_prefs.clickable_link_fullbox,      G_CALLBACK(on_link_fullbox));
+    str_row(g, r++, "URI customized schemes:",
+            g_prefs.clickable_link_schemes, sizeof(g_prefs.clickable_link_schemes));
+    return g;
+}
+
 static GtkWidget *page_performance(void)
 {
     GtkWidget *g = make_grid();
@@ -1831,6 +1905,7 @@ void prefs_dialog_show(GtkWidget *parent)
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_backup()),          prefs_tab_label("Backup"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_auto_completion()), prefs_tab_label("Auto-Completion"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_searching()),       prefs_tab_label("Searching"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_cloud_link()),       prefs_tab_label("Cloud and Link"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_delimiter()),       prefs_tab_label("Delimiter"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_performance()),     prefs_tab_label("Performance"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_misc()),            prefs_tab_label("MISC."));
