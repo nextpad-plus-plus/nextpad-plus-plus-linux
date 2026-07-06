@@ -59,19 +59,33 @@ static GtkWidget *sci_of_page(int page);
  * re-shown if the buffer empties again. */
 static GtkWidget *s_watermark = NULL;
 
-static void watermark_refresh(void)
+/* Evaluate against an explicit sci — during a "switch-page" emission
+ * gtk_notebook_get_current_page still reports the OLD page, so the
+ * signal handler must pass the incoming page's sci itself. */
+static void watermark_refresh_for(GtkWidget *sci)
 {
-    if (!s_watermark || !s_notebook) return;
+    if (!s_watermark) return;
     gboolean show = FALSE;
-    int cur = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook));
-    GtkWidget *sci = (cur >= 0) ? sci_of_page(cur) : NULL;
     if (sci) {
         NppDoc *doc = doc_of_sci(sci);
         if (doc && !doc->filepath &&
             sci_msg(sci, SCI_GETLENGTH, 0, 0) == 0)
             show = TRUE;
+        if (g_getenv("NPP_WM_DEBUG"))
+            g_message("watermark: sci=%p doc=%p path=%s len=%ld -> show=%d "
+                      "mapped=%d", (void*)sci, (void*)doc,
+                      doc && doc->filepath ? doc->filepath : "(null)",
+                      (long)sci_msg(sci, SCI_GETLENGTH, 0, 0), show,
+                      gtk_widget_get_mapped(s_watermark));
     }
     gtk_widget_set_visible(s_watermark, show);
+}
+
+static void watermark_refresh(void)
+{
+    if (!s_watermark || !s_notebook) return;
+    int cur = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook));
+    watermark_refresh_for((cur >= 0) ? sci_of_page(cur) : NULL);
 }
 
 static GtkWidget *watermark_build(void)
@@ -1600,7 +1614,7 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
     update_window_title();
     findreplace_set_sci(sci);
     toolbar_sync_toggles(sci);
-    watermark_refresh();   /* GAP-64 */
+    watermark_refresh_for(sci);   /* GAP-64 — `sci` is the INCOMING page */
     /* Q-fix: repopulate Function List so switching tabs immediately shows
      * the new file's functions (previously only SCN_MODIFIED on edits
      * triggered an update, so opening a file and looking at the panel
