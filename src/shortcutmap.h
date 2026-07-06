@@ -19,6 +19,10 @@
 /* Show (or re-raise) the Shortcut Mapper window. Non-modal. */
 void shortcut_mapper_show(GtkWidget *parent);
 
+/* GAP-52 — push the user's ScintillaKeys overrides into one editor's
+ * live keymap (called on editor creation and after mapper Save). */
+void shortcutmap_apply_sci_overrides(GtkWidget *sci);
+
 /* ── Legacy API kept for ABI compatibility ─────────────────────────────── */
 
 typedef struct {

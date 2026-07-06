@@ -46,6 +46,62 @@ static GtkWidget *page_to_sci(GtkWidget *page)
         return gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(page));
     return page;
 }
+
+/* Forward decls for the watermark block (defined later in this file). */
+static sptr_t sci_msg(GtkWidget *sci, unsigned int msg, uptr_t w, sptr_t l);
+static NppDoc *doc_of_sci(GtkWidget *sci);
+static GtkWidget *sci_of_page(int page);
+
+/* GAP-64 — new-document watermark (macOS 1ad41d3): a centered,
+ * click-through hint overlaid on an EMPTY, UNTITLED buffer in the
+ * primary view. Pure chrome — cannot affect text, length, encoding,
+ * saving, printing or undo. Hidden the moment content appears and
+ * re-shown if the buffer empties again. */
+static GtkWidget *s_watermark = NULL;
+
+static void watermark_refresh(void)
+{
+    if (!s_watermark || !s_notebook) return;
+    gboolean show = FALSE;
+    int cur = gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook));
+    GtkWidget *sci = (cur >= 0) ? sci_of_page(cur) : NULL;
+    if (sci) {
+        NppDoc *doc = doc_of_sci(sci);
+        if (doc && !doc->filepath &&
+            sci_msg(sci, SCI_GETLENGTH, 0, 0) == 0)
+            show = TRUE;
+    }
+    gtk_widget_set_visible(s_watermark, show);
+}
+
+static GtkWidget *watermark_build(void)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
+    /* Click-through: the overlay must never swallow editor input. */
+    gtk_widget_set_can_target(box, FALSE);
+
+    GtkWidget *title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title),
+        "<span size='x-large' alpha='35%'>Empty document</span>");
+    gtk_box_append(GTK_BOX(box), title);
+
+    const char *rows[] = {
+        "Zoom In  Ctrl +      Zoom Out  Ctrl −",
+        "Adjust appearance — Preferences…",
+        "Customize colors &amp; fonts — Style Configurator…",
+    };
+    for (size_t i = 0; i < G_N_ELEMENTS(rows); i++) {
+        GtkWidget *l = gtk_label_new(NULL);
+        gchar *m = g_strdup_printf("<span alpha='30%%'>%s</span>", rows[i]);
+        gtk_label_set_markup(GTK_LABEL(l), m);
+        g_free(m);
+        gtk_box_append(GTK_BOX(box), l);
+    }
+    return box;
+}
+
 /* G3.3: pick the lowest unused Untitled-N index instead of monotonic counter.
  * Matches the macOS port's gap-filling behaviour: closing Untitled-2 makes
  * the next new tab reuse "Untitled-2" rather than incrementing to 3. */
@@ -1510,6 +1566,9 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         if (doc->filepath)
             gitgutter_update(sci, doc->filepath);
         funclist_schedule_update(sci);
+        /* GAP-64 — hide the watermark when content appears; re-show if
+         * the untitled buffer empties back out. */
+        watermark_refresh();
         /* P3 — gate spell check on the pref. */
         if (g_prefs.spell_check)
             spell_schedule_check(sci);
@@ -1541,6 +1600,7 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
     update_window_title();
     findreplace_set_sci(sci);
     toolbar_sync_toggles(sci);
+    watermark_refresh();   /* GAP-64 */
     /* Q-fix: repopulate Function List so switching tabs immediately shows
      * the new file's functions (previously only SCN_MODIFIED on edits
      * triggered an update, so opening a file and looking at the panel
@@ -1749,8 +1809,17 @@ GtkWidget *editor_init(GtkWidget *window)
      * horizontal GtkPaned, which is the start child of a vertical GtkPaned.
      * Until a split is created the panes have only a start child, so this
      * renders identically to a bare notebook — zero regression unsplit. */
+    /* GAP-64 — the primary notebook rides inside a GtkOverlay carrying
+     * the new-document watermark. Splits only ever set the paned END
+     * child, so the wrapper is invisible to the split machinery. */
+    GtkWidget *nb_overlay = gtk_overlay_new();
+    gtk_overlay_set_child(GTK_OVERLAY(nb_overlay), s_notebook);
+    s_watermark = watermark_build();
+    gtk_overlay_add_overlay(GTK_OVERLAY(nb_overlay), s_watermark);
+    watermark_refresh();
+
     s_split_v = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_paned_set_start_child(GTK_PANED(s_split_v), s_notebook);
+    gtk_paned_set_start_child(GTK_PANED(s_split_v), nb_overlay);
     gtk_paned_set_resize_start_child(GTK_PANED(s_split_v), TRUE);
     s_split_h = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
     gtk_paned_set_start_child(GTK_PANED(s_split_h), s_split_v);
@@ -2221,6 +2290,76 @@ static gboolean close_sci_full(GtkWidget *sci, gboolean *dont_save_all)
     update_window_title();
     main_doclist_refresh();
     return TRUE;
+}
+
+
+/* GAP-52 — run fn over every open editor (splits included). */
+void editor_foreach_sci(void (*fn)(GtkWidget *sci))
+{
+    if (!fn) return;
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (d && d->sci) fn(d->sci);
+    }
+    g_ptr_array_free(docs, TRUE);
+}
+
+/* GAP-40 — Show All Characters / Show Whitespace / Show EOL are
+ * session-wide and persistent (macOS 8b3f282): the toggles write the
+ * prefs and re-apply to EVERY open editor (splits included), so new
+ * tabs and the next launch inherit the state. */
+void editor_set_show_all_chars(gboolean on)
+{
+    g_prefs.show_whitespace = on;
+    g_prefs.show_eol        = on;
+    prefs_save();
+    editor_apply_prefs();
+    NppDoc *doc = editor_current_doc();
+    if (doc) toolbar_sync_toggles(doc->sci);
+}
+
+void editor_set_show_whitespace(gboolean on)
+{
+    g_prefs.show_whitespace = on;
+    prefs_save();
+    editor_apply_prefs();
+    NppDoc *doc = editor_current_doc();
+    if (doc) toolbar_sync_toggles(doc->sci);
+}
+
+void editor_set_show_eol(gboolean on)
+{
+    g_prefs.show_eol = on;
+    prefs_save();
+    editor_apply_prefs();
+}
+
+/* GAP-34 — move the current tab within its own notebook (split-aware).
+ * dir: -2 = to start, -1 = backward, +1 = forward, +2 = to end. */
+void editor_move_current_tab(int dir)
+{
+    NppDoc *doc = editor_current_doc();
+    if (!doc || !doc->sci) return;
+    GtkNotebook *nb = notebook_of(doc->sci);
+    GtkWidget *page = gtk_widget_get_parent(doc->sci);   /* scrolled window */
+    if (!nb || !page) return;
+
+    int n   = gtk_notebook_get_n_pages(nb);
+    int idx = gtk_notebook_page_num(nb, page);
+    if (idx < 0 || n < 2) return;
+
+    int target = idx;
+    switch (dir) {
+        case -2: target = 0;       break;
+        case -1: target = idx - 1; break;
+        case +1: target = idx + 1; break;
+        case +2: target = n - 1;   break;
+    }
+    target = CLAMP(target, 0, n - 1);
+    if (target == idx) return;
+    gtk_notebook_reorder_child(nb, page, target);
+    main_doclist_refresh();
 }
 
 gboolean editor_close_sci(GtkWidget *sci)
@@ -2744,6 +2883,12 @@ void editor_apply_prefs(void)
          * macOS port lost Shift+Tab outdent by tying this to the
          * backspace-unindent pref — af62a97 #201). */
         sci_msg(sci, SCI_SETTABINDENTS, 1, 0);
+        /* GAP-52 — user Scintilla-command key overrides (shortcuts.xml
+         * ScintillaKeys) land in this editor's live keymap. */
+        {
+            extern void shortcutmap_apply_sci_overrides(GtkWidget *sci);
+            shortcutmap_apply_sci_overrides(sci);
+        }
         sci_msg(sci, SCI_SETFONTQUALITY,        (uptr_t)g_prefs.font_quality, 0);
         /* Copy/cut whole line when nothing is selected. SCI_COPYALLOWLINE
          * is a per-call message in Scintilla, not a setter — we rebind the

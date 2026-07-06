@@ -321,9 +321,8 @@ static GtkWidget *make_allchars_popover(void) {
 /* The main toggle handler for the composite AllChars button. */
 static void on_allchars_button_toggled(GtkToggleButton *b, gpointer u) {
     (void)u;
-    gboolean on = gtk_toggle_button_get_active(b);
-    editor_send(SCI_SETVIEWWS,
-                on ? SC_WS_VISIBLEALWAYS : SC_WS_INVISIBLE, 0);
+    /* GAP-40 — session-wide + persistent. */
+    editor_set_show_all_chars(gtk_toggle_button_get_active(b));
 }
 
 /* Build the AllChars composite: [toggle][▾] in a GtkBox. The ▾ is a

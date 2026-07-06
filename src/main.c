@@ -678,21 +678,18 @@ static sptr_t sci_send(unsigned int msg, uptr_t wp, sptr_t lp) {
 }
 
 /* G11.3 View → Show Symbol */
+/* GAP-40 — session-wide + persistent (macOS 8b3f282). */
 static void action_show_ws(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    int cur = (int)sci_send(SCI_GETVIEWWS, 0, 0);
-    sci_send(SCI_SETVIEWWS, cur ? SCWS_INVISIBLE : SCWS_VISIBLEALWAYS, 0);
+    editor_set_show_whitespace(!g_prefs.show_whitespace);
 }
 static void action_show_eol(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    sci_send(SCI_SETVIEWEOL, !sci_send(SCI_GETVIEWEOL,0,0), 0);
+    editor_set_show_eol(!g_prefs.show_eol);
 }
 static void action_show_all_chars(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    int cur = (int)sci_send(SCI_GETVIEWWS, 0, 0);
-    int new_state = cur ? 0 : 1;
-    sci_send(SCI_SETVIEWWS, new_state ? SCWS_VISIBLEALWAYS : SCWS_INVISIBLE, 0);
-    sci_send(SCI_SETVIEWEOL, new_state, 0);
+    editor_set_show_all_chars(!g_prefs.show_whitespace);
 }
 static void action_show_indent_guide(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
@@ -901,6 +898,16 @@ static void action_tab_last(GSimpleAction *a, GVariant *p, gpointer u) {
     if (n) gtk_notebook_set_current_page(GTK_NOTEBOOK(n),
             gtk_notebook_get_n_pages(GTK_NOTEBOOK(n)) - 1);
 }
+/* GAP-34 — View ▸ Tab ▸ Move (was action_menu_stub). Split-aware. */
+static void action_tab_move_start(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_move_current_tab(-2); }
+static void action_tab_move_backward(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_move_current_tab(-1); }
+static void action_tab_move_forward(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_move_current_tab(+1); }
+static void action_tab_move_end(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a;(void)p;(void)u; editor_move_current_tab(+2); }
+
 static void action_tab_goto(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)u;
     int idx = g_variant_get_int32(p);  /* 1-based */
@@ -4930,8 +4937,6 @@ static const char *kStubActions[] = {
     "clear-readonly",           /* Edit ▸ Read-Only in Nextpad++        */
     "lock-file", "unlock-file", /* Edit ▸ Locked Attribute (macOS)      */
     "ac-hint-prev", "ac-hint-next", /* Edit ▸ Auto-Completion           */
-    "tab-move-start", "tab-move-end",                /* View ▸ Tab       */
-    "tab-move-forward", "tab-move-backward",         /* View ▸ Tab       */
 };
 
 static const GActionEntry kAppActions[] = {
@@ -5331,10 +5336,10 @@ static const GActionEntry kAppActions[] = {
     { "unlock-file",           action_menu_stub,                NULL, NULL, NULL },
     { "ac-hint-prev",          action_menu_stub,                NULL, NULL, NULL },
     { "ac-hint-next",          action_menu_stub,                NULL, NULL, NULL },
-    { "tab-move-start",        action_menu_stub,                NULL, NULL, NULL },
-    { "tab-move-end",          action_menu_stub,                NULL, NULL, NULL },
-    { "tab-move-forward",      action_menu_stub,                NULL, NULL, NULL },
-    { "tab-move-backward",     action_menu_stub,                NULL, NULL, NULL },
+    { "tab-move-start",        action_tab_move_start,           NULL, NULL, NULL },
+    { "tab-move-end",          action_tab_move_end,             NULL, NULL, NULL },
+    { "tab-move-forward",      action_tab_move_forward,         NULL, NULL, NULL },
+    { "tab-move-backward",     action_tab_move_backward,        NULL, NULL, NULL },
     { "search-result-next",    action_search_result_next,       NULL, NULL, NULL },
     { "search-result-prev",    action_search_result_prev,       NULL, NULL, NULL },
 };

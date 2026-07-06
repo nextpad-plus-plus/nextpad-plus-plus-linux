@@ -672,7 +672,16 @@ static void enrich_installed_from_catalog(AdminUI *ui) {
         PlugRow *c  = g_hash_table_lookup(by_folder, ip->folder);
         if (c) {
             g_free(ip->display);       ip->display       = g_strdup(c->display);
-            g_free(ip->version);       ip->version       = g_strdup(c->version);
+            /* GAP-48 (macOS 8dbd854): only claim the catalog version when
+             * the installed .so is byte-identical to the catalog build —
+             * an older/custom build shows "?" instead of masquerading as
+             * the catalog release. (ELF has no version stamp to fall back
+             * on, unlike mach-o current_version.) */
+            g_free(ip->version);
+            ip->version = (ip->installed_sha && c->dylib_sha256 &&
+                           g_ascii_strcasecmp(ip->installed_sha,
+                                              c->dylib_sha256) == 0)
+                          ? g_strdup(c->version) : g_strdup("?");
             g_free(ip->description);   ip->description   = g_strdup(c->description);
             g_free(ip->author);        ip->author        = g_strdup(c->author);
             g_free(ip->homepage);      ip->homepage      = g_strdup(c->homepage);
@@ -1350,6 +1359,9 @@ static GtkWidget *build_tab_view(AdminUI *ui, AdminTab tab,
         gtk_tree_view_column_set_resizable(c, TRUE);
         gtk_tree_view_column_set_min_width(c, cols[i].width);
         if (cols[i].expand) gtk_tree_view_column_set_expand(c, TRUE);
+        /* GAP-48 (macOS 779ace6): click a header to sort. GtkListStore
+         * implements GtkTreeSortable, so the id is all that's needed. */
+        gtk_tree_view_column_set_sort_column_id(c, cols[i].col);
         gtk_tree_view_column_set_cell_data_func(c, tr,
             cdf_text_dim, NULL, NULL);
         gtk_tree_view_append_column(GTK_TREE_VIEW(tv), c);

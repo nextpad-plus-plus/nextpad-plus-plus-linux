@@ -152,6 +152,37 @@ static guint gdk_from_vk(guint vk) {
 
 guint shortcut_vk_to_gdk(guint vk) { return gdk_from_vk(vk); }
 
+/* GAP-52 — Windows-VK (our storage format) → Scintilla SCK_* key code
+ * for SCI_ASSIGNCMDKEY. Letters/digits are plain ASCII on both sides. */
+static int sck_from_vk(guint vk) {
+    if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) return (int)vk;
+    switch (vk) {
+        case 8:   return SCK_BACK;
+        case 9:   return SCK_TAB;
+        case 13:  return SCK_RETURN;
+        case 27:  return SCK_ESCAPE;
+        case 33:  return SCK_PRIOR;
+        case 34:  return SCK_NEXT;
+        case 35:  return SCK_END;
+        case 36:  return SCK_HOME;
+        case 37:  return SCK_LEFT;
+        case 38:  return SCK_UP;
+        case 39:  return SCK_RIGHT;
+        case 40:  return SCK_DOWN;
+        case 45:  return SCK_INSERT;
+        case 46:  return SCK_DELETE;
+        /* Punctuation VKs have no SCK aliases — raw ASCII works for the
+         * printable ones Scintilla sees. */
+        case 186: return ';';  case 187: return '=';
+        case 188: return ',';  case 189: return '-';
+        case 190: return '.';  case 191: return '/';
+        case 192: return '`';  case 219: return '[';
+        case 220: return '\\'; case 221: return ']';
+        case 222: return '\'';
+    }
+    return 0;   /* F-keys etc.: not assignable into the Scintilla keymap */
+}
+
 /* Names exposed in the Modify-dialog key dropdown. The first entry MUST
  * be "None" (= unbound). Order matches the macOS popup. */
 static const char *const KEY_POPUP[] = {
@@ -325,6 +356,36 @@ static const SciKeyDef SCI_DEFS[] = {
     {"SCI_COPY",                 2178, TRUE,  FALSE, FALSE, 'C'},
     {"SCI_PASTE",                2179, TRUE,  FALSE, FALSE, 'V'},
     {"SCI_CANCEL",               2325, FALSE, FALSE, FALSE, 27},
+    /* GAP-52 — the 28 commands macOS #181 added (Opt → Alt on Linux).
+     * Zero-key rows are unbound by default but user-assignable. */
+    {"SCI_LINEDOWNRECTEXTEND",   2426, FALSE, TRUE,  TRUE,  40},
+    {"SCI_LINEUPRECTEXTEND",     2427, FALSE, TRUE,  TRUE,  38},
+    {"SCI_CHARLEFTRECTEXTEND",   2428, FALSE, TRUE,  TRUE,  37},
+    {"SCI_CHARRIGHTRECTEXTEND",  2429, FALSE, TRUE,  TRUE,  39},
+    {"SCI_WORDLEFTEND",          2439, FALSE, FALSE, FALSE, 0},
+    {"SCI_WORDLEFTENDEXTEND",    2440, FALSE, FALSE, FALSE, 0},
+    {"SCI_WORDRIGHTEND",         2441, FALSE, FALSE, FALSE, 0},
+    {"SCI_WORDRIGHTENDEXTEND",   2442, FALSE, FALSE, FALSE, 0},
+    {"SCI_HOMERECTEXTEND",       2430, FALSE, FALSE, FALSE, 0},
+    {"SCI_HOMEDISPLAY",          2345, FALSE, TRUE,  FALSE, 36},
+    {"SCI_HOMEDISPLAYEXTEND",    2346, FALSE, FALSE, FALSE, 0},
+    {"SCI_HOMEWRAP",             2349, FALSE, FALSE, FALSE, 0},
+    {"SCI_HOMEWRAPEXTEND",       2450, FALSE, FALSE, FALSE, 0},
+    {"SCI_VCHOMERECTEXTEND",     2431, FALSE, TRUE,  TRUE,  36},
+    {"SCI_VCHOMEDISPLAY",        2652, FALSE, FALSE, FALSE, 0},
+    {"SCI_VCHOMEDISPLAYEXTEND",  2653, FALSE, FALSE, FALSE, 0},
+    {"SCI_VCHOMEWRAP",           2453, FALSE, FALSE, FALSE, 0},
+    {"SCI_VCHOMEWRAPEXTEND",     2454, FALSE, FALSE, FALSE, 0},
+    {"SCI_LINEENDRECTEXTEND",    2432, FALSE, TRUE,  TRUE,  35},
+    {"SCI_LINEENDDISPLAY",       2347, FALSE, TRUE,  FALSE, 35},
+    {"SCI_LINEENDDISPLAYEXTEND", 2348, FALSE, FALSE, FALSE, 0},
+    {"SCI_LINEENDWRAP",          2451, FALSE, FALSE, FALSE, 0},
+    {"SCI_LINEENDWRAPEXTEND",    2452, FALSE, FALSE, FALSE, 0},
+    {"SCI_PAGEUPRECTEXTEND",     2433, FALSE, TRUE,  TRUE,  33},
+    {"SCI_PAGEDOWNRECTEXTEND",   2434, FALSE, TRUE,  TRUE,  34},
+    {"SCI_LINEDUPLICATE",        2404, FALSE, FALSE, FALSE, 0},
+    {"SCI_SWAPMAINANCHORCARET",  2607, FALSE, FALSE, FALSE, 0},
+    {"SCI_ROTATESELECTION",      2606, FALSE, FALSE, FALSE, 0},
 };
 static const size_t SCI_DEFS_N = sizeof(SCI_DEFS) / sizeof(SCI_DEFS[0]);
 
@@ -499,6 +560,47 @@ static void load_shortcuts_xml(XmlCtx *x) {
     g_markup_parse_context_free(ctx);
     g_free(xml);
     g_free(path);
+}
+
+/* Push the user's ScintillaKeys overrides into one editor's live keymap
+ * (macOS #181's applyScintillaOverrides). Called on editor creation and
+ * after a mapper Save. Removing an override takes effect on restart —
+ * re-asserting stock defaults would need the generated GTK keymap table,
+ * deliberately out of scope here. */
+void shortcutmap_apply_sci_overrides(GtkWidget *sci)
+{
+    if (!sci) return;
+    XmlCtx x = {0};
+    x.macros  = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.runcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.plugins = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.intcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.sci_over = g_hash_table_new_full(g_direct_hash, g_direct_equal,
+                                       NULL, shortcut_row_free);
+    load_shortcuts_xml(&x);
+
+    GHashTableIter it;
+    gpointer key, val;
+    g_hash_table_iter_init(&it, x.sci_over);
+    while (g_hash_table_iter_next(&it, &key, &val)) {
+        ShortcutRow *r = val;
+        int sck = r->keycode ? sck_from_vk(r->keycode) : 0;
+        if (!sck) continue;
+        int mods = (r->has_shift ? SCMOD_SHIFT : 0)
+                 | (r->has_ctrl  ? SCMOD_CTRL  : 0)
+                 | (r->has_alt   ? SCMOD_ALT   : 0)
+                 | (r->has_super ? SCMOD_SUPER : 0);
+        scintilla_send_message(SCINTILLA(sci), SCI_ASSIGNCMDKEY,
+            (uptr_t)(sck | (mods << 16)), (sptr_t)r->command_id);
+    }
+
+    g_ptr_array_free(x.macros,  TRUE);
+    g_ptr_array_free(x.runcmds, TRUE);
+    g_ptr_array_free(x.plugins, TRUE);
+    g_ptr_array_free(x.intcmds, TRUE);
+    g_hash_table_destroy(x.sci_over);
+    if (x.current_cmd_text) g_string_free(x.current_cmd_text, TRUE);
+    g_free(x.current_cmd_name);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════ */
@@ -1080,10 +1182,15 @@ static void save_shortcuts_xml(void) {
     g_free(path);
 }
 
+/* editor.c iterator — apply overrides to every open editor on Save. */
+void editor_foreach_sci(void (*fn)(GtkWidget *sci));
+
 static void do_save(void) {
     save_shortcuts_xml();
     push_live_accels();
     macro_push_accels();
+    /* GAP-52 — Scintilla-command overrides become live immediately. */
+    editor_foreach_sci(shortcutmap_apply_sci_overrides);
     G->dirty = FALSE;
 }
 

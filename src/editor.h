@@ -61,6 +61,14 @@ gboolean   editor_open_path(const char *path);     /* open a specific file   */
  * full-clear + re-mark every editor after a pref change. */
 void       editor_update_clickable_links(GtkWidget *sci);
 void       editor_refresh_clickable_links(void);
+
+/* GAP-34 — move the current tab: -2 start, -1 back, +1 fwd, +2 end. */
+void       editor_move_current_tab(int dir);
+
+/* GAP-40 — persistent, all-document view-symbol toggles. */
+void       editor_set_show_all_chars(gboolean on);
+void       editor_set_show_whitespace(gboolean on);
+void       editor_set_show_eol(gboolean on);
 gboolean   editor_save(void);                      /* save current doc       */
 gboolean   editor_save_at(int page);               /* save specific page     */
 gboolean   editor_save_all(void);                  /* save all modified docs  */
