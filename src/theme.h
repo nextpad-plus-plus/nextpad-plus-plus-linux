@@ -50,6 +50,15 @@ ThemeMode theme_mode_from_prefs(void);
 /* Convenience: persist + apply. */
 void theme_set_and_apply(ThemeMode mode);
 
+/* GAP-70 Phase 0 — Tahoe-inspired "Modern" appearance (CSS only,
+ * restart-gated on g_prefs.appearance_style). init once after the main
+ * window exists; reload is a no-op unless Modern is active and is called
+ * automatically from theme_apply on light/dark switches. Evaluation
+ * variants: NPP_MODERN_VARIANT=1 (subtle, default) / 2 (stronger) /
+ * 3 (flat, no gradient). */
+void theme_modern_init(GtkWidget *main_window);
+void theme_modern_reload(void);
+
 #ifdef __cplusplus
 }
 #endif

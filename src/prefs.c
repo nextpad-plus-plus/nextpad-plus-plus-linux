@@ -163,6 +163,7 @@ NppPrefs g_prefs = {
     .find_transp_enabled     = TRUE,
     .find_transp_always      = FALSE,
     .find_transp_alpha       = 50,
+    .appearance_style        = 0,     /* Classic */
     .in_sel_threshold        = 1024,
     .search_engine_url       = "https://duckduckgo.com/?q=%s",
     /* Delimiter */
@@ -323,6 +324,10 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         if      (!strcmp(attr, "enabled")) g_prefs.find_transp_enabled = is_yes(val);
         else if (!strcmp(attr, "always"))  g_prefs.find_transp_always  = is_yes(val);
         else if (!strcmp(attr, "alpha"))   g_prefs.find_transp_alpha   = CLAMP(atoi(val), 20, 90);
+    }
+    else if (!strcmp(group, "AppearanceStyle")) {          /* GAP-70 */
+        if (!strcmp(attr, "style"))
+            g_prefs.appearance_style = (g_ascii_strcasecmp(val, "modern") == 0);
     }
     /* DarkMode is handled in a single-pass block in xml_start to avoid
      * attribute-order dependency — see below. Only theme="…" is per-attr. */
@@ -824,6 +829,11 @@ void prefs_save(void)
         b2yn(g_prefs.find_transp_enabled), b2yn(g_prefs.find_transp_always),
         g_prefs.find_transp_alpha);
 
+    /* GAP-70 — appearance style (Classic default / Modern opt-in). */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"AppearanceStyle\" style=\"%s\" />\n",
+        g_prefs.appearance_style == 1 ? "modern" : "classic");
+
     if (g_prefs.default_language[0]) {
         gchar *dl_esc = g_markup_escape_text(g_prefs.default_language, -1);
         g_string_append_printf(b,
@@ -965,6 +975,15 @@ CHK(rep_stop,          replace_and_stop,           (void)0)
  * regex/RegexBackendSelect.cxx). */
 extern bool gNppUseBoostRegex;
 CHK(boost_regex,       use_boost_regex,            gNppUseBoostRegex = g_prefs.use_boost_regex)
+
+/* GAP-70 Phase 0 — appearance_style is an int (0 classic / 1 modern),
+ * so the bool CHK macro doesn't fit. Restart-gated: only persisted here. */
+static void on_modern_style(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    g_prefs.appearance_style = gtk_toggle_button_get_active(b) ? 1 : 0;
+    prefs_save();
+}
 CHK(delim_doc,         delim_entire_doc,           (void)0)
 CHK(wc_default,        word_chars_use_default,     editor_apply_prefs())
 CHK(lf_enable,         large_file_enabled,         (void)0)
@@ -1265,6 +1284,15 @@ static GtkWidget *page_dark_mode(void)
     gtk_widget_set_halign(note, GTK_ALIGN_START);
     gtk_widget_set_margin_top(note, 8);
     gtk_grid_attach(GTK_GRID(g), note, 0, r++, 2, 1);
+
+    /* GAP-70 Phase 0 — Tahoe-inspired "Modern" appearance style
+     * (restart-gated, mirrors macOS kPrefAppearanceStyle; Classic stays
+     * byte-for-byte untouched when off). */
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep, 8);
+    gtk_grid_attach(GTK_GRID(g), sep, 0, r++, 2, 1);
+    make_check(g, r++, "Modern appearance (Tahoe-inspired) — restart to apply",
+               g_prefs.appearance_style == 1, G_CALLBACK(on_modern_style));
     return g;
 }
 

@@ -6803,6 +6803,10 @@ static void build_main_window(GtkApplication *app)
     /* G20 — install tab-colour CSS for the lifetime of the window. */
     install_tab_color_css();
 
+    /* GAP-70 Phase 0 — Tahoe-inspired Modern appearance (no-op unless the
+     * restart-gated pref is on; Classic stays untouched). */
+    theme_modern_init(GTK_WIDGET(g_window));
+
     /* Auto-backup timer now that the first editor is live. */
     backup_init();
     /* Plugin system — scan + load plugins from

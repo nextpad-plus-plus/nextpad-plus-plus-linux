@@ -167,6 +167,10 @@ static gboolean load_theme_for_mode(gboolean dark)
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
+/* Effective dark/light of the last theme_apply — the Modern CSS follows
+ * it (GAP-70). */
+static gboolean s_effective_dark = FALSE;
+
 void theme_apply(ThemeMode mode)
 {
     /* 1) Resolve effective dark/light. */
@@ -177,6 +181,7 @@ void theme_apply(ThemeMode mode)
         case THEME_AUTO:
         default:          dark = auto_is_dark(); break;
     }
+    s_effective_dark = dark;
 
     /* 2) Flip GtkSettings so all GTK chrome (menus, dialogs, scrollbars,
      *    headerbars, etc.) repaints into the right palette. */
@@ -198,6 +203,163 @@ void theme_apply(ThemeMode mode)
 
     /* 5) Re-run the standard styling pipeline on every tab. */
     editor_reapply_styles();
+
+    /* 6) Keep the Modern appearance CSS (if active) in the right palette. */
+    theme_modern_reload();
+}
+
+/* ================================================================== */
+/* GAP-70 Phase 0 — Tahoe-inspired "Modern" appearance (CSS only).     */
+/*                                                                     */
+/* Restart-gated: nothing here runs unless appearance_style == 1, so   */
+/* Classic stays byte-for-byte untouched. The glass *material* is not  */
+/* portable (GTK4 has no backdrop blur) — this is the honest flat      */
+/* interpretation: gradient backdrop, toolbar pill, flat tab strip     */
+/* with full-tab colour tint, rounded editor card.                     */
+/*                                                                     */
+/* Evaluation variants (pick per launch, no rebuild):                  */
+/*   NPP_MODERN_VARIANT=1  subtle gradient      (default)              */
+/*   NPP_MODERN_VARIANT=2  stronger tint/colour                        */
+/*   NPP_MODERN_VARIANT=3  flat — no gradient, GNOME-ish neutral       */
+/* ================================================================== */
+
+static GtkCssProvider *s_modern_css = NULL;
+static int             s_modern_variant = 1;
+
+/* One palette entry per (variant, light/dark). */
+typedef struct {
+    const char *backdrop;      /* window background (gradient or solid) */
+    const char *chrome;        /* pill/card chrome base colour          */
+    const char *chrome_border;
+    double      pill_alpha;    /* toolbar pill fill                     */
+    double      tab_alpha;     /* inactive tab fill                     */
+    double      tint_alpha;    /* full-tab colour tint                  */
+    const char *paper;         /* editor card bg behind the sci corners */
+} ModernPalette;
+
+static ModernPalette modern_palette(gboolean dark, int variant)
+{
+    ModernPalette p;
+    p.chrome        = dark ? "#e8eaf2" : "#ffffff";
+    p.chrome_border = dark ? "#000000" : "#1a2233";
+    p.paper         = dark ? "#1e1e1e" : "#ffffff";
+    p.pill_alpha    = dark ? 0.08 : 0.55;
+    p.tab_alpha     = dark ? 0.06 : 0.35;
+    p.tint_alpha    = 0.40;
+    switch (variant) {
+        default:
+        case 1:   /* subtle diagonal gradient */
+            p.backdrop = dark
+                ? "linear-gradient(135deg, #23262d 0%, #22242b 45%, #2a2731 100%)"
+                : "linear-gradient(135deg, #eef2f7 0%, #e9edf5 45%, #f3efe8 100%)";
+            break;
+        case 2:   /* stronger colour + chrome */
+            p.backdrop = dark
+                ? "linear-gradient(135deg, #1f2633 0%, #2a2238 50%, #332632 100%)"
+                : "linear-gradient(135deg, #dfe7f5 0%, #e6def2 50%, #f2e5da 100%)";
+            p.pill_alpha += dark ? 0.06 : 0.15;
+            p.tab_alpha  += dark ? 0.05 : 0.15;
+            p.tint_alpha  = 0.60;
+            break;
+        case 3:   /* flat neutral, GNOME-ish */
+            p.backdrop = dark ? "#24262b" : "#f0f1f4";
+            break;
+    }
+    return p;
+}
+
+/* The macOS tab-colour palette (also used by the Classic 3px stripes). */
+static const char *const kTabTint[5] =
+    { "#FCE386", "#A9F08C", "#7AC9F5", "#F5B67A", "#F08CF0" };
+
+void theme_modern_reload(void)
+{
+    if (!s_modern_css) return;   /* Classic, or not initialised yet */
+    const ModernPalette P = modern_palette(s_effective_dark, s_modern_variant);
+
+    GString *css = g_string_new(NULL);
+
+    /* Window backdrop — scoped to the main window only. */
+    g_string_append_printf(css,
+        "window.npp-modern { background: %s; }\n", P.backdrop);
+
+    /* Toolbar as one rounded pill (Phase 1 would split it into per-group
+     * capsules). Wins over toolbar.c's own CSS via provider priority. */
+    g_string_append_printf(css,
+        ".npp-modern .npp-toolbar {\n"
+        "  background: alpha(%s, %.2f);\n"
+        "  border: 1px solid alpha(%s, 0.10);\n"
+        "  border-radius: 14px;\n"
+        "  margin: 6px 8px 3px 8px;\n"
+        "  padding: 2px 6px;\n"
+        "}\n",
+        P.chrome, P.pill_alpha, P.chrome_border);
+
+    /* Flat transparent tab strip; tabs become small pills. */
+    g_string_append_printf(css,
+        ".npp-modern notebook.npp-editor-tabs > header {\n"
+        "  background: transparent; border: none; box-shadow: none;\n"
+        "}\n"
+        ".npp-modern notebook.npp-editor-tabs > header > tabs > tab {\n"
+        "  background: alpha(%s, %.2f);\n"
+        "  border: none;\n"
+        "  border-radius: 8px;\n"
+        "  margin: 3px 2px;\n"
+        "  padding: 1px 10px;\n"
+        "}\n"
+        ".npp-modern notebook.npp-editor-tabs > header > tabs > tab:checked {\n"
+        "  background: alpha(%s, %.2f);\n"
+        "  box-shadow: 0 1px 2px alpha(%s, 0.18);\n"
+        "}\n",
+        P.chrome, P.tab_alpha,
+        P.chrome, MIN(P.tab_alpha * 2.6, 0.95), P.chrome_border);
+
+    /* Full-tab colour tint (Tahoe) instead of Classic's 3px stripe. The
+     * selectors out-specify the stripe rules from install_tab_color_css. */
+    for (int i = 0; i < 5; i++) {
+        g_string_append_printf(css,
+            ".npp-modern notebook.npp-editor-tabs > header > tabs > tab.tab-color-%d,\n"
+            ".npp-modern notebook.npp-editor-tabs > header > tabs > tab.tab-color-%d:checked {\n"
+            "  box-shadow: none;\n"
+            "  background: alpha(%s, %.2f);\n"
+            "}\n",
+            i + 1, i + 1, kTabTint[i], P.tint_alpha);
+    }
+
+    /* Editor "card": rounded, bordered, floating on the backdrop. The
+     * ScintillaView itself still paints square corners — the 2px padding
+     * in the card's own paper colour makes the bleed invisible on stock
+     * themes (prototype limitation, noted for Phase 1). */
+    g_string_append_printf(css,
+        ".npp-modern notebook.npp-editor-tabs > stack {\n"
+        "  margin: 0 8px 8px 8px;\n"
+        "  padding: 2px;\n"
+        "  border: 1px solid alpha(%s, 0.12);\n"
+        "  border-radius: 12px;\n"
+        "  background: %s;\n"
+        "}\n",
+        P.chrome_border, P.paper);
+
+    gtk_css_provider_load_from_data(s_modern_css, css->str, -1);
+    g_string_free(css, TRUE);
+}
+
+void theme_modern_init(GtkWidget *main_window)
+{
+    if (g_prefs.appearance_style != 1) return;   /* Classic — do nothing */
+
+    const char *v = g_getenv("NPP_MODERN_VARIANT");
+    if (v && (*v == '2' || *v == '3')) s_modern_variant = *v - '0';
+
+    if (main_window)
+        gtk_widget_add_css_class(main_window, "npp-modern");
+
+    s_modern_css = gtk_css_provider_new();
+    gtk_style_context_add_provider_for_display(
+        gdk_display_get_default(), GTK_STYLE_PROVIDER(s_modern_css),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
+    theme_modern_reload();
+    g_message("theme: Modern appearance active (variant %d)", s_modern_variant);
 }
 
 ThemeMode theme_mode_from_prefs(void)

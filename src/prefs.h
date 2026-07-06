@@ -134,6 +134,10 @@ typedef struct {
     gboolean find_transp_enabled;     /* default TRUE                     */
     gboolean find_transp_always;      /* FALSE = only on losing focus     */
     int      find_transp_alpha;       /* opacity %, 20–90, default 50     */
+
+    /* GAP-70 — appearance style: 0 Classic (default, untouched) /
+     * 1 Modern (Tahoe-inspired CSS). Restart-gated like macOS. */
+    int      appearance_style;
     int      in_sel_threshold;        /* min chars of selection to enable "in selection" */
     char     search_engine_url[256];  /* default "https://duckduckgo.com/?q=%s" */
 
