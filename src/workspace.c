@@ -2,6 +2,7 @@
 #include "gtk_compat.h"
 #include "npp_menu.h"
 #include "editor.h"
+#include "macrobatch.h"
 #include <gtk/gtk.h>
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -325,11 +326,22 @@ static void ctx_open_in_file_manager(GtkButton *mi, gpointer u) {
     char *dir = g_file_test(p, G_FILE_TEST_IS_DIR)
               ? g_strdup(p) : g_path_get_dirname(p);
     gchar *uri = g_filename_to_uri(dir, NULL, NULL);
-    if (uri) {
+    if (uri)
         gtk_show_uri_on_window(NULL, uri, GDK_CURRENT_TIME, NULL);
-        g_free(uri);
-    }
     g_free(uri); g_free(dir); g_free(p);
+}
+
+/* GAP-21 — batch macro runner preselecting the clicked directory (file
+ * rows use their parent directory), matching the macOS Folder-as-
+ * Workspace context item. */
+static void ctx_run_macro_on_files(GtkButton *mi, gpointer u) {
+    (void)mi; (void)u;
+    char *p = workspace_selected_path();
+    if (!p) return;
+    char *dir = g_file_test(p, G_FILE_TEST_IS_DIR)
+              ? g_strdup(p) : g_path_get_dirname(p);
+    macrobatch_show_dialog(s_window ? GTK_WINDOW(s_window) : NULL, dir);
+    g_free(dir); g_free(p);
 }
 
 /* Empty-panel context-menu callbacks. "Remove All" clears the in-memory
@@ -379,6 +391,9 @@ static void on_tree_button_press(GtkGestureClick *gesture, int n_press,
         };
         for (size_t i = 0; i < G_N_ELEMENTS(items); i++)
             npp_menu_add(menu, items[i].label, items[i].cb, NULL);
+        /* GAP-21 — batch macro runner on this folder. */
+        npp_menu_add(menu, "Run Macro on Files…",
+                     G_CALLBACK(ctx_run_macro_on_files), NULL);
     }
     if (path) gtk_tree_path_free(path);
 

@@ -114,6 +114,7 @@ set(APP_SRCS
     "${SRC}/gitgutter.c"
     "${SRC}/changehistory.c"
     "${SRC}/macro.c"
+    "${SRC}/macrobatch.c"
     "${SRC}/spell.c"
     # G8 — side panels
     "${SRC}/docmap.c"

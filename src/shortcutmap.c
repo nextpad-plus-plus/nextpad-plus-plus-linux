@@ -20,6 +20,7 @@
 #include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
+#include "macro.h"
 
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
@@ -110,6 +111,9 @@ static guint vk_from_gdk(guint kv) {
     return 0;
 }
 
+/* Public: macro.c pushes accels for bound macros with the same mapping. */
+guint shortcut_vk_to_gdk(guint vk);
+
 /* Reverse map: VK → GDK keyval, for building gtk_application_set_accels. */
 static guint gdk_from_vk(guint vk) {
     if (vk >= 'A' && vk <= 'Z') return GDK_KEY_a + (vk - 'A');
@@ -145,6 +149,8 @@ static guint gdk_from_vk(guint vk) {
     }
     return 0;
 }
+
+guint shortcut_vk_to_gdk(guint vk) { return gdk_from_vk(vk); }
 
 /* Names exposed in the Modify-dialog key dropdown. The first entry MUST
  * be "None" (= unbound). Order matches the macOS popup. */
@@ -1009,20 +1015,19 @@ static void save_shortcuts_xml(void) {
     }
     g_string_append(out, "    </InternalCommands>\n");
 
-    /* Macros */
-    g_string_append(out, "    <Macros>\n");
+    /* Macros — macro.c owns the section (GAP-19): push the mapper's
+     * (possibly edited) shortcut attributes back into the model, then let
+     * it emit the full <Macro> entries WITH their <Action> bodies. The
+     * old writer emitted empty <Macro/> elements here, silently destroying
+     * every recorded macro body on Save. */
     for (guint i = 0; i < G->rows[TAB_MACROS]->len; i++) {
         ShortcutRow *r =
             (ShortcutRow *)g_ptr_array_index(G->rows[TAB_MACROS], i);
-        gchar *en = g_markup_escape_text(r->name ? r->name : "", -1);
-        g_string_append_printf(out, "        <Macro name=\"%s\"", en);
-        xml_append_shortcut_attrs(out, r);
-        /* We don't carry Action children through the mapper — emit empty.
-         * Macros tab is name+shortcut only (macro bodies live in macro.c). */
-        g_string_append(out, " />\n");
-        g_free(en);
+        if (r->modified)
+            macro_named_set_shortcut(r->command_id, r->has_ctrl, r->has_alt,
+                                     r->has_shift, r->has_super, r->keycode);
     }
-    g_string_append(out, "    </Macros>\n");
+    macro_emit_macros_section(out);
 
     /* UserDefinedCommands (Run commands) — preserve body text in r->category */
     g_string_append(out, "    <UserDefinedCommands>\n");
@@ -1078,6 +1083,7 @@ static void save_shortcuts_xml(void) {
 static void do_save(void) {
     save_shortcuts_xml();
     push_live_accels();
+    macro_push_accels();
     G->dirty = FALSE;
 }
 
@@ -1096,6 +1102,8 @@ static void on_modify_clicked(GtkButton *b, gpointer ud) {
     }
 }
 
+static void sync_macro_rows(void);
+
 static void on_delete_clicked(GtkButton *b, gpointer ud) {
     (void)b; (void)ud;
     SmTab t = current_tab();
@@ -1110,9 +1118,17 @@ static void on_delete_clicked(GtkButton *b, gpointer ud) {
     gtk_widget_destroy(q);
     if (resp != GTK_RESPONSE_OK) return;
 
-    g_ptr_array_remove(G->rows[t], r);
-    shortcut_row_free(r);
-    G->dirty = TRUE;
+    if (t == TAB_MACROS) {
+        /* macro.c owns macros — delete there, persist, resync rows
+         * (indices shift down after a removal). */
+        macro_named_delete(r->command_id);
+        macro_save_to_shortcuts_xml();
+        sync_macro_rows();
+    } else {
+        g_ptr_array_remove(G->rows[t], r);
+        shortcut_row_free(r);
+        G->dirty = TRUE;
+    }
     refresh_tab(t);
     update_conflict_label_for(NULL);
 }
@@ -1231,6 +1247,27 @@ static void free_arrays(void) {
     }
 }
 
+/* TAB_MACROS rows are a view onto macro.c's model (GAP-19): name +
+ * binding, with command_id = macro index. Rebuilt on every mapper open
+ * and after deletions so external saves stay in sync. */
+static void sync_macro_rows(void) {
+    if (!G || !G->rows[TAB_MACROS]) return;
+    g_ptr_array_set_size(G->rows[TAB_MACROS], 0);
+    int n = macro_named_count();
+    for (int i = 0; i < n; i++) {
+        const NamedMacro *nm = macro_named_get(i);
+        ShortcutRow *r = g_new0(ShortcutRow, 1);
+        r->name       = g_strdup(nm->name);
+        r->has_ctrl   = nm->ctrl;
+        r->has_alt    = nm->alt;
+        r->has_shift  = nm->shift;
+        r->has_super  = nm->super_mod;
+        r->keycode    = nm->key;
+        r->command_id = i;
+        g_ptr_array_add(G->rows[TAB_MACROS], r);
+    }
+}
+
 static void load_all_data(void) {
     for (int t = 0; t < TAB_COUNT; t++)
         G->rows[t] = g_ptr_array_new_with_free_func(shortcut_row_free);
@@ -1244,11 +1281,9 @@ static void load_all_data(void) {
                                        NULL, shortcut_row_free);
     load_shortcuts_xml(&x);
 
-    /* Move macros / runcmds / plugins straight into tab arrays.
-     * These ptr_arrays own the rows; transfer one by one. */
-    for (guint i = 0; i < x.macros->len; i++)
-        g_ptr_array_add(G->rows[TAB_MACROS], g_ptr_array_index(x.macros, i));
-    g_ptr_array_set_free_func(x.macros, NULL);  /* don't double-free */
+    /* Macros come from macro.c, not from our own XML pass (x.macros is
+     * parsed but discarded — macro.c is the single owner of that section). */
+    sync_macro_rows();
 
     for (guint i = 0; i < x.runcmds->len; i++)
         g_ptr_array_add(G->rows[TAB_RUN], g_ptr_array_index(x.runcmds, i));
@@ -1358,6 +1393,9 @@ void shortcut_mapper_show(GtkWidget *parent) {
         if (parent && GTK_IS_WINDOW(parent))
             gtk_window_set_transient_for(GTK_WINDOW(G->window),
                                          GTK_WINDOW(parent));
+        /* Macros may have been saved/deleted since the last open. */
+        sync_macro_rows();
+        refresh_tab(TAB_MACROS);
         gtk_widget_show_all(G->window);
         gtk_window_present(GTK_WINDOW(G->window));
         return;

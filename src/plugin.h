@@ -260,3 +260,11 @@ void  plugin_refresh_handles(void);           /* update NppData.scintilla*Handle
 void  plugin_notify_all(void *pNotify);       /* pass SCNotification * cast to void * */
 long  plugin_host_message(unsigned int msg, unsigned long wParam, long lParam);
 int   plugin_count(void);
+
+/* FuncItem enumeration (dynamic Plugins menu) + dispatch by cmdID
+ * (NPPM_MENUCOMMAND, macro replay of plugin commands — GAP-20). */
+const char *plugin_name_at(int i);
+int         plugin_func_count(int i);
+const char *plugin_func_name(int i, int j);   /* "-" = separator */
+int         plugin_func_cmd_id(int i, int j);
+gboolean    plugin_run_command_by_id(int cmd_id);

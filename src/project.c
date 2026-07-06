@@ -49,6 +49,7 @@
 #include "npp_menu.h"
 #include "branding.h"
 #include "editor.h"
+#include "macrobatch.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -813,6 +814,57 @@ static void ctx_reload_ws     (GtkButton *m, gpointer u) {
     if (w->file_path) ws_load(w, w->file_path);
 }
 
+/* GAP-21 — batch macro runner in fixed-file-list mode. Project
+ * workspaces are XML-based virtual trees whose files can live anywhere,
+ * so there is no folder to enumerate: collect every NK_FILE under the
+ * selected node (recursively) and hand the list to the dialog. */
+static void collect_files_under(GtkTreeModel *m, GtkTreeIter *parent,
+                                GPtrArray *out)
+{
+    GtkTreeIter child;
+    if (!gtk_tree_model_iter_children(m, &child, parent)) return;
+    do {
+        int k = 0;
+        char *path = NULL;
+        gtk_tree_model_get(m, &child, COL_KIND, &k, COL_PATH, &path, -1);
+        if (k == NK_FILE && path && *path &&
+            g_file_test(path, G_FILE_TEST_IS_REGULAR))
+            g_ptr_array_add(out, g_strdup(path));
+        g_free(path);
+        collect_files_under(m, &child, out);
+    } while (gtk_tree_model_iter_next(m, &child));
+}
+
+static void ctx_run_macro_on_files(GtkButton *m, gpointer u)
+{
+    (void)m;(void)u;
+    Workspace *w = cur();
+    GtkTreeIter it;
+    NodeKind k;
+    if (!selected_kind(w, &it, &k)) return;
+
+    GPtrArray *files = g_ptr_array_new_with_free_func(g_free);
+    GtkTreeModel *model = GTK_TREE_MODEL(w->store);
+    if (k == NK_FILE) {
+        char *path = NULL;
+        gtk_tree_model_get(model, &it, COL_PATH, &path, -1);
+        if (path && *path) g_ptr_array_add(files, g_strdup(path));
+        g_free(path);
+    } else {
+        collect_files_under(model, &it, files);
+    }
+
+    char *name = NULL;
+    gtk_tree_model_get(model, &it, COL_NAME, &name, -1);
+    gchar *desc = g_strdup_printf("%s (%u file(s))",
+                                  name ? name : "Project", files->len);
+    macrobatch_show_dialog_files(s_window ? GTK_WINDOW(s_window) : NULL,
+                                 files, desc);
+    g_free(desc);
+    g_free(name);
+    g_ptr_array_free(files, TRUE);
+}
+
 /* ------------------------------------------------------------------ */
 /* Right-click menu                                                   */
 /* ------------------------------------------------------------------ */
@@ -861,6 +913,8 @@ void on_project_tree_button_press(GtkGestureClick *gesture, int n_press,
         menu_add(menu, "Add Folder",                G_CALLBACK(ctx_add_folder));
         menu_add(menu, "Add Files…",                G_CALLBACK(ctx_add_files));
         menu_add(menu, "Add Files from Directory…", G_CALLBACK(ctx_add_files_dir));
+        menu_add(menu, NULL, NULL);
+        menu_add(menu, "Run Macro on Files…", G_CALLBACK(ctx_run_macro_on_files));
         menu_add(menu, NULL, NULL);
         menu_add(menu, "Remove",                    G_CALLBACK(ctx_remove));
     } else {  /* NK_FILE */

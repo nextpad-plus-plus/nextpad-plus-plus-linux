@@ -167,6 +167,50 @@ int plugin_count(void)
 }
 
 /* ------------------------------------------------------------------
+ * FuncItem enumeration + dispatch — feeds the dynamic Plugins menu and
+ * macro replay of recorded plugin commands (GAP-20).
+ * ------------------------------------------------------------------ */
+const char *plugin_name_at(int i)
+{
+    if (i < 0 || i >= s_n_plugins) return NULL;
+    return s_plugins[i].name;
+}
+
+int plugin_func_count(int i)
+{
+    if (i < 0 || i >= s_n_plugins) return 0;
+    return s_plugins[i].n_funcs;
+}
+
+const char *plugin_func_name(int i, int j)
+{
+    if (i < 0 || i >= s_n_plugins) return NULL;
+    if (j < 0 || j >= s_plugins[i].n_funcs) return NULL;
+    return s_plugins[i].funcs[j].itemName;
+}
+
+int plugin_func_cmd_id(int i, int j)
+{
+    if (i < 0 || i >= s_n_plugins) return 0;
+    if (j < 0 || j >= s_plugins[i].n_funcs) return 0;
+    return s_plugins[i].funcs[j].cmdID;
+}
+
+gboolean plugin_run_command_by_id(int cmd_id)
+{
+    for (int i = 0; i < s_n_plugins; i++) {
+        LoadedPlugin *p = &s_plugins[i];
+        for (int j = 0; j < p->n_funcs; j++) {
+            if (p->funcs[j].cmdID == cmd_id && p->funcs[j].pFunc) {
+                p->funcs[j].pFunc();
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+/* ------------------------------------------------------------------
  * NPPM host message router
  * ------------------------------------------------------------------ */
 static long host_msg_cb(unsigned int msg, unsigned long wParam, long lParam)
@@ -595,17 +639,7 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_MENUCOMMAND: {
         /* lParam = command ID. Map our plugin command IDs back to FuncItem
          * and invoke. */
-        int id = (int)lParam;
-        for (int i = 0; i < s_n_plugins; i++) {
-            LoadedPlugin *p = &s_plugins[i];
-            for (int j = 0; j < p->n_funcs; j++) {
-                if (p->funcs[j].cmdID == id && p->funcs[j].pFunc) {
-                    p->funcs[j].pFunc();
-                    return 1;
-                }
-            }
-        }
-        return 0;
+        return plugin_run_command_by_id((int)lParam) ? 1 : 0;
     }
     case NPPM_GETCURRENTMACROSTATUS: {
         /* 0 = none, 1 = recording, 2 = playable. */

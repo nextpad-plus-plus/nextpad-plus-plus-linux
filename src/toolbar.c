@@ -476,7 +476,7 @@ static void on_macro_playn(GtkButton *i, gpointer d)
     (void)i; (void)d;
     NppDoc *doc = editor_current_doc();
     if (!doc) return;
-    macro_playback_n(doc->sci, GTK_WINDOW(s_window));
+    macro_run_multiple_dialog(doc->sci, GTK_WINDOW(s_window));
 }
 
 /* (Re)load the .npp-toolbar CSS — the base line colour follows the

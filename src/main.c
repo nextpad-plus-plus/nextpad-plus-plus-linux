@@ -533,15 +533,17 @@ static void action_macro_play(GSimpleAction *a, GVariant *p, gpointer u) {
 static void action_macro_play_n(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
     NppDoc *d = editor_current_doc();
-    if (d) macro_playback_n(d->sci, GTK_WINDOW(g_window));
+    if (d) macro_run_multiple_dialog(d->sci, GTK_WINDOW(g_window));
 }
-static void rebuild_macro_menu(void);   /* fwd-decl: defined in dyn-menu section */
+static void action_macro_batch(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a; (void)p; (void)u;
+    macrobatch_show_dialog(GTK_WINDOW(g_window), NULL);
+}
 static void action_macro_save_as(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
     NppDoc *d = editor_current_doc();
+    /* Menu refresh happens via the macro changed-hook. */
     if (d) macro_save_as_dialog(d->sci, GTK_WINDOW(g_window));
-    /* Q-fix: rebuild the named-macros section so the new macro is playable. */
-    rebuild_macro_menu();
 }
 static void action_run(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
@@ -583,6 +585,21 @@ static void action_udl_admin(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
     udladmin_show(g_window ? GTK_WINDOW(g_window) : NULL);
 }
+/* GAP-20 — dispatch a loaded plugin's FuncItem from its menu entry.
+ * Recorded into macros as the macOS/Windows-interoperable
+ * "pluginMenuAction:" + cmdID type-2 form. */
+static void action_plugin_cmd(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a; (void)u;
+    int cmd_id = p ? g_variant_get_int32(p) : 0;
+    if (cmd_id <= 0) return;
+    if (macro_menu_wrap_begin()) {
+        plugin_run_command_by_id(cmd_id);
+        macro_menu_wrap_end(NULL, cmd_id);
+    } else {
+        plugin_run_command_by_id(cmd_id);
+    }
+}
+
 static void action_plugins_admin(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
     pluginsadmin_show(GTK_WINDOW(g_window));
@@ -4829,6 +4846,7 @@ static const GActionEntry kAppActions[] = {
     { "macro-play-n",     action_macro_play_n,     NULL, NULL, NULL },
     { "macro-save-as",    action_macro_save_as,    NULL, NULL, NULL },
     { "macro-play-named", action_macro_play_named, "i",  NULL, NULL },
+    { "macro-batch",      action_macro_batch,      NULL, NULL, NULL },
     /* Tools / Settings */
     { "run",              action_run,              NULL, NULL, NULL },
     { "preferences",      action_preferences,      NULL, NULL, NULL },
@@ -4839,6 +4857,7 @@ static const GActionEntry kAppActions[] = {
     { "udl-admin",          action_udl_admin,       NULL, NULL, NULL },
     { "plugins-admin",        action_plugins_admin,       NULL, NULL, NULL },
     { "open-plugins-folder",  action_open_plugins_folder, NULL, NULL, NULL },
+    { "plugin-cmd",           action_plugin_cmd,          "i",  NULL, NULL },
     /* G11.3 View → Show Symbol / Zoom */
     { "show-ws",            action_show_ws,            NULL, NULL, NULL },
     { "show-eol",           action_show_eol,           NULL, NULL, NULL },
@@ -5180,6 +5199,81 @@ static const GActionEntry kAppActions[] = {
     { "search-result-next",    action_menu_stub,                NULL, NULL, NULL },
     { "search-result-prev",    action_menu_stub,                NULL, NULL, NULL },
 };
+
+/* ------------------------------------------------------------------ */
+/* GAP-20 — macro recording of menu commands.                          */
+/*                                                                     */
+/* Recordable app actions are registered through a wrapper that stops  */
+/* Scintilla's low-level SCN_MACRORECORD stream while the command runs */
+/* and records a single type-2 step instead (see macro_menu_wrap_*).   */
+/* Mirrors the macOS sendAction: override / Windows WM_COMMAND path.   */
+/* ------------------------------------------------------------------ */
+
+/* Actions that must NOT land in a macro: dialog/picker openers, UI-only
+ * view state, panel toggles, session plumbing, and the macro commands
+ * themselves. Everything else that edits or navigates the document is
+ * recordable (Windows semantics). */
+static gboolean action_is_recordable(const char *name) {
+    static const char *const prefixes[] = {
+        "toggle-", "show-", "zoom-", "split-", "macro-", "help-",
+        "view-in-", "sync-scroll-", "udl-", "import-", "hash-",
+        "open-", "modify-shortcut-", "load-", "save-session",
+        "clear-", "reopen-", "fold-", "unfold-",
+    };
+    static const char *const names[] = {
+        /* dialogs & pickers */
+        "open", "save-as", "save-copy-as", "rename", "print", "print-now",
+        "preferences", "shortcut-map", "style-editor", "column-editor",
+        "plugins-admin", "run", "find", "replace", "find-in-files",
+        "goto-line", "find-chars-in-range", "insert-dt-custom",
+        "edit-popup-ctxmenu", "debug-info", "check-updates", "install-cli",
+        "view-summary", "get-php-help", "wikipedia-search",
+        /* view / window state */
+        "word-wrap", "always-on-top", "fullscreen", "distraction-free",
+        "post-it", "hide-line-marks", "focus-other-view", "quit",
+        "toggle-readonly", "column-mode",
+    };
+    for (size_t i = 0; i < G_N_ELEMENTS(prefixes); i++)
+        if (g_str_has_prefix(name, prefixes[i])) return FALSE;
+    for (size_t i = 0; i < G_N_ELEMENTS(names); i++)
+        if (g_strcmp0(name, names[i]) == 0) return FALSE;
+    return TRUE;
+}
+
+static GHashTable *s_recordable_orig = NULL;  /* name → original activate */
+
+static void recordable_action_activate(GSimpleAction *a, GVariant *p,
+                                       gpointer u) {
+    const char *name = g_action_get_name(G_ACTION(a));
+    void (*orig)(GSimpleAction *, GVariant *, gpointer) =
+        g_hash_table_lookup(s_recordable_orig, name);
+    if (!orig) return;
+    if (macro_menu_wrap_begin()) {
+        orig(a, p, u);
+        macro_menu_wrap_end(name, 0);
+    } else {
+        orig(a, p, u);
+    }
+}
+
+/* Heap copy of kAppActions with recordable entries re-pointed at the
+ * wrapper. The original callbacks live in s_recordable_orig. */
+static const GActionEntry *wrap_recordable_entries(void) {
+    static GActionEntry entries[G_N_ELEMENTS(kAppActions)];
+    memcpy(entries, kAppActions, sizeof(kAppActions));
+    s_recordable_orig = g_hash_table_new(g_str_hash, g_str_equal);
+    for (size_t i = 0; i < G_N_ELEMENTS(entries); i++) {
+        GActionEntry *e = &entries[i];
+        /* Parametric actions (open-recent, tab-goto, plugin-cmd, …) keep
+         * their own handlers — plugin-cmd records itself. */
+        if (!e->activate || e->parameter_type) continue;
+        if (!action_is_recordable(e->name)) continue;
+        g_hash_table_insert(s_recordable_orig, (gpointer)e->name,
+                            (gpointer)e->activate);
+        e->activate = recordable_action_activate;
+    }
+    return entries;
+}
 
 /* Convenience: app.<name> action + accelerator. */
 static void set_accel(GtkApplication *app, const char *action_detail,
@@ -6164,6 +6258,7 @@ static GMenuModel *build_menu_model(void)
     {
         GMenu *g = g_menu_new();
         g_menu_append(g, "Run a Macro Multiple Times…", "app.macro-play-n");
+        g_menu_append(g, "Run Macro on Files…",         "app.macro-batch");
         g_menu_append_section(macro, NULL, G_MENU_MODEL(g));
         g_object_unref(g);
     }
@@ -6229,6 +6324,39 @@ static GMenuModel *build_menu_model(void)
         g_menu_append(conv, "Hex to ASCII", "app.hex-to-ascii");
         g_menu_append_submenu(plugins, "Converter", G_MENU_MODEL(conv));
         g_object_unref(conv);
+    }
+    /* GAP-20 — loaded external plugins: one submenu per plugin, items
+     * dispatch through app.plugin-cmd(cmdID) so they are recordable into
+     * macros. FuncItem name "-" starts a new section (Windows semantics).
+     * Empty until plugin_load_all() runs; activate() rebuilds the menubar
+     * right after loading. */
+    for (int pi = 0; pi < plugin_count(); pi++) {
+        int nf = plugin_func_count(pi);
+        if (nf <= 0) continue;
+        GMenu *sub = g_menu_new();
+        GMenu *sect = g_menu_new();
+        for (int fi = 0; fi < nf; fi++) {
+            const char *fname = plugin_func_name(pi, fi);
+            if (!fname || !*fname) continue;
+            if (g_strcmp0(fname, "-") == 0) {
+                if (g_menu_model_get_n_items(G_MENU_MODEL(sect))) {
+                    g_menu_append_section(sub, NULL, G_MENU_MODEL(sect));
+                    g_object_unref(sect);
+                    sect = g_menu_new();
+                }
+                continue;
+            }
+            GMenuItem *mi = g_menu_item_new(fname, NULL);
+            g_menu_item_set_action_and_target(mi, "app.plugin-cmd", "i",
+                                              plugin_func_cmd_id(pi, fi));
+            g_menu_append_item(sect, mi);
+            g_object_unref(mi);
+        }
+        if (g_menu_model_get_n_items(G_MENU_MODEL(sect)))
+            g_menu_append_section(sub, NULL, G_MENU_MODEL(sect));
+        g_object_unref(sect);
+        g_menu_append_submenu(plugins, plugin_name_at(pi), G_MENU_MODEL(sub));
+        g_object_unref(sub);
     }
     {
         GMenu *g = g_menu_new();
@@ -6675,6 +6803,10 @@ static void build_main_window(GtkApplication *app)
      *   /usr/local/lib/nextpad-plus-plus/plugins/<Name>/<Name>.so */
     plugin_init(GTK_WIDGET(g_window));
     plugin_load_all();
+    /* GAP-20 — the Plugins menu lists each loaded plugin's FuncItems;
+     * they only exist after plugin_load_all, so rebuild the menubar. */
+    if (plugin_count() > 0)
+        main_rebuild_menubar();
     /* G33 — fire NPPN_READY once plugins are loaded. */
     plugin_notify_ready();
 
@@ -6749,9 +6881,13 @@ static void on_startup(GtkApplication *app, gpointer ud)
         }
     }
 
-    /* Actions + accelerators */
-    g_action_map_add_action_entries(G_ACTION_MAP(app), kAppActions,
+    /* Actions + accelerators. Recordable menu commands go through the
+     * macro-recording wrapper (GAP-20). */
+    g_action_map_add_action_entries(G_ACTION_MAP(app),
+                                    wrap_recordable_entries(),
                                     G_N_ELEMENTS(kAppActions), NULL);
+    macro_set_changed_hook(rebuild_macro_menu);
+    macro_push_accels();
 
     /* Grey out the macOS-parity items that have no Linux backend yet. */
     for (size_t i = 0; i < G_N_ELEMENTS(kStubActions); i++) {
