@@ -434,7 +434,6 @@ static void on_response(GtkDialog *dialog, gint resp, gpointer data)
     SEState *s = (SEState *)data;
 
     if (resp == GTK_RESPONSE_ACCEPT) {   /* Save and Close */
-        stylestore_save_user();
         /* Persist the active theme name so it survives a restart — macOS
          * stores kNSDefaultsThemeKey; we store g_prefs.theme_preset, which
          * main.c re-loads on launch. "" path = the "Default" entry. */
@@ -453,6 +452,12 @@ static void on_response(GtkDialog *dialog, gint resp, gpointer data)
                 g_free(base);
             }
         }
+        /* Save into the ACTIVE style file (macOS parity): edits on the
+         * Default theme go to stylers.xml; edits on a named theme go to
+         * the user's copy of that theme — never cross-pollute. */
+        stylestore_save_active(
+            strcmp(g_prefs.theme_preset, "Default") == 0
+                ? NULL : g_prefs.theme_preset);
         prefs_save();
         s->changed = FALSE;
         if (s->on_apply) s->on_apply();

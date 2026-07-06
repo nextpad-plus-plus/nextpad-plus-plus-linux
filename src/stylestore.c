@@ -372,11 +372,22 @@ void stylestore_load_theme(const char *path)
         fix_default_font();
         s_loaded = TRUE;
     } else {
-        /* "Default" theme = the pristine stylers.model.xml ONLY. NOT via
-         * stylestore_init(), which also overlays the user's stylers.xml —
-         * that overlay would just reproduce whatever was last saved, so
-         * selecting "Default" appeared to do nothing (#6). */
-        parse_file(RESOURCES_DIR "/stylers.model.xml");
+        /* "Default" = the user's stylers.xml when it exists, else the
+         * pristine model — macOS reads the user file first
+         * (StyleConfiguratorWindowController.mm:155). The old model-only
+         * load erased saved customizations at every light-mode startup
+         * (theme.c reloads "Default" on appearance resolution). The #6
+         * concern (stale theme content leaking through stylers.xml) is
+         * addressed at the SAVE side: edits made while a named theme is
+         * active are written to the user's copy of that theme, never to
+         * stylers.xml. */
+        gchar *user_path = npp_user_file(NULL, "stylers.xml");
+        if (g_file_test(user_path, G_FILE_TEST_EXISTS)) {
+            parse_file(user_path);
+        } else {
+            parse_file(RESOURCES_DIR "/stylers.model.xml");
+        }
+        g_free(user_path);
         fix_default_font();
         s_loaded = TRUE;
     }
@@ -384,11 +395,27 @@ void stylestore_load_theme(const char *path)
 
 void stylestore_save_user(void)
 {
+    stylestore_save_active(NULL);
+}
+
+/* Write the current store to the ACTIVE style file — the user's
+ * stylers.xml for the Default theme, or the user's copy of the named
+ * theme (macOS _writeOverridesToXML picks the target the same way).
+ * Keeping theme edits out of stylers.xml is what lets "Default" load
+ * the user file without resurrecting stale theme colours (#6). */
+void stylestore_save_active(const char *theme_name)
+{
     gchar *dir = npp_user_dir();
     g_mkdir_with_parents(dir, 0755);
 
     char path[1024];
-    snprintf(path, sizeof(path), "%s/stylers.xml", dir);
+    if (theme_name && *theme_name && strcmp(theme_name, "Default") != 0) {
+        snprintf(path, sizeof(path), "%s/themes", dir);
+        g_mkdir_with_parents(path, 0755);
+        snprintf(path, sizeof(path), "%s/themes/%s.xml", dir, theme_name);
+    } else {
+        snprintf(path, sizeof(path), "%s/stylers.xml", dir);
+    }
     g_free(dir);
 
     FILE *f = fopen(path, "w");
