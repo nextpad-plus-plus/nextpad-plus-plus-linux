@@ -359,7 +359,9 @@ void theme_modern_init(GtkWidget *main_window)
         gdk_display_get_default(), GTK_STYLE_PROVIDER(s_modern_css),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
     theme_modern_reload();
-    g_message("theme: Modern appearance active (Tahoe capsules)");
+    /* g_debug: visible only with G_MESSAGES_DEBUG=all — the launch
+     * console stays clean in normal use. */
+    g_debug("theme: Modern appearance active (Tahoe capsules)");
 }
 
 ThemeMode theme_mode_from_prefs(void)
