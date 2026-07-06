@@ -18,13 +18,20 @@ void findreplace_find_prev(void);
 
 /* Q-align: bridge for the unified find_window.c 5-tab dialog. Pushes
  * search parameters into the legacy state so the existing search/replace
- * code paths can be reused. mode: 0=Normal, 1=Extended, 2=Regex. */
+ * code paths can be reused. mode: 0=Normal, 1=Extended, 2=Regex.
+ * in_selection scopes Count/Find All/Replace All/Mark All to the current
+ * selection (GAP-26); dot_matches_nl sets the regex DOTMATCHESNL flag. */
 void findreplace_set_options(const char *find_text,
                              const char *replace_text,
                              gboolean match_case,
                              gboolean whole_word,
                              gboolean wrap,
-                             int search_mode);
+                             int search_mode,
+                             gboolean in_selection,
+                             gboolean dot_matches_nl);
+
+/* Mark All extras: purge previous marks first / bookmark each hit line. */
+void findreplace_set_mark_options(gboolean purge, gboolean bookmark_line);
 
 /* Public actions called by the 5-tab Find dialog (find_window.c). They
  * read the currently-installed search options (via findreplace_set_options).

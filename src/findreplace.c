@@ -6,6 +6,8 @@
 #include "sci_c.h"
 #include "i18n.h"
 #include "prefs.h"
+#include "searchresults.h"
+#include "NppRegexSearch.h"   /* SCFIND_REGEXP_EMPTYMATCH_* / SKIPCRLFASONE */
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,7 +97,16 @@ static char *expand_extended(const char *s)
     return out;
 }
 
-typedef enum { MODE_NORMAL, MODE_EXTENDED, MODE_REGEX } SearchMode;
+typedef enum { MODE_NORMAL, MODE_EXTENDED, MODE_REGEX, MODE_FUZZY } SearchMode;
+
+/* Options with no widget in the legacy dialog — installed only through
+ * findreplace_set_options / findreplace_set_mark_options (i.e. by the
+ * 5-tab find window and macro replay); findreplace_show() resets them. */
+static gboolean s_in_selection  = FALSE;   /* scope loop ops to selection */
+static gboolean s_dot_matches_nl = FALSE;  /* regex: . matches \n         */
+static gboolean s_mark_purge    = FALSE;   /* Mark All: clear old marks   */
+static gboolean s_mark_bookmark = FALSE;   /* Mark All: bookmark hit lines*/
+static gboolean s_fuzzy_mode    = FALSE;   /* GAP-23: mode 3, no legacy radio */
 
 static int build_flags(gboolean match_case, gboolean whole_word, SearchMode mode)
 {
@@ -106,8 +117,180 @@ static int build_flags(gboolean match_case, gboolean whole_word, SearchMode mode
     return flags;
 }
 
+/* Per-operation empty-match bundles for the SCI_OWNREGEX backend —
+ * mirrors the Windows FindReplaceDlg FINDNEXTTYPE_* matrix exactly
+ * (macOS SearchEngine.mm, GAP-25). Without these, zero-width patterns
+ * ($, ^, \b) re-match forever at the continuation position during
+ * Replace All / Count / Mark All. */
+typedef enum { RX_OP_FIND, RX_OP_REPLACE_PROBE, RX_OP_LOOP } RegexOp;
+
+static guint regex_extra_flags(SearchMode mode, RegexOp op)
+{
+    if (mode != MODE_REGEX) return 0;
+    guint f = SCFIND_REGEXP_SKIPCRLFASONE;
+    switch (op) {
+        case RX_OP_FIND:
+            f |= SCFIND_REGEXP_EMPTYMATCH_ALL;
+            break;
+        case RX_OP_REPLACE_PROBE:
+            f |= SCFIND_REGEXP_EMPTYMATCH_ALL |
+                 SCFIND_REGEXP_EMPTYMATCH_ALLOWATSTART;
+            break;
+        case RX_OP_LOOP:
+            f |= SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATCH;
+            break;
+    }
+    if (s_dot_matches_nl) f |= SCFIND_REGEXP_DOTMATCHESNL;
+    return f;
+}
+
+/* Loop-operation range: the selection when In-Selection is on, else the
+ * whole document (GAP-26). */
+static void loop_range(sptr_t *start, sptr_t *end)
+{
+    if (s_in_selection) {
+        *start = sci_msg(s_sci, SCI_GETSELECTIONSTART, 0, 0);
+        *end   = sci_msg(s_sci, SCI_GETSELECTIONEND,   0, 0);
+    } else {
+        *start = 0;
+        *end   = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* GAP-23 — fuzzy (typo-tolerant) per-line search. Port of macOS       */
+/* SearchEngine _fuzzyScanView: one hit per matching line, spans in    */
+/* document byte positions. Honors In-Selection (the touched lines).   */
+/* ------------------------------------------------------------------ */
+#include "fuzzy_bridge.h"
+
+typedef gboolean (*FuzzyHitCb)(sptr_t line, sptr_t start, sptr_t end,
+                               const char *line_text, void *ud);
+
+static int fuzzy_scan(const char *needle, gboolean match_case,
+                      FuzzyHitCb cb, void *ud)
+{
+    NppFuzzyQuery *q = npp_fuzzy_query_new(needle, match_case);
+    if (!q) return 0;
+
+    sptr_t line_count = sci_msg(s_sci, SCI_GETLINECOUNT, 0, 0);
+    sptr_t first = 0, last = line_count;
+    if (s_in_selection) {
+        sptr_t a = sci_msg(s_sci, SCI_GETSELECTIONSTART, 0, 0);
+        sptr_t b = sci_msg(s_sci, SCI_GETSELECTIONEND,   0, 0);
+        if (b > a) {
+            first = sci_msg(s_sci, SCI_LINEFROMPOSITION, (uptr_t)a, 0);
+            last  = sci_msg(s_sci, SCI_LINEFROMPOSITION, (uptr_t)b, 0) + 1;
+            if (last > line_count) last = line_count;
+        }
+    }
+
+    int hits = 0;
+    for (sptr_t line = first; line < last; line++) {
+        sptr_t ls = sci_msg(s_sci, SCI_POSITIONFROMLINE,   (uptr_t)line, 0);
+        sptr_t le = sci_msg(s_sci, SCI_GETLINEENDPOSITION, (uptr_t)line, 0);
+        sptr_t ll = le - ls;
+        if (ll <= 0 || ll > 65536) continue;
+
+        char *buf = g_malloc((gsize)ll + 1);
+        struct { sptr_t cpMin, cpMax; char *lpstrText; } tr = { ls, le, buf };
+        sci_msg(s_sci, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
+        buf[ll] = '\0';
+
+        int b0 = 0, b1 = 0;
+        double score = 0.0;
+        if (npp_fuzzy_query_score(q, buf, (int)ll, &b0, &b1, &score)) {
+            hits++;
+            if (cb && !cb(line, ls + b0, ls + b1, buf, ud)) {
+                g_free(buf);
+                break;
+            }
+        }
+        g_free(buf);
+    }
+    npp_fuzzy_query_free(q);
+    return hits;
+}
+
+/* Fuzzy Find Next/Prev: collect hit spans, pick the one after/before the
+ * caret, wrapping when allowed (macOS _fuzzyFindInView). */
+typedef struct { GArray *spans; } FuzzyCollect;
+typedef struct { sptr_t start, end; } FuzzySpan;
+
+static gboolean fuzzy_collect_cb(sptr_t line, sptr_t start, sptr_t end,
+                                 const char *text, void *ud)
+{
+    (void)line; (void)text;
+    FuzzySpan sp = { start, end };
+    g_array_append_val(((FuzzyCollect *)ud)->spans, sp);
+    return TRUE;
+}
+
+/* Feed the Search Results panel (Find All in fuzzy mode). */
+typedef struct { const char *path; } FuzzyEmit;
+
+static gboolean fuzzy_emit_cb(sptr_t line, sptr_t start, sptr_t end,
+                              const char *text, void *ud)
+{
+    (void)start; (void)end;
+    const char *p = text;
+    while (*p == ' ' || *p == '\t') p++;   /* strip leading ws like regex path */
+    searchresults_add_hit(((FuzzyEmit *)ud)->path, (int)(line + 1), p);
+    return TRUE;
+}
+
+/* Mark All in fuzzy mode: indicator + optional bookmark per hit line. */
+static gboolean fuzzy_mark_cb(sptr_t line, sptr_t start, sptr_t end,
+                              const char *text, void *ud)
+{
+    (void)text; (void)ud;
+    sci_msg(s_sci, SCI_INDICATORFILLRANGE, (uptr_t)start, end - start);
+    if (s_mark_bookmark)
+        sci_msg(s_sci, SCI_MARKERADD, (uptr_t)line, SC_MARKNUM_BOOKMARK);
+    return TRUE;
+}
+
+static gboolean fuzzy_find(const char *needle, gboolean match_case,
+                           gboolean wrap, gboolean forward)
+{
+    FuzzyCollect fc = { g_array_new(FALSE, FALSE, sizeof(FuzzySpan)) };
+    fuzzy_scan(needle, match_case, fuzzy_collect_cb, &fc);
+    GArray *spans = fc.spans;
+    if (spans->len == 0) {
+        g_array_free(spans, TRUE);
+        return FALSE;
+    }
+
+    sptr_t ref = forward ? sci_msg(s_sci, SCI_GETSELECTIONEND,   0, 0)
+                         : sci_msg(s_sci, SCI_GETSELECTIONSTART, 0, 0);
+    FuzzySpan *chosen = NULL;
+    if (forward) {
+        for (guint i = 0; i < spans->len && !chosen; i++) {
+            FuzzySpan *sp = &g_array_index(spans, FuzzySpan, i);
+            if (sp->start > ref) chosen = sp;
+        }
+        if (!chosen && wrap) chosen = &g_array_index(spans, FuzzySpan, 0);
+    } else {
+        for (gint i = (gint)spans->len - 1; i >= 0 && !chosen; i--) {
+            FuzzySpan *sp = &g_array_index(spans, FuzzySpan, (guint)i);
+            if (sp->start < ref) chosen = sp;
+        }
+        if (!chosen && wrap)
+            chosen = &g_array_index(spans, FuzzySpan, spans->len - 1);
+    }
+
+    gboolean found = (chosen != NULL);
+    if (chosen) {
+        sci_msg(s_sci, SCI_SETSEL, (uptr_t)chosen->start, chosen->end);
+        sci_msg(s_sci, SCI_SCROLLCARET, 0, 0);
+    }
+    g_array_free(spans, TRUE);
+    return found;
+}
+
 static SearchMode current_mode(void)
 {
+    if (s_fuzzy_mode) return MODE_FUZZY;   /* pushed by the 5-tab window */
     if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_radio_regex)))
         return MODE_REGEX;
     if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_radio_extend)))
@@ -127,10 +310,19 @@ static gboolean find_in_sci(gboolean forward)
     gboolean    whole_word = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_word));
     gboolean    wrap       = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_wrap));
 
+    /* GAP-23 — fuzzy is a per-line scan, not a Scintilla target search. */
+    if (mode == MODE_FUZZY) {
+        gboolean hit = fuzzy_find(needle_raw, match_case, wrap, forward);
+        gtk_label_set_text(GTK_LABEL(s_status), hit ? "" : "Not found");
+        if (!hit) npp_beep();
+        return hit;
+    }
+
     char *needle = (mode == MODE_EXTENDED) ? expand_extended(needle_raw)
                                            : (char *)needle_raw;
     size_t needle_len = strlen(needle);
-    int    flags = build_flags(match_case, whole_word, mode);
+    guint  flags = (guint)build_flags(match_case, whole_word, mode)
+                 | regex_extra_flags(mode, RX_OP_FIND);
 
     sptr_t doc_len   = sci_msg(s_sci, SCI_GETLENGTH,        0, 0);
     sptr_t sel_start = sci_msg(s_sci, SCI_GETSELECTIONSTART,0, 0);
@@ -174,12 +366,14 @@ static void do_replace(void)
     if (!needle_raw || !*needle_raw) return;
 
     SearchMode  mode       = current_mode();
+    if (mode == MODE_FUZZY) return;   /* fuzzy is Find-only (macOS parity) */
     gboolean    match_case = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_case));
     gboolean    whole_word = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_word));
 
     char *needle = (mode == MODE_EXTENDED) ? expand_extended(needle_raw) : (char *)needle_raw;
     char *repl   = (mode == MODE_EXTENDED) ? expand_extended(repl_raw)   : (char *)repl_raw;
-    int   flags  = build_flags(match_case, whole_word, mode);
+    guint flags  = (guint)build_flags(match_case, whole_word, mode)
+                 | regex_extra_flags(mode, RX_OP_REPLACE_PROBE);
 
     sptr_t sel_start = sci_msg(s_sci, SCI_GETSELECTIONSTART,0, 0);
     sptr_t sel_end   = sci_msg(s_sci, SCI_GETSELECTIONEND,  0, 0);
@@ -213,19 +407,21 @@ static int do_replace_all(void)
     if (!needle_raw || !*needle_raw) return 0;
 
     SearchMode  mode       = current_mode();
+    if (mode == MODE_FUZZY) return 0; /* fuzzy is Find-only (macOS parity) */
     gboolean    match_case = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_case));
     gboolean    whole_word = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_word));
 
     char *needle = (mode == MODE_EXTENDED) ? expand_extended(needle_raw) : (char *)needle_raw;
     char *repl   = (mode == MODE_EXTENDED) ? expand_extended(repl_raw)   : (char *)repl_raw;
-    int   flags  = build_flags(match_case, whole_word, mode);
+    guint flags  = (guint)build_flags(match_case, whole_word, mode)
+                 | regex_extra_flags(mode, RX_OP_LOOP);
     size_t needle_len = strlen(needle);
 
     sci_msg(s_sci, SCI_SETSEARCHFLAGS, (uptr_t)flags, 0);
     sci_msg(s_sci, SCI_BEGINUNDOACTION,0, 0);
 
-    sptr_t pos      = 0;
-    sptr_t range_end = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
+    sptr_t pos, range_end;
+    loop_range(&pos, &range_end);
     int count = 0;
 
     while (pos < range_end) {
@@ -413,7 +609,9 @@ void findreplace_set_options(const char *find_text,
                              gboolean match_case,
                              gboolean whole_word,
                              gboolean wrap,
-                             int search_mode)
+                             int search_mode,
+                             gboolean in_selection,
+                             gboolean dot_matches_nl)
 {
     if (!s_dialog) build_dialog(NULL);
     if (find_text)
@@ -426,12 +624,29 @@ void findreplace_set_options(const char *find_text,
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(
         search_mode == 2 ? s_radio_regex :
         search_mode == 1 ? s_radio_extend : s_radio_normal), TRUE);
+    /* Mode 3 = fuzzy (GAP-23) — no radio in the legacy dialog. */
+    s_fuzzy_mode     = (search_mode == 3);
+    s_in_selection   = in_selection;
+    s_dot_matches_nl = dot_matches_nl;
+}
+
+/* Mark-tab extras (find_window.c + macro type-3 replay). */
+void findreplace_set_mark_options(gboolean purge, gboolean bookmark_line)
+{
+    s_mark_purge    = purge;
+    s_mark_bookmark = bookmark_line;
 }
 
 void findreplace_show(GtkWidget *parent_window, const char *find_text, gboolean show_replace)
 {
     if (!s_dialog)
         build_dialog(parent_window);
+
+    /* The legacy dialog has no In-Selection / dot-matches-newline / fuzzy
+     * / Mark extras — drop anything a previous find-window push left. */
+    s_in_selection = s_dot_matches_nl = FALSE;
+    s_mark_purge = s_mark_bookmark = FALSE;
+    s_fuzzy_mode = FALSE;
 
     /* Show or hide the Replace row and buttons */
     if (show_replace) {
@@ -483,7 +698,7 @@ void findreplace_find_prev(void) { find_in_sci(FALSE); }
  * was expanded (Extended mode); pointer-equality with `*needle_raw_out`
  * tells the caller whether to free. */
 static int prep_search(char **needle_out, char **needle_raw_out,
-                       int *needle_len_out, int *flags_out, int *mode_out) {
+                       int *needle_len_out, guint *flags_out, int *mode_out) {
     if (!s_sci) return 0;
     const char *raw = gtk_entry_get_text(GTK_ENTRY(s_find_entry));
     if (!raw || !*raw) return 0;
@@ -496,21 +711,29 @@ static int prep_search(char **needle_out, char **needle_raw_out,
     *needle_raw_out = (char *)raw;
     *needle_out     = needle;
     *needle_len_out = (int)strlen(needle);
-    *flags_out      = build_flags(mc, ww, mode);
+    /* Callers are all loop operations (Count / Find All / Mark All). */
+    *flags_out      = (guint)build_flags(mc, ww, mode)
+                    | regex_extra_flags(mode, RX_OP_LOOP);
     *mode_out       = (int)mode;
     return 1;
 }
 
 int findreplace_count(void) {
     char *needle = NULL, *needle_raw = NULL;
-    int   needle_len = 0, flags = 0, mode = 0;
+    int   needle_len = 0, mode = 0;
+    guint flags = 0;
     if (!prep_search(&needle, &needle_raw, &needle_len, &flags, &mode)) return 0;
 
+    if (mode == (int)MODE_FUZZY)
+        return fuzzy_scan(needle_raw,
+            gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_case)),
+            NULL, NULL);
+
     sci_msg(s_sci, SCI_SETSEARCHFLAGS, (uptr_t)flags, 0);
-    sptr_t doc_len = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
+    sptr_t pos, doc_len;
+    loop_range(&pos, &doc_len);
 
     int count = 0;
-    sptr_t pos = 0;
     while (pos < doc_len) {
         sci_msg(s_sci, SCI_SETTARGETRANGE, (uptr_t)pos, doc_len);
         sptr_t found = sci_msg(s_sci, SCI_SEARCHINTARGET, (uptr_t)needle_len,
@@ -527,19 +750,33 @@ int findreplace_count(void) {
 
 int findreplace_find_all_current(void) {
     char *needle = NULL, *needle_raw = NULL;
-    int   needle_len = 0, flags = 0, mode = 0;
+    int   needle_len = 0, mode = 0;
+    guint flags = 0;
     if (!prep_search(&needle, &needle_raw, &needle_len, &flags, &mode)) return 0;
 
     NppDoc *doc = editor_current_doc();
     const char *path = (doc && doc->filepath) ? doc->filepath : "(untitled)";
 
+    if (mode == (int)MODE_FUZZY) {
+        gboolean mc = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_case));
+        searchresults_begin(needle_raw);
+        int total = fuzzy_scan(needle_raw, mc, NULL, NULL);
+        searchresults_add_file(path, total);
+        FuzzyEmit fe = { path };
+        fuzzy_scan(needle_raw, mc, fuzzy_emit_cb, &fe);
+        searchresults_end(total, 1);
+        searchresults_set_visible(TRUE);
+        return total;
+    }
+
     sci_msg(s_sci, SCI_SETSEARCHFLAGS, (uptr_t)flags, 0);
-    sptr_t doc_len = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
+    sptr_t range_start, doc_len;
+    loop_range(&range_start, &doc_len);
 
     searchresults_begin(needle_raw);
 
     int total = 0;
-    sptr_t pos = 0;
+    sptr_t pos = range_start;
     /* First pass — count to feed the per-file header. */
     while (pos < doc_len) {
         sci_msg(s_sci, SCI_SETTARGETRANGE, (uptr_t)pos, doc_len);
@@ -553,7 +790,7 @@ int findreplace_find_all_current(void) {
     searchresults_add_file(path, total);
 
     /* Second pass — extract line text for each hit. */
-    pos = 0;
+    pos = range_start;
     while (pos < doc_len) {
         sci_msg(s_sci, SCI_SETTARGETRANGE, (uptr_t)pos, doc_len);
         sptr_t found = sci_msg(s_sci, SCI_SEARCHINTARGET, (uptr_t)needle_len,
@@ -600,8 +837,12 @@ int findreplace_replace_all(void) {
 
 int findreplace_mark_all(void) {
     char *needle = NULL, *needle_raw = NULL;
-    int   needle_len = 0, flags = 0, mode = 0;
+    int   needle_len = 0, mode = 0;
+    guint flags = 0;
     if (!prep_search(&needle, &needle_raw, &needle_len, &flags, &mode)) return 0;
+
+    /* "Purge for each search" — drop previous marks first. */
+    if (s_mark_purge) findreplace_clear_marks();
 
     sci_msg(s_sci, SCI_SETSEARCHFLAGS, (uptr_t)flags, 0);
     sci_msg(s_sci, SCI_INDICSETSTYLE,  NPP_FIND_MARK_INDICATOR, INDIC_ROUNDBOX);
@@ -609,9 +850,14 @@ int findreplace_mark_all(void) {
     sci_msg(s_sci, SCI_INDICSETALPHA,  NPP_FIND_MARK_INDICATOR, 100);
     sci_msg(s_sci, SCI_SETINDICATORCURRENT, NPP_FIND_MARK_INDICATOR, 0);
 
-    sptr_t doc_len = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
+    if (mode == (int)MODE_FUZZY)
+        return fuzzy_scan(needle_raw,
+            gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_case)),
+            fuzzy_mark_cb, NULL);
+
+    sptr_t pos, doc_len;
+    loop_range(&pos, &doc_len);
     int count = 0;
-    sptr_t pos = 0;
     while (pos < doc_len) {
         sci_msg(s_sci, SCI_SETTARGETRANGE, (uptr_t)pos, doc_len);
         sptr_t found = sci_msg(s_sci, SCI_SEARCHINTARGET, (uptr_t)needle_len,
@@ -619,6 +865,10 @@ int findreplace_mark_all(void) {
         if (found < 0) break;
         sptr_t end = sci_msg(s_sci, SCI_GETTARGETEND, 0, 0);
         sci_msg(s_sci, SCI_INDICATORFILLRANGE, (uptr_t)found, end - found);
+        if (s_mark_bookmark) {
+            sptr_t line = sci_msg(s_sci, SCI_LINEFROMPOSITION, (uptr_t)found, 0);
+            sci_msg(s_sci, SCI_MARKERADD, (uptr_t)line, SC_MARKNUM_BOOKMARK);
+        }
         count++;
         pos = (end > found) ? end : found + 1;
     }

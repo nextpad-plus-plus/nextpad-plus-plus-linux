@@ -54,6 +54,7 @@ typedef struct {
     GtkWidget *f_find;
     GtkWidget *f_in_sel, *f_back, *f_word, *f_case, *f_wrap;
     GtkWidget *f_rb_normal, *f_rb_ext, *f_rb_regex, *f_dot_newline;
+    GtkWidget *f_rb_fuzzy;   /* GAP-23 — Find tab only (macOS parity) */
 
     /* Replace tab */
     GtkWidget *r_find, *r_repl;
@@ -80,6 +81,9 @@ typedef struct {
 
     /* Shared status line at the bottom of the dialog. */
     GtkWidget *status;
+
+    /* GAP-53 — transparency group (checkbox + 2 radios + slider). */
+    GtkWidget *tr_check, *tr_focus, *tr_always, *tr_slider;
 } FW;
 
 static FW *s_fw = NULL;
@@ -110,11 +114,13 @@ static const char *combo_text(GtkWidget *combo) {
     return entry ? gtk_entry_get_text(GTK_ENTRY(entry)) : "";
 }
 
-/* Search Mode frame builder — common to all tabs. */
+/* Search Mode frame builder — common to all tabs. rb_fuzzy_or_null adds
+ * the 4th "Fuzzy search" radio (GAP-23, Find tab only — macOS parity). */
 static GtkWidget *make_search_mode_frame(GtkWidget **rb_normal,
                                          GtkWidget **rb_ext,
                                          GtkWidget **rb_regex,
-                                         GtkWidget **dot_newline_or_null)
+                                         GtkWidget **dot_newline_or_null,
+                                         GtkWidget **rb_fuzzy_or_null)
 {
     GtkWidget *frame = gtk_frame_new("Search Mode");
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
@@ -139,6 +145,11 @@ static GtkWidget *make_search_mode_frame(GtkWidget **rb_normal,
                          G_CALLBACK(gtk_widget_set_sensitive_redux), NULL);
     }
     npp_box_pack(GTK_BOX(box), regex_row, FALSE, 0);
+    if (rb_fuzzy_or_null) {
+        *rb_fuzzy_or_null = gtk_radio_button_new_with_label_from_widget(
+            GTK_RADIO_BUTTON(*rb_normal), "Fuzzy search");
+        npp_box_pack(GTK_BOX(box), *rb_fuzzy_or_null, FALSE, 0);
+    }
     gtk_container_add(GTK_CONTAINER(frame), box);
     return frame;
 }
@@ -163,14 +174,8 @@ static void gtk_widget_set_sensitive_redux(GtkToggleButton *rb_regex, gpointer u
 /* Backend wiring — route to findreplace.c / findinfiles.c                */
 /* ────────────────────────────────────────────────────────────────────── */
 
-/* Bridge: copy the active tab's find text + options into the legacy
- * findreplace dialog state and fire its existing handlers. */
-extern void findreplace_set_options(const char *find_text,
-                                    const char *replace_text,
-                                    gboolean match_case,
-                                    gboolean whole_word,
-                                    gboolean wrap,
-                                    int search_mode);  /* defined below */
+#include "findreplace.h"
+#include "findinfiles.h"
 
 static int get_search_mode(GtkWidget *rb_normal, GtkWidget *rb_ext,
                            GtkWidget *rb_regex) {
@@ -180,36 +185,35 @@ static int get_search_mode(GtkWidget *rb_normal, GtkWidget *rb_ext,
     return 0;
 }
 
-/* ── Find tab actions ──────────────────────────────────────────────── */
-static void on_find_next(GtkButton *b, gpointer u) {
-    (void)b; (void)u; FW *w = s_fw; if (!w) return;
-    findreplace_set_options(combo_text(w->f_find), "",
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->f_case)),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->f_word)),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->f_wrap)),
-        get_search_mode(w->f_rb_normal, w->f_rb_ext, w->f_rb_regex));
-    findreplace_find_next();
+static gboolean chk(GtkWidget *w) {
+    return gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w));
 }
-#include "findreplace.h"
-#include "findinfiles.h"
 
 /* Helper: push the current Find tab's text + options into the legacy
  * findreplace state so the search code reads from one place. */
 static void push_find_options(void) {
     FW *w = s_fw; if (!w) return;
+    int mode = get_search_mode(w->f_rb_normal, w->f_rb_ext, w->f_rb_regex);
+    if (w->f_rb_fuzzy && chk(w->f_rb_fuzzy)) mode = 3;   /* GAP-23 */
     findreplace_set_options(combo_text(w->f_find), "",
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->f_case)),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->f_word)),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->f_wrap)),
-        get_search_mode(w->f_rb_normal, w->f_rb_ext, w->f_rb_regex));
+        chk(w->f_case), chk(w->f_word), chk(w->f_wrap),
+        mode, chk(w->f_in_sel), chk(w->f_dot_newline));
 }
 static void push_replace_options(void) {
     FW *w = s_fw; if (!w) return;
     findreplace_set_options(combo_text(w->r_find), combo_text(w->r_repl),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->r_case)),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->r_word)),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->r_wrap)),
-        get_search_mode(w->r_rb_normal, w->r_rb_ext, w->r_rb_regex));
+        chk(w->r_case), chk(w->r_word), chk(w->r_wrap),
+        get_search_mode(w->r_rb_normal, w->r_rb_ext, w->r_rb_regex),
+        chk(w->r_in_sel), chk(w->r_dot_newline));
+}
+
+/* ── Find tab actions ──────────────────────────────────────────────── */
+static void on_find_next(GtkButton *b, gpointer u) {
+    (void)b; (void)u; FW *w = s_fw; if (!w) return;
+    push_find_options();
+    /* "Backward direction" flips Find Next (macOS FindWindow parity). */
+    if (chk(w->f_back)) findreplace_find_prev();
+    else                findreplace_find_next();
 }
 
 static void on_find_count(GtkButton *b, gpointer u) {
@@ -324,10 +328,10 @@ static void on_mark_all(GtkButton *b, gpointer u) {
     (void)b; (void)u;
     FW *w = s_fw; if (!w) return;
     findreplace_set_options(combo_text(w->m_find), "",
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->m_case)),
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->m_word)),
-        FALSE,
-        get_search_mode(w->m_rb_normal, w->m_rb_ext, w->m_rb_regex));
+        chk(w->m_case), chk(w->m_word), FALSE,
+        get_search_mode(w->m_rb_normal, w->m_rb_ext, w->m_rb_regex),
+        chk(w->m_in_sel), FALSE);
+    findreplace_set_mark_options(chk(w->m_purge), chk(w->m_bookmark_line));
     int n = findreplace_mark_all();
     gchar *msg = g_strdup_printf("Marked %d occurrence%s", n,
                                  n == 1 ? "" : "s");
@@ -460,7 +464,8 @@ static GtkWidget *build_find_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->f_rb_normal, &w->f_rb_ext, &w->f_rb_regex, &w->f_dot_newline);
+        &w->f_rb_normal, &w->f_rb_ext, &w->f_rb_regex, &w->f_dot_newline,
+        &w->f_rb_fuzzy);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -518,7 +523,8 @@ static GtkWidget *build_replace_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->r_rb_normal, &w->r_rb_ext, &w->r_rb_regex, &w->r_dot_newline);
+        &w->r_rb_normal, &w->r_rb_ext, &w->r_rb_regex, &w->r_dot_newline,
+        NULL);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -590,7 +596,7 @@ static GtkWidget *build_fif_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts_grid, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->fif_rb_normal, &w->fif_rb_ext, &w->fif_rb_regex, NULL);
+        &w->fif_rb_normal, &w->fif_rb_ext, &w->fif_rb_regex, NULL, NULL);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -635,7 +641,7 @@ static GtkWidget *build_fip_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->fip_rb_normal, &w->fip_rb_ext, &w->fip_rb_regex, NULL);
+        &w->fip_rb_normal, &w->fip_rb_ext, &w->fip_rb_regex, NULL, NULL);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -697,7 +703,7 @@ static GtkWidget *build_mark_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->m_rb_normal, &w->m_rb_ext, &w->m_rb_regex, NULL);
+        &w->m_rb_normal, &w->m_rb_ext, &w->m_rb_regex, NULL, NULL);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -737,6 +743,80 @@ static void retitle_on_switch(GtkNotebook *nb, GtkWidget *page,
     (void)ud;
 }
 
+/* ────────────────────────────────────────────────────────────────────── */
+/* GAP-53 — Find window transparency (macOS #143 / Windows parity).      */
+/* "On losing focus" dims the window whenever it isn't the active        */
+/* toplevel; "Always" keeps it dimmed. gtk_widget_set_opacity on a        */
+/* toplevel is composited on both Wayland and X11.                        */
+/* ────────────────────────────────────────────────────────────────────── */
+
+static void transparency_apply(void) {
+    FW *w = s_fw; if (!w || !w->window) return;
+    double op = 1.0;
+    if (g_prefs.find_transp_enabled) {
+        double alpha = CLAMP(g_prefs.find_transp_alpha, 20, 90) / 100.0;
+        if (g_prefs.find_transp_always)
+            op = alpha;
+        else if (!gtk_window_is_active(GTK_WINDOW(w->window)))
+            op = alpha;
+    }
+    gtk_widget_set_opacity(w->window, op);
+}
+
+static void on_tr_active_changed(GObject *win, GParamSpec *ps, gpointer u) {
+    (void)win; (void)ps; (void)u;
+    transparency_apply();
+}
+
+static void on_tr_toggled(GtkToggleButton *b, gpointer u) {
+    (void)b; (void)u;
+    FW *w = s_fw; if (!w) return;
+    g_prefs.find_transp_enabled = chk(w->tr_check);
+    g_prefs.find_transp_always  = chk(w->tr_always);
+    gtk_widget_set_sensitive(w->tr_focus,  g_prefs.find_transp_enabled);
+    gtk_widget_set_sensitive(w->tr_always, g_prefs.find_transp_enabled);
+    gtk_widget_set_sensitive(w->tr_slider, g_prefs.find_transp_enabled);
+    transparency_apply();
+    prefs_save();
+}
+
+static void on_tr_alpha(GtkRange *r, gpointer u) {
+    (void)u;
+    g_prefs.find_transp_alpha = (int)gtk_range_get_value(r);
+    transparency_apply();
+    prefs_save();
+}
+
+static GtkWidget *build_transparency_group(FW *w) {
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    w->tr_check  = gtk_check_button_new_with_label("Transparency");
+    w->tr_focus  = npp_radio_new(NULL, "On losing focus");
+    w->tr_always = npp_radio_new(w->tr_focus, "Always");
+    w->tr_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,
+                                            20, 90, 5);
+    gtk_scale_set_draw_value(GTK_SCALE(w->tr_slider), FALSE);
+    gtk_widget_set_size_request(w->tr_slider, 110, -1);
+
+    npp_toggle_set_active(w->tr_check,  g_prefs.find_transp_enabled);
+    npp_toggle_set_active(w->tr_always, g_prefs.find_transp_always);
+    npp_toggle_set_active(w->tr_focus, !g_prefs.find_transp_always);
+    gtk_range_set_value(GTK_RANGE(w->tr_slider), g_prefs.find_transp_alpha);
+    gtk_widget_set_sensitive(w->tr_focus,  g_prefs.find_transp_enabled);
+    gtk_widget_set_sensitive(w->tr_always, g_prefs.find_transp_enabled);
+    gtk_widget_set_sensitive(w->tr_slider, g_prefs.find_transp_enabled);
+
+    g_signal_connect(w->tr_check,  "toggled",       G_CALLBACK(on_tr_toggled), NULL);
+    g_signal_connect(w->tr_focus,  "toggled",       G_CALLBACK(on_tr_toggled), NULL);
+    g_signal_connect(w->tr_always, "toggled",       G_CALLBACK(on_tr_toggled), NULL);
+    g_signal_connect(w->tr_slider, "value-changed", G_CALLBACK(on_tr_alpha),   NULL);
+
+    npp_box_pack(GTK_BOX(box), w->tr_check,  FALSE, 0);
+    npp_box_pack(GTK_BOX(box), w->tr_focus,  FALSE, 0);
+    npp_box_pack(GTK_BOX(box), w->tr_always, FALSE, 0);
+    npp_box_pack(GTK_BOX(box), w->tr_slider, FALSE, 0);
+    return box;
+}
+
 void find_window_show(GtkWindow *parent, FwTab tab, const char *initial_text) {
     if (!s_fw) {
         s_fw = g_new0(FW, 1);
@@ -762,17 +842,25 @@ void find_window_show(GtkWindow *parent, FwTab tab, const char *initial_text) {
         g_signal_connect(s_fw->notebook, "switch-page",
                          G_CALLBACK(retitle_on_switch), NULL);
 
-        /* Vertical box: notebook + status line. */
+        /* Vertical box: notebook + bottom row (status | transparency). */
         GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         npp_box_pack(GTK_BOX(vbox), s_fw->notebook, TRUE, 0);
+        GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_margin_start (bottom, 8);
+        gtk_widget_set_margin_end   (bottom, 8);
+        gtk_widget_set_margin_top   (bottom, 2);
+        gtk_widget_set_margin_bottom(bottom, 4);
         s_fw->status = gtk_label_new("");
         gtk_label_set_xalign(GTK_LABEL(s_fw->status), 0.0f);
-        gtk_widget_set_margin_start (s_fw->status, 8);
-        gtk_widget_set_margin_end   (s_fw->status, 8);
-        gtk_widget_set_margin_top   (s_fw->status, 2);
-        gtk_widget_set_margin_bottom(s_fw->status, 4);
-        npp_box_pack(GTK_BOX(vbox), s_fw->status, FALSE, 0);
+        gtk_widget_set_hexpand(s_fw->status, TRUE);
+        npp_box_pack(GTK_BOX(bottom), s_fw->status, TRUE, 0);
+        npp_box_pack(GTK_BOX(bottom), build_transparency_group(s_fw), FALSE, 0);
+        npp_box_pack(GTK_BOX(vbox), bottom, FALSE, 0);
         gtk_container_add(GTK_CONTAINER(s_fw->window), vbox);
+
+        /* Dim on losing focus / restore when active again (GAP-53). */
+        g_signal_connect(s_fw->window, "notify::is-active",
+                         G_CALLBACK(on_tr_active_changed), NULL);
     }
 
     /* Pre-fill the appropriate find-entry. */
@@ -789,4 +877,22 @@ void find_window_show(GtkWindow *parent, FwTab tab, const char *initial_text) {
     gtk_notebook_set_current_page(GTK_NOTEBOOK(s_fw->notebook), (int)tab);
     gtk_widget_show_all(s_fw->window);
     gtk_window_present(GTK_WINDOW(s_fw->window));
+    transparency_apply();
+
+    /* Repeat-shortcut behavior (macOS #189 re-centers the window; GTK4
+     * has no toplevel positioning API, so the useful part is refocusing
+     * the tab's find field with its text selected, ready to retype). */
+    {
+        GtkWidget *combos[5] = {
+            s_fw->f_find, s_fw->r_find, s_fw->fif_find,
+            s_fw->fip_find, s_fw->m_find,
+        };
+        if (tab < 5 && combos[tab]) {
+            GtkWidget *e = gtk_bin_get_child(GTK_BIN(combos[tab]));
+            if (e) {
+                gtk_widget_grab_focus(e);
+                gtk_editable_select_region(GTK_EDITABLE(e), 0, -1);
+            }
+        }
+    }
 }

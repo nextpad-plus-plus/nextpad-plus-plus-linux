@@ -37,11 +37,18 @@ set(RES      "${CMAKE_SOURCE_DIR}/resources")
 set(SCI_GTK4 "${SCI_ROOT}/gtk4")
 set(SCI_SO   "${SCI_ROOT}/bin/libscintilla.so")
 
+# Scintilla patch 0005 (scintilla-patches/) compiles the repo-level regex/
+# backends (NppRegexSearch std::regex default + opt-in BoostRegexSearch,
+# shared verbatim with the macOS port) INTO libscintilla.so via
+# SCI_OWNREGEX — the backends use Scintilla-internal symbols that
+# -fvisibility=hidden keeps private to that library. The app only sees
+# regex/NppRegexSearch.h (flag constants) and the exported
+# gNppUseBoostRegex toggle that prefs.c flips.
 add_custom_command(
     OUTPUT  "${SCI_SO}"
     COMMAND make shared
     WORKING_DIRECTORY "${SCI_GTK4}"
-    COMMENT "Building GTK4 Scintilla backend (bugaevc/scintilla)"
+    COMMENT "Building GTK4 Scintilla backend (bugaevc/scintilla, SCI_OWNREGEX)"
     VERBATIM)
 add_custom_target(scintilla_build DEPENDS "${SCI_SO}")
 
@@ -79,6 +86,9 @@ set(APP_SRCS
     # Glue
     "${SRC}/main.c"
     "${SRC}/lexilla_bridge.cpp"
+    "${SRC}/fuzzy_bridge.cpp"
+    "${CMAKE_SOURCE_DIR}/fuzzy/FuzzyMatcher.cxx"
+    "${CMAKE_SOURCE_DIR}/fuzzy/FuzzyText.cxx"
     "${SRC}/recent.c"
     "${SRC}/stubs.c"
     "${SRC}/paths.c"
@@ -159,6 +169,9 @@ target_include_directories(nextpad_pp PRIVATE
     "${SRC}"
     "${SCI_ROOT}/include" "${SCI_ROOT}/gtk4"
     "${LEX_ROOT}/include"
+    "${CMAKE_SOURCE_DIR}/regex"
+    "${CMAKE_SOURCE_DIR}/fuzzy"
+    "${CMAKE_SOURCE_DIR}/fuzzy/rapidfuzz"
     ${GTK4_INCLUDE_DIRS} ${ADW_INCLUDE_DIRS}
 )
 # RESOURCES_DIR is baked in at compile time. For a dev build it points at

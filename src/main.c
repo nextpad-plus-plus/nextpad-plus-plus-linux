@@ -2202,7 +2202,7 @@ static void action_begin_end_select_column(GSimpleAction *a, GVariant *p, gpoint
 static void select_and_find(int direction) {
     gchar *sel = current_selection_or_word();
     if (!sel) return;
-    findreplace_set_options(sel, "", FALSE, FALSE, TRUE, 0);
+    findreplace_set_options(sel, "", FALSE, FALSE, TRUE, 0, FALSE, FALSE);
     g_free(sel);
     if (direction > 0) findreplace_find_next();
     else               findreplace_find_prev();
@@ -4213,6 +4213,15 @@ static void action_jump_styled_next(GSimpleAction *a, GVariant *p, gpointer u) {
 static void action_jump_styled_prev(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u; jump_styled(-1);
 }
+/* GAP-55 — Search ▸ Next/Previous Search Result (F4 / Shift+F4). */
+static void action_search_result_next(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    if (!searchresults_nav(+1)) npp_beep();
+}
+static void action_search_result_prev(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    if (!searchresults_nav(-1)) npp_beep();
+}
 
 /* Q-fix Search → Find (Volatile) Next/Previous.
  * Macros equivalent: take the word at caret as the needle without opening
@@ -4792,7 +4801,6 @@ static const char *kStubActions[] = {
     "ac-hint-prev", "ac-hint-next", /* Edit ▸ Auto-Completion           */
     "tab-move-start", "tab-move-end",                /* View ▸ Tab       */
     "tab-move-forward", "tab-move-backward",         /* View ▸ Tab       */
-    "search-result-next", "search-result-prev",     /* Search           */
 };
 
 static const GActionEntry kAppActions[] = {
@@ -5196,8 +5204,8 @@ static const GActionEntry kAppActions[] = {
     { "tab-move-end",          action_menu_stub,                NULL, NULL, NULL },
     { "tab-move-forward",      action_menu_stub,                NULL, NULL, NULL },
     { "tab-move-backward",     action_menu_stub,                NULL, NULL, NULL },
-    { "search-result-next",    action_menu_stub,                NULL, NULL, NULL },
-    { "search-result-prev",    action_menu_stub,                NULL, NULL, NULL },
+    { "search-result-next",    action_search_result_next,       NULL, NULL, NULL },
+    { "search-result-prev",    action_search_result_prev,       NULL, NULL, NULL },
 };
 
 /* ------------------------------------------------------------------ */
@@ -6996,9 +7004,11 @@ static void on_startup(GtkApplication *app, gpointer ud)
                                                   tab_accels[i][0], accels);
         }
     }
-    /* F4 / Shift+F4 — Next/Previous Search Result (macOS parity). */
-    set_accel(app, "app.jump-styled-next",     "F4");
-    set_accel(app, "app.jump-styled-prev",     "<Shift>F4");
+    /* F4 / Shift+F4 — Next/Previous Search Result (GAP-55, macOS parity:
+     * MenuBuilder binds NSF4FunctionKey to nextSearchResult:). The
+     * styled-token jump keeps its menu entries, accel-free. */
+    set_accel(app, "app.search-result-next",   "F4");
+    set_accel(app, "app.search-result-prev",   "<Shift>F4");
     /* F12 — Post-It Mode toggle. */
     set_accel(app, "app.post-it",              "F12");
     /* Q-align Run menu canned helpers (macOS Alt+F1/F3/F6). */

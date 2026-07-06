@@ -127,6 +127,13 @@ typedef struct {
     gboolean mono_font_find;          /* default TRUE */
     gboolean confirm_replace_all;     /* default TRUE */
     gboolean replace_and_stop;        /* default FALSE */
+    gboolean use_boost_regex;         /* default FALSE — opt-in Boost.Regex
+                                       * engine (multi-line, lookbehind, \K);
+                                       * mirrored into gNppUseBoostRegex */
+    /* GAP-53 — Find window transparency (defaults match Windows/macOS). */
+    gboolean find_transp_enabled;     /* default TRUE                     */
+    gboolean find_transp_always;      /* FALSE = only on losing focus     */
+    int      find_transp_alpha;       /* opacity %, 20–90, default 50     */
     int      in_sel_threshold;        /* min chars of selection to enable "in selection" */
     char     search_engine_url[256];  /* default "https://duckduckgo.com/?q=%s" */
 

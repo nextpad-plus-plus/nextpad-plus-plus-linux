@@ -270,6 +270,28 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
     }
 }
 
+/* GAP-55 — Next/Previous Search Result (F4 / Shift+F4). Steps through
+ * SR_HIT rows from the panel's caret row (wrapping), mirrors the caret
+ * in the panel and jumps the editor to the hit. */
+gboolean searchresults_nav(int dir)
+{
+    if (!s_sci || !s_lines || s_lines->len == 0) return FALSE;
+    int  n   = (int)s_lines->len;
+    long cur = SR_SEND(SCI_LINEFROMPOSITION,
+                       SR_SEND(SCI_GETCURRENTPOS, 0, 0), 0);
+    for (int step = 1; step <= n; step++) {
+        int i = (int)(((cur + (long)dir * step) % n + n) % n);
+        SRLine *L = &g_array_index(s_lines, SRLine, (guint)i);
+        if (L->kind == SR_HIT && L->path && L->lineno > 0) {
+            SR_SEND(SCI_GOTOLINE, i, 0);
+            searchresults_set_visible(TRUE);
+            editor_open_and_goto(L->path, L->lineno);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 /* ------------------------------------------------------------------ */
 /* Right-click context menu (macOS SearchResultsPanel parity)          */
 /* ------------------------------------------------------------------ */

@@ -18,4 +18,8 @@ void searchresults_end(int total_hits, int total_files);
 void     searchresults_set_visible(gboolean v);
 gboolean searchresults_is_visible(void);
 
+/* GAP-55 — F4/Shift+F4: step to the next (+1) / previous (-1) hit row,
+ * jumping the editor there. Returns FALSE when the panel has no hits. */
+gboolean searchresults_nav(int dir);
+
 #endif /* SEARCHRESULTS_H */

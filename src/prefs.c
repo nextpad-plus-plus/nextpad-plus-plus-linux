@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>   /* gNppUseBoostRegex is a C++ `extern "C" bool` */
 
 /* ------------------------------------------------------------------ */
 /* EOL enum translation                                                */
@@ -158,6 +159,10 @@ NppPrefs g_prefs = {
     .mono_font_find          = FALSE,   /* Q-align: macOS default */
     .confirm_replace_all     = TRUE,
     .replace_and_stop        = FALSE,
+    .use_boost_regex         = FALSE,
+    .find_transp_enabled     = TRUE,
+    .find_transp_always      = FALSE,
+    .find_transp_alpha       = 50,
     .in_sel_threshold        = 1024,
     .search_engine_url       = "https://duckduckgo.com/?q=%s",
     /* Delimiter */
@@ -311,7 +316,13 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "fillFindFieldWithSelected"))     g_prefs.fill_find_with_selection = is_yes(val);
         else if (!strcmp(attr, "confirmReplaceInAllOpenDocs"))   g_prefs.confirm_replace_all    = is_yes(val);
         else if (!strcmp(attr, "replaceStopsWithoutFindingNext"))g_prefs.replace_and_stop       = is_yes(val);
+        else if (!strcmp(attr, "useBoostRegex"))                 g_prefs.use_boost_regex        = is_yes(val);
         else if (!strcmp(attr, "inSelectionAutocheckThreshold")) g_prefs.in_sel_threshold       = atoi(val);
+    }
+    else if (!strcmp(group, "FindWindowTransparency")) {   /* GAP-53 */
+        if      (!strcmp(attr, "enabled")) g_prefs.find_transp_enabled = is_yes(val);
+        else if (!strcmp(attr, "always"))  g_prefs.find_transp_always  = is_yes(val);
+        else if (!strcmp(attr, "alpha"))   g_prefs.find_transp_alpha   = CLAMP(atoi(val), 20, 90);
     }
     /* DarkMode is handled in a single-pass block in xml_start to avoid
      * attribute-order dependency — see below. Only theme="…" is per-attr. */
@@ -560,6 +571,14 @@ void prefs_load(void)
         strncpy(g_prefs.search_engine_url, "https://duckduckgo.com/?q=%s", sizeof(g_prefs.search_engine_url) - 1);
     if (g_prefs.theme_preset[0] == '\0')
         strncpy(g_prefs.theme_preset, "Default", sizeof(g_prefs.theme_preset) - 1);
+
+    /* GAP-24 — hand the regex-engine choice to RegexBackendSelect.cxx.
+     * Scintilla creates a Document's regex object lazily, so the toggle
+     * applies to documents whose first regex search happens afterwards. */
+    {
+        extern bool gNppUseBoostRegex;
+        gNppUseBoostRegex = g_prefs.use_boost_regex;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -691,9 +710,11 @@ void prefs_save(void)
     g_string_append_printf(b,
         "        <GUIConfig name=\"Searching\" monospacedFontFindDlg=\"%s\" "
         "fillFindFieldWithSelected=\"%s\" confirmReplaceInAllOpenDocs=\"%s\" "
-        "replaceStopsWithoutFindingNext=\"%s\" inSelectionAutocheckThreshold=\"%d\" />\n",
+        "replaceStopsWithoutFindingNext=\"%s\" useBoostRegex=\"%s\" "
+        "inSelectionAutocheckThreshold=\"%d\" />\n",
         b2yn(g_prefs.mono_font_find), b2yn(g_prefs.fill_find_with_selection),
         b2yn(g_prefs.confirm_replace_all), b2yn(g_prefs.replace_and_stop),
+        b2yn(g_prefs.use_boost_regex),
         g_prefs.in_sel_threshold);
 
     /* DarkMode + theme preset. Omit theme attr when at the default to
@@ -795,6 +816,13 @@ void prefs_save(void)
     g_string_append_printf(b,
         "        <GUIConfig name=\"SearchEngine\" url=\"%s\" />\n", se_esc);
     g_free(se_esc);
+
+    /* GAP-53 — Find window transparency. */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"FindWindowTransparency\" enabled=\"%s\" "
+        "always=\"%s\" alpha=\"%d\" />\n",
+        b2yn(g_prefs.find_transp_enabled), b2yn(g_prefs.find_transp_always),
+        g_prefs.find_transp_alpha);
 
     if (g_prefs.default_language[0]) {
         gchar *dl_esc = g_markup_escape_text(g_prefs.default_language, -1);
@@ -933,6 +961,10 @@ CHK(fill_find,         fill_find_with_selection,   (void)0)
 CHK(mono_find,         mono_font_find,             (void)0)
 CHK(conf_rep,          confirm_replace_all,        (void)0)
 CHK(rep_stop,          replace_and_stop,           (void)0)
+/* GAP-24 — mirrored into the regex-backend selector (extern "C" bool in
+ * regex/RegexBackendSelect.cxx). */
+extern bool gNppUseBoostRegex;
+CHK(boost_regex,       use_boost_regex,            gNppUseBoostRegex = g_prefs.use_boost_regex)
 CHK(delim_doc,         delim_entire_doc,           (void)0)
 CHK(wc_default,        word_chars_use_default,     editor_apply_prefs())
 CHK(lf_enable,         large_file_enabled,         (void)0)
@@ -1527,6 +1559,9 @@ static GtkWidget *page_searching(void)
     make_check(g, r++, "Use monospaced font in Find dialog", g_prefs.mono_font_find,            G_CALLBACK(on_mono_find));
     make_check(g, r++, "Confirm Replace All in open documents", g_prefs.confirm_replace_all,    G_CALLBACK(on_conf_rep));
     make_check(g, r++, "Replace: don't move to next occurrence", g_prefs.replace_and_stop,      G_CALLBACK(on_rep_stop));
+    /* GAP-24 — label matches macOS for locale-string reuse. */
+    make_check(g, r++, "Use Boost Regex mode (multi-line; restart to apply)",
+               g_prefs.use_boost_regex, G_CALLBACK(on_boost_regex));
 
     GtkWidget *is = gtk_spin_button_new_with_range(0, 1000000, 100);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(is), g_prefs.in_sel_threshold);

@@ -310,6 +310,7 @@ typedef struct {
     char    *find, *repl;
     int      mode;            /* 0 Normal / 1 Extended / 2 Regex */
     gboolean whole_word, match_case, wrap, down, in_selection;
+    gboolean dot_nl, purge, bookmark_line;
 } SnrPending;
 
 static void snr_reset(SnrPending *p)
@@ -329,19 +330,19 @@ static void snr_exec(GtkWidget *sci, SnrPending *p, gint64 cmd)
     }
     if (!p->find || !*p->find) return;
 
-    /* Replace All / Mark All operate on the whole document by definition —
+    /* Replace All / Mark All operate on the whole document (or on the
+     * selection when IDF_IN_SELECTION_CHECK is set) by definition —
      * Windows macros don't record a wrap bit for them. Our engine only
-     * covers the whole doc when wrap is set, so force it. In-Selection
-     * scoping is not supported yet (GAP-26) — log and search the doc. */
+     * covers the whole doc when wrap is set, so force it. */
     gboolean wrap = p->wrap;
-    if (cmd == SNR_IDREPLACEALL || cmd == SNR_IDCMARKALL) wrap = TRUE;
-    if (p->in_selection)
-        g_message("macro: Find/Replace 'In selection' not supported — "
-                  "searching whole document");
+    if (!p->in_selection &&
+        (cmd == SNR_IDREPLACEALL || cmd == SNR_IDCMARKALL)) wrap = TRUE;
 
     findreplace_set_sci(sci);
     findreplace_set_options(p->find, p->repl ? p->repl : "",
-                            p->match_case, p->whole_word, wrap, p->mode);
+                            p->match_case, p->whole_word, wrap, p->mode,
+                            p->in_selection, p->dot_nl);
+    findreplace_set_mark_options(p->purge, p->bookmark_line);
     switch ((int)cmd) {
         case SNR_IDREPLACEALL: findreplace_replace_all(); break;
         case SNR_IDREPLACE:    findreplace_replace_one(); break;
@@ -381,17 +382,14 @@ static void snr_step(GtkWidget *sci, SnrPending *p,
             break;
         case SNR_CMD_BOOLEANS:
             if (!p->active) snr_reset(p);
-            p->whole_word   = (lp & IDF_WHOLEWORD)       != 0;
-            p->match_case   = (lp & IDF_MATCHCASE)       != 0;
-            p->in_selection = (lp & IDF_IN_SELECTION)    != 0;
-            p->wrap         = (lp & IDF_WRAP)            != 0;
-            p->down         = (lp & IDF_WHICH_DIRECTION) != 0;
-            if (lp & (IDF_PURGE_CHECK | IDF_MARKLINE_CHECK))
-                g_message("macro: purge/bookmark-line Find flags not "
-                          "supported (ignored)");
-            if (lp & IDF_REDOTMATCHNL)
-                g_message("macro: '. matches newline' not supported "
-                          "(ignored)");
+            p->whole_word    = (lp & IDF_WHOLEWORD)       != 0;
+            p->match_case    = (lp & IDF_MATCHCASE)       != 0;
+            p->in_selection  = (lp & IDF_IN_SELECTION)    != 0;
+            p->wrap          = (lp & IDF_WRAP)            != 0;
+            p->down          = (lp & IDF_WHICH_DIRECTION) != 0;
+            p->purge         = (lp & IDF_PURGE_CHECK)     != 0;
+            p->bookmark_line = (lp & IDF_MARKLINE_CHECK)  != 0;
+            p->dot_nl        = (lp & IDF_REDOTMATCHNL)    != 0;
             break;
         case SNR_CMD_EXEC:
             snr_exec(sci, p, lp);
