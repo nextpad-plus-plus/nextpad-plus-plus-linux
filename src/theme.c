@@ -320,6 +320,12 @@ void theme_modern_reload(void)
         dark ? "#4a4a52" : "#ffffff",
         tab_active);
 
+    /* Side-panel title bars: +1px over Classic's 25px so the hairline
+     * under the panel title aligns flawlessly with the Tahoe-inspired
+     * tab strip's bottom edge (user-reported 1px seam mismatch). */
+    g_string_append(css,
+        ".npp-modern .nextpad-panel-frame-titlebar { min-height: 26px; }\n");
+
     /* Full-tab colour tint (Tahoe) instead of Classic's 3px stripe. The
      * selectors out-specify the stripe rules from install_tab_color_css. */
     for (int i = 0; i < 5; i++) {

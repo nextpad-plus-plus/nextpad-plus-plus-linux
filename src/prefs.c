@@ -1174,14 +1174,15 @@ static GtkWidget *page_general(void)
     make_check(g, r++, "Show full file path in title bar",       g_prefs.show_full_path_in_title, G_CALLBACK(on_full_path));
     make_check(g, r++, "Remember session on quit",               g_prefs.remember_session,        G_CALLBACK(on_remember_sess));
 
-    /* GAP-70 — Tahoe section, matching the macOS General pane (header +
-     * checkbox; same label for locale-string reuse). Restart-gated. */
+    /* GAP-70 — Tahoe-inspired section, mirroring the macOS General pane
+     * layout. "-inspired" on Linux: there is no actual Tahoe/Liquid Glass
+     * here, only our flat interpretation. Restart-gated. */
     GtkWidget *th = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(th), "<b>Tahoe</b>");
+    gtk_label_set_markup(GTK_LABEL(th), "<b>Tahoe-inspired</b>");
     gtk_widget_set_halign(th, GTK_ALIGN_START);
     gtk_widget_set_margin_top(th, 8);
     gtk_grid_attach(GTK_GRID(g), th, 0, r++, 2, 1);
-    make_check(g, r++, "Switch to the New Tahoe look (Beta)",
+    make_check(g, r++, "Switch to the New Tahoe-inspired look (Beta)",
                g_prefs.appearance_style == 1, G_CALLBACK(on_modern_style));
     GtkWidget *tn = gtk_label_new("Takes effect on next launch.");
     gtk_widget_set_halign(tn, GTK_ALIGN_START);
