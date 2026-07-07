@@ -1198,7 +1198,7 @@ static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
                         "with Scintilla + Lexilla. GTK4 + libadwaita, C11.",
         "website",      "https://nextpad.org",
         "website-label","nextpad.org",
-        "copyright",    "© 2026 Andrey Letov + Andrea Coi (Linux port grafts from notetux-plus-plus)",
+        "copyright",    "© 2026 Andrey Letov",
         "license-type", GTK_LICENSE_GPL_3_0,
         "logo",         logo,
         NULL);

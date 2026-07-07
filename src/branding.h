@@ -4,7 +4,7 @@
  * strings so a future fork (e.g. notetux-plus-plus upstream) can flip the
  * brand with a one-line change.
  *
- * Current settings: Nextpad++ (pre-handoff to Andrea Coi).
+ * Current settings: Nextpad++.
  */
 #ifndef BRANDING_H
 #define BRANDING_H
