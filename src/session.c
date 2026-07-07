@@ -74,7 +74,7 @@ static const char *session_path(void)
 {
     static char s_path[1024];
     if (!s_path[0]) {
-        gchar *p = npp_user_file(NULL, "session.xml");
+        gchar *p = npp_local_file(NULL, "session.xml");   /* pinned local (GAP-17) */
         g_strlcpy(s_path, p, sizeof(s_path));
         g_free(p);
     }
@@ -165,8 +165,14 @@ static gboolean session_wants_doc(NppDoc *d)
            g_file_test(d->backup_filepath, G_FILE_TEST_EXISTS);
 }
 
+/* GAP-62 — -nosession: every save/restore becomes a no-op, regardless
+ * of which caller (quit paths, plugin NPPM messages) asks. */
+static gboolean s_session_disabled;
+void session_set_disabled(gboolean d) { s_session_disabled = d; }
+
 void session_save(void)
 {
+    if (s_session_disabled) return;
     /* ALL docs — primary + both split notebooks. Tabs moved to a split
      * view were previously invisible to the session (macOS issue #162's
      * data loss; same bug existed here). Split docs restore flattened
@@ -402,7 +408,7 @@ static gchar *resolve_backup_path(const char *recorded)
     if (g_file_test(recorded, G_FILE_TEST_EXISTS))
         return g_strdup(recorded);
     gchar *base = g_path_get_basename(recorded);
-    gchar *cand = npp_user_file("backup", base);
+    gchar *cand = npp_local_file("backup", base);   /* pinned local */
     g_free(base);
     if (g_file_test(cand, G_FILE_TEST_EXISTS))
         return cand;
@@ -412,8 +418,21 @@ static gchar *resolve_backup_path(const char *recorded)
 
 void session_restore(void)
 {
+    session_restore_from(NULL);
+}
+
+/* GAP-62 — restore from an explicit session file (-openSession), or the
+ * default session when path is NULL. */
+void session_restore_from(const char *path)
+{
+    /* An explicit -openSession file must load even under -nosession
+     * (N++ semantics: -nosession suppresses the AUTOMATIC session). */
+    if (s_session_disabled && !path) return;
     gchar *xml = NULL;
-    if (!g_file_get_contents(session_path(), &xml, NULL, NULL))
+    gboolean ok = path
+        ? g_file_get_contents(path, &xml, NULL, NULL)
+        : g_file_get_contents(session_path(), &xml, NULL, NULL);
+    if (!ok)
         return;
 
     ParseState st = { 0, NULL, 0, 0 };
@@ -454,8 +473,12 @@ void session_restore(void)
                                                         the modify event */
                 scintilla_send_message(SCINTILLA(nd->sci), SCI_SETTEXT,
                                        0, (sptr_t)content);
-                /* Restoring is not editing — clear the solid-yellow
-                 * change-history margin the SETTEXT just produced. */
+                /* Restoring is not editing — reset the change-history
+                 * baseline (needs an empty undo stack; the restore
+                 * itself is not undoable, which is fine on a fresh
+                 * session). */
+                scintilla_send_message(SCINTILLA(nd->sci),
+                                       SCI_EMPTYUNDOBUFFER, 0, 0);
                 changehistory_clear(nd->sci);
                 /* No SETSAVEPOINT: the buffer is intentionally left in
                  * the modified state (it has no on-disk home yet).
@@ -499,6 +522,8 @@ void session_restore(void)
                     scintilla_send_message(SCINTILLA(bd->sci),
                                            SCI_SETTEXT, 0,
                                            (sptr_t)backup_content);
+                    scintilla_send_message(SCINTILLA(bd->sci),
+                                           SCI_EMPTYUNDOBUFFER, 0, 0);
                     changehistory_clear(bd->sci);
                     /* The open-time savepoint deleted the on-disk
                      * snapshot (SAVEPOINTREACHED → backup_clean).

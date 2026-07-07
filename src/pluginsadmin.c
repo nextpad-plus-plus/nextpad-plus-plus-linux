@@ -416,7 +416,12 @@ static char *mtime_yyyymmdd(const char *path) {
 }
 
 static char *plugins_dir_path(void) {
-    return npp_user_subdir("plugins");
+    {
+        gchar *base = npp_local_dir();   /* plugins: local, never cloud */
+        gchar *p = g_build_filename(base, "plugins", NULL);
+        g_free(base);
+        return p;
+    }
 }
 
 static char *backups_dir_path(void) {

@@ -77,15 +77,49 @@ static GtkApplicationWindow *g_window = NULL;
  * Linux. Applied to the LAST file opened in the current invocation, matching
  * the macOS port's behaviour. */
 typedef struct {
-    int     line;        /* -l N (1-based), 0 = none */
-    int     column;      /* -c N (1-based), 0 = none */
-    int     position;    /* -p N (0-based byte), -1 = none */
-    char   *lang;        /* -lang NAME, owned, NULL = none */
-    char   *udl;         /* -udl NAME, owned, NULL = none */
-    gboolean read_only;  /* -ro */
+    int     line;        /* -l N / -nN (1-based), 0 = none */
+    int     column;      /* -c N / -cN (1-based), 0 = none */
+    int     position;    /* -p N / -pN (0-based byte), -1 = none */
+    char   *lang;        /* -lang NAME / -lLANG, owned, NULL = none */
+    char   *udl;         /* -udl NAME / -udl=NAME, owned, NULL = none */
+    gboolean read_only;  /* -ro / -fullReadOnly* */
     gboolean monitor;    /* -monitor (tail -f) */
 } CliPerFile;
 static CliPerFile g_cli = { 0, 0, -1, NULL, NULL, FALSE, FALSE };
+
+/* GAP-62 — session-wide flags (macOS NppCommandLineParams parity). */
+static gboolean g_cli_multi_inst;      /* -multiInst   */
+static gboolean g_cli_nosession;       /* -nosession   */
+static gboolean g_cli_notabbar;        /* -notabbar    */
+static gboolean g_cli_noplugin;        /* -noPlugin    */
+static gboolean g_cli_folders_ws;      /* -openFoldersAsWorkspace */
+static gboolean g_cli_open_session;    /* -openSession */
+static char    *g_cli_title_add;       /* -titleAdd=STR */
+
+const char *main_cli_title_add(void) { return g_cli_title_add; }
+
+static const char kUsage[] =
+    "Usage: Nextpad++ [options] [file(s)]\n"
+    "  -multiInst                launch a new instance\n"
+    "  -nosession                don't restore or save the session\n"
+    "  -notabbar                 hide the tab bar\n"
+    "  -noPlugin                 start without loading plugins\n"
+    "  -ro                       open file(s) read-only\n"
+    "  -monitor                  monitor the file (tail -f)\n"
+    "  -nN | -l N                go to line N\n"
+    "  -cN | -c N                go to column N\n"
+    "  -pN | -p N                go to byte position N\n"
+    "  -lLANG | -lang LANG       apply language LANG\n"
+    "  -udl=NAME | -udl NAME     apply User Defined Language NAME\n"
+    "  -LXX                      UI localization override (e.g. -Lfr)\n"
+    "  -openSession              treat the file argument as a session file\n"
+    "  -openFoldersAsWorkspace   open folder arguments in the Workspace panel\n"
+    "  -settingsDir=DIR          use DIR for settings\n"
+    "  -titleAdd=STR             append STR to the window title\n"
+    "  -xN -yN -alwaysOnTop -quickPrint -loadingTime -r\n"
+    "                            accepted for compatibility (not supported"
+    " by the toolkit)\n"
+    "  --help                    show this help\n";
 
 /* Strip our recognised flags from argv (in place). Returns new argc. */
 static int parse_cli_flags(int argc, char **argv)
@@ -108,10 +142,62 @@ static int parse_cli_flags(int argc, char **argv)
             g_cli.lang = g_strdup(argv[++i]);
         } else if (strcmp(a, "-udl") == 0 && i + 1 < argc) {
             g_cli.udl = g_strdup(argv[++i]);
-        } else if (strcmp(a, "-ro") == 0) {
+        } else if (g_ascii_strcasecmp(a, "-ro") == 0 ||
+                   g_ascii_strcasecmp(a, "-fullReadOnly") == 0 ||
+                   g_ascii_strcasecmp(a, "-fullReadOnlySavingForbidden") == 0) {
             g_cli.read_only = TRUE;
         } else if (strcmp(a, "-monitor") == 0) {
             g_cli.monitor = TRUE;
+        } else if (strcmp(a, "--help") == 0 || strcmp(a, "-help") == 0) {
+            fputs(kUsage, stdout);
+            exit(0);
+        } else if (g_ascii_strcasecmp(a, "-multiInst") == 0) {
+            g_cli_multi_inst = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-nosession") == 0) {
+            g_cli_nosession = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-notabbar") == 0) {
+            g_cli_notabbar = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-noPlugin") == 0) {
+            g_cli_noplugin = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-openFoldersAsWorkspace") == 0) {
+            g_cli_folders_ws = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-openSession") == 0) {
+            g_cli_open_session = TRUE;
+        } else if (g_str_has_prefix(a, "-settingsDir=")) {
+            npp_paths_set_override(a + strlen("-settingsDir="));
+        } else if (g_str_has_prefix(a, "-titleAdd=")) {
+            g_free(g_cli_title_add);
+            g_cli_title_add = g_strdup(a + strlen("-titleAdd="));
+        } else if (g_str_has_prefix(a, "-udl=")) {
+            g_free(g_cli.udl);
+            g_cli.udl = g_strdup(a + 5);
+        } else if (a[0] == '-' && a[1] == 'L' && g_ascii_isalpha(a[2])) {
+            extern void i18n_set_cli_locale(const char *code);
+            i18n_set_cli_locale(a + 2);
+        } else if (a[0] == '-' && strchr("ncpxy", a[1]) &&
+                   (g_ascii_isdigit(a[2]) ||
+                    (a[2] == '-' && g_ascii_isdigit(a[3])))) {
+            /* Glued numerics (Windows/macOS style): -n42 -c3 -p100 -x.. -y.. */
+            int v = atoi(a + 2);
+            switch (a[1]) {
+                case 'n': g_cli.line = v;     break;
+                case 'c': g_cli.column = v;   break;
+                case 'p': g_cli.position = v; break;
+                case 'x': case 'y':
+                    g_message("cli: -%c is not supported by GTK4/Wayland "
+                              "(windows cannot be positioned)", a[1]);
+                    break;
+            }
+        } else if (a[0] == '-' && a[1] == 'l' && a[2] && a[2] != 'o' &&
+                   !g_ascii_isdigit(a[2])) {
+            /* Glued language: -lpython (excludes -loadingTime). */
+            g_free(g_cli.lang);
+            g_cli.lang = g_strdup(a + 2);
+        } else if (g_ascii_strcasecmp(a, "-alwaysOnTop") == 0 ||
+                   g_ascii_strcasecmp(a, "-quickPrint") == 0 ||
+                   g_ascii_strcasecmp(a, "-loadingTime") == 0 ||
+                   strcmp(a, "-r") == 0) {
+            g_message("cli: %s accepted but not supported on this platform", a);
         } else {
             argv[out++] = argv[i];
         }
@@ -427,7 +513,7 @@ static void action_quit(GSimpleAction *a, GVariant *p, gpointer ud) {
         session_stash_geometry(ww, wh, wx, wy, maxim);
     }
     /* P3 — only persist the session when the pref allows it. */
-    if (g_prefs.remember_session)
+    if (g_prefs.remember_session && !g_cli_nosession)
         session_save();
     if (g_app) editor_close_all_quit(G_APPLICATION(g_app));
 }
@@ -608,7 +694,7 @@ static void action_plugins_admin(GSimpleAction *a, GVariant *p, gpointer u) {
 /* Q6/Q9 — Open ~/.nextpad++/plugins/ in the file manager. */
 static void action_open_plugins_folder(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
-    gchar *dir = npp_user_subdir("plugins");
+    gchar *dir = npp_local_file("plugins", NULL);
     g_mkdir_with_parents(dir, 0700);
     gchar *uri = g_filename_to_uri(dir, NULL, NULL);
     if (uri)
@@ -6646,7 +6732,8 @@ static gboolean on_window_delete(GtkWindow *w, gpointer ud)
     plugin_notify_before_shutdown();
     /* Capture session before tabs start closing so paths + caret positions
      * are still readable. session_save() silently skips Untitled docs. */
-    session_save();
+    if (!g_cli_nosession)
+        session_save();
     editor_close_all_quit(G_APPLICATION(app));
     plugin_notify_shutdown();
     /* If editor_close_all_quit didn't dispatch g_application_quit (user
@@ -6968,8 +7055,10 @@ static void build_main_window(GtkApplication *app)
      *   ~/.config/nextpad-plus-plus/plugins/<Name>/<Name>.so
      *   /usr/lib/nextpad-plus-plus/plugins/<Name>/<Name>.so
      *   /usr/local/lib/nextpad-plus-plus/plugins/<Name>/<Name>.so */
-    plugin_init(GTK_WIDGET(g_window));
-    plugin_load_all();
+    if (!g_cli_noplugin) {
+        plugin_init(GTK_WIDGET(g_window));
+        plugin_load_all();
+    }
     /* GAP-20 — the Plugins menu lists each loaded plugin's FuncItems;
      * they only exist after plugin_load_all, so rebuild the menubar. */
     if (plugin_count() > 0)
@@ -7205,6 +7294,7 @@ static gboolean focus_editor_idle(gpointer d)
 
 static void on_activate(GtkApplication *app, gpointer ud)
 {
+    if (g_getenv("NPP_CLI_DEBUG")) g_message("cli: on_activate");
     (void)ud;
     if (!g_window) {
         build_main_window(app);
@@ -7215,8 +7305,12 @@ static void on_activate(GtkApplication *app, gpointer ud)
         /* P3 — restore previous session only when the pref allows it.
          * session_restore() already silently skips missing files; the
          * keep_absent_session pref is honored inside session.c. */
-        if (g_prefs.remember_session)
+        if (g_prefs.remember_session && !g_cli_nosession)
             session_restore();
+        if (g_cli_notabbar) {
+            extern void editor_force_hide_tabbar(void);
+            editor_force_hide_tabbar();
+        }
     }
     gtk_window_present(GTK_WINDOW(g_window));
     g_idle_add(focus_editor_idle, NULL);
@@ -7227,10 +7321,26 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
                     const gchar *hint, gpointer ud)
 {
     (void)hint; (void)ud;
+    if (g_getenv("NPP_CLI_DEBUG"))
+        g_message("cli: on_open n=%d", n_files);
     if (!g_window) build_main_window(app);
     for (gint i = 0; i < n_files; i++) {
         const char *path = g_file_peek_path(files[i]);
-        if (path) editor_open_path_guarded(path);   /* G17 size guard */
+        if (!path) continue;
+        if (g_cli_open_session) {
+            /* GAP-62 — the file argument names a session to load. */
+            extern void session_restore_from(const char *path);
+            session_restore_from(path);
+            continue;
+        }
+        if (g_cli_folders_ws &&
+            g_file_test(path, G_FILE_TEST_IS_DIR)) {
+            /* GAP-62 — folder args land in the Workspace panel. */
+            workspace_add_folder(path);
+            workspace_set_visible(TRUE);
+            continue;
+        }
+        editor_open_path_guarded(path);             /* G17 size guard */
     }
     /* G3.14: apply parsed CLI flags to whichever file is now active. */
     apply_cli_flags_to_current();
@@ -7245,6 +7355,11 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
 
 int main(int argc, char **argv)
 {
+    /* GAP-62 — flags must parse FIRST: -settingsDir redirects every path
+     * below, -nosession/-noPlugin gate the loaders, --help exits. */
+    argc = parse_cli_flags(argc, argv);
+    if (g_cli_nosession) session_set_disabled(TRUE);
+
     /* Load styles, lexers, prefs, localisation, recent files before any
      * window exists. */
     /* P1 — match macOS: create ~/.nextpad++/ and seed bundled model XMLs
@@ -7296,11 +7411,13 @@ int main(int argc, char **argv)
         }
     }
 
-    /* G3.14: strip our recognised flags from argv before GApplication sees
-     * it; remaining args (file paths) flow into on_open as GFile*. */
-    argc = parse_cli_flags(argc, argv);
-
-    g_app = gtk_application_new(kAppId, G_APPLICATION_HANDLES_OPEN);
+    if (g_getenv("NPP_CLI_DEBUG"))
+        g_message("cli: main argc=%d argv1=%s", argc,
+                  argc > 1 ? argv[1] : "(none)");
+    g_app = gtk_application_new(kAppId,
+        G_APPLICATION_HANDLES_OPEN |
+        (g_cli_multi_inst ? G_APPLICATION_NON_UNIQUE
+                          : G_APPLICATION_FLAGS_NONE));
     g_signal_connect(g_app, "startup",  G_CALLBACK(on_startup),  NULL);
     g_signal_connect(g_app, "activate", G_CALLBACK(on_activate), NULL);
     g_signal_connect(g_app, "open",     G_CALLBACK(on_open),     NULL);

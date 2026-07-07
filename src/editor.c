@@ -1309,14 +1309,19 @@ static void update_window_title(void)
     if (!doc) return;
 
     const char *mod = doc->modified ? "*" : "";
+    /* GAP-62 — -titleAdd=STR appends to the title (macOS parity). */
+    extern const char *main_cli_title_add(void);
+    const char *extra = main_cli_title_add();
     char buf[512];
     if (doc->filepath) {
         const char *name = g_prefs.show_full_path_in_title
                            ? doc->filepath
                            : g_path_get_basename(doc->filepath);
-        snprintf(buf, sizeof(buf), "%s%s — " APP_NAME, mod, name);
+        snprintf(buf, sizeof(buf), "%s%s — " APP_NAME "%s%s", mod, name,
+                 extra ? " " : "", extra ? extra : "");
     } else {
-        snprintf(buf, sizeof(buf), "%sUntitled-%d — " APP_NAME, mod, doc->new_index);
+        snprintf(buf, sizeof(buf), "%sUntitled-%d — " APP_NAME "%s%s", mod,
+                 doc->new_index, extra ? " " : "", extra ? extra : "");
     }
 
     gtk_window_set_title(GTK_WINDOW(s_window), buf);
@@ -1510,7 +1515,8 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
     if (code == SCN_SAVEPOINTREACHED) {
         doc->modified = FALSE;
         backup_clean(doc);
-        changehistory_on_save(sci);
+        /* GAP-42: native change history converts modified→saved on the
+         * savepoint itself — no manual marker conversion needed. */
         int page = sci_page_num(sci);
         refresh_tab_label(page);
         update_window_title();
@@ -1631,9 +1637,6 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         auto_insert_track_modified(sci,
             (Sci_Position)n->position, (Sci_Position)n->length,
             (n->modificationType & SC_MOD_INSERTTEXT) != 0);
-        Sci_Position mod_line = (Sci_Position)sci_msg(sci, SCI_LINEFROMPOSITION,
-            (uptr_t)n->position, 0);
-        changehistory_on_modified(sci, mod_line, n->linesAdded);
         link_gen_bump(sci);
         if (doc->filepath)
             gitgutter_update(sci, doc->filepath);
@@ -2368,6 +2371,16 @@ static gboolean close_sci_full(GtkWidget *sci, gboolean *dont_save_all)
 }
 
 
+/* GAP-62 — -notabbar: hide the tab strip on every notebook this run
+ * (runtime-only; the hide_tab_bar pref is untouched). */
+void editor_force_hide_tabbar(void)
+{
+    GtkWidget *nbs[3] = { s_notebook, s_notebook_v, s_notebook_h };
+    for (int k = 0; k < 3; k++)
+        if (nbs[k])
+            gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nbs[k]), FALSE);
+}
+
 /* GAP-52 — run fn over every open editor (splits included). */
 void editor_foreach_sci(void (*fn)(GtkWidget *sci))
 {
@@ -3029,7 +3042,12 @@ void editor_reapply_styles(void)
         stylestore_apply_default(sci);
         sci_msg(sci, SCI_STYLECLEARALL, 0, 0);
         stylestore_apply_global(sci);
-        if (lang && *lang)
+        if (lang && strncmp(lang, "udl:", 4) == 0) {
+            /* GAP-44 — stylestore has no "udl:" block; without this the
+             * UDL's colors were LOST on every theme toggle. lexer_apply
+             * routes to udl_apply (full pipeline incl. dark blend). */
+            lexer_apply(sci, lang);
+        } else if (lang && *lang)
             stylestore_apply_lexer(sci, lang);
         /* Line spacing derives from the (possibly changed) text height —
          * re-derive after styling (macOS #149). */

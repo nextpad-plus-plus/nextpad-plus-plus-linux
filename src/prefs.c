@@ -1,4 +1,5 @@
 #include "prefs.h"
+#include "toolbar.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "backup.h"
@@ -100,6 +101,7 @@ NppPrefs g_prefs = {
     .auto_indent             = AUTO_INDENT_ADVANCED,  /* macOS default — kPrefAutoIndent=@1 */
     .backspace_unindent      = FALSE,
     .column_sel_to_multi_edit= TRUE,   /* N++/macOS default */
+    .toolbar_color_custom    = "#0078D4",
     .file_auto_detect        = TRUE,
     .file_update_silently    = FALSE,
     .clickable_link_enable   = TRUE,
@@ -342,6 +344,24 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "schemes"))
             strncpy(g_prefs.clickable_link_schemes, val,
                     sizeof(g_prefs.clickable_link_schemes) - 1);
+    }
+    else if (!strcmp(group, "ToolbarColor")) {             /* GAP-46/47 */
+        if      (!strcmp(attr, "mode"))    g_prefs.toolbar_color_mode   = CLAMP(atoi(val), 0, 2);
+        else if (!strcmp(attr, "choice"))  g_prefs.toolbar_color_choice = CLAMP(atoi(val), 0, 8);
+        else if (!strcmp(attr, "custom"))
+            g_strlcpy(g_prefs.toolbar_color_custom, val,
+                      sizeof(g_prefs.toolbar_color_custom));
+        else if (!strcmp(attr, "plugins"))  g_prefs.toolbar_color_plugins = is_yes(val);
+        else if (!strcmp(attr, "standard")) g_prefs.toolbar_standard_icons = is_yes(val);
+    }
+    else if (!strcmp(group, "globalOverride")) {           /* GAP-43 */
+        if      (!strcmp(attr, "fg"))        g_prefs.gov_fg        = is_yes(val);
+        else if (!strcmp(attr, "bg"))        g_prefs.gov_bg        = is_yes(val);
+        else if (!strcmp(attr, "font"))      g_prefs.gov_font      = is_yes(val);
+        else if (!strcmp(attr, "fontSize"))  g_prefs.gov_font_size = is_yes(val);
+        else if (!strcmp(attr, "bold"))      g_prefs.gov_bold      = is_yes(val);
+        else if (!strcmp(attr, "italic"))    g_prefs.gov_italic    = is_yes(val);
+        else if (!strcmp(attr, "underline")) g_prefs.gov_underline = is_yes(val);
     }
     else if (!strcmp(group, "AppearanceStyle")) {          /* GAP-70 */
         if (!strcmp(attr, "style"))
@@ -1692,13 +1712,197 @@ static GtkWidget *page_delimiter(void)
 
 /* GAP-37 — Cloud and Link page (Link half; the Cloud seam is GAP-17).
  * Layout and labels mirror macOS _buildCloudLinkPage. */
+/* GAP-46/47 — Preferences ▸ Toolbar (macOS a2ee1ab / fbf4a86). */
+static void toolbar_live_apply(void)
+{
+    prefs_save();
+    toolbar_apply_theme();   /* reloads every icon through load_icon() */
+}
+
+static void on_tbc_mode(GtkToggleButton *b, gpointer mode)
+{
+    if (!npp_toggle_get_active(GTK_WIDGET(b))) return;
+    g_prefs.toolbar_color_mode = GPOINTER_TO_INT(mode);
+    toolbar_live_apply();
+}
+
+static void on_tbc_choice(GtkToggleButton *b, gpointer choice)
+{
+    if (!npp_toggle_get_active(GTK_WIDGET(b))) return;
+    g_prefs.toolbar_color_choice = GPOINTER_TO_INT(choice);
+    toolbar_live_apply();
+}
+
+static void on_tbc_custom(GtkColorButton *cb, gpointer u)
+{
+    (void)u;
+    GdkRGBA c;
+    gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(cb), &c);
+    snprintf(g_prefs.toolbar_color_custom,
+             sizeof(g_prefs.toolbar_color_custom), "#%02X%02X%02X",
+             (int)(c.red * 255), (int)(c.green * 255), (int)(c.blue * 255));
+    if (g_prefs.toolbar_color_choice == 8) toolbar_live_apply();
+    else prefs_save();
+}
+
+static void on_tbc_plugins(GtkToggleButton *b, gpointer u)
+{
+    (void)u;
+    g_prefs.toolbar_color_plugins = npp_toggle_get_active(GTK_WIDGET(b));
+    toolbar_live_apply();
+}
+
+static void on_tbc_standard(GtkToggleButton *b, gpointer u)
+{
+    (void)u;
+    g_prefs.toolbar_standard_icons = npp_toggle_get_active(GTK_WIDGET(b));
+    toolbar_live_apply();
+}
+
+static GtkWidget *page_toolbar(void)
+{
+    GtkWidget *g = make_grid();
+    int r = 0;
+
+    GtkWidget *h = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(h), "<b>Icon colorization</b>");
+    gtk_widget_set_halign(h, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), h, 0, r++, 2, 1);
+
+    static const char *kModes[3] = {
+        "Off", "Partial (recolor accents only)", "Complete (mono silhouette)"
+    };
+    GtkWidget *mode_first = NULL;
+    for (int i = 0; i < 3; i++) {
+        GtkWidget *rb = npp_radio_new(mode_first, kModes[i]);
+        if (!mode_first) mode_first = rb;
+        if (g_prefs.toolbar_color_mode == i) npp_toggle_set_active(rb, TRUE);
+        g_signal_connect(rb, "toggled", G_CALLBACK(on_tbc_mode),
+                         GINT_TO_POINTER(i));
+        gtk_grid_attach(GTK_GRID(g), rb, 0, r++, 2, 1);
+    }
+
+    GtkWidget *hc = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(hc), "<b>Color</b>");
+    gtk_widget_set_halign(hc, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(hc, 8);
+    gtk_grid_attach(GTK_GRID(g), hc, 0, r++, 2, 1);
+
+    static const char *kColors[9] = {
+        "Red", "Green", "Blue", "Purple", "Cyan", "Olive", "Yellow",
+        "System Accent", "Custom"
+    };
+    GtkWidget *col_first = NULL;
+    GtkWidget *flow = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(flow), 2);
+    gtk_grid_set_column_spacing(GTK_GRID(flow), 16);
+    for (int i = 0; i < 9; i++) {
+        GtkWidget *rb = npp_radio_new(col_first, kColors[i]);
+        if (!col_first) col_first = rb;
+        if (g_prefs.toolbar_color_choice == i) npp_toggle_set_active(rb, TRUE);
+        g_signal_connect(rb, "toggled", G_CALLBACK(on_tbc_choice),
+                         GINT_TO_POINTER(i));
+        gtk_grid_attach(GTK_GRID(flow), rb, i % 3, i / 3, 1, 1);
+    }
+    gtk_grid_attach(GTK_GRID(g), flow, 0, r++, 2, 1);
+
+    GtkWidget *well = gtk_color_button_new();
+    {
+        GdkRGBA c;
+        if (gdk_rgba_parse(&c, g_prefs.toolbar_color_custom))
+            gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(well), &c);
+    }
+    g_signal_connect(well, "color-set", G_CALLBACK(on_tbc_custom), NULL);
+    row(g, r++, "Custom color:", well);
+
+    make_check(g, r++, "Apply color to plugin icons",
+               g_prefs.toolbar_color_plugins, G_CALLBACK(on_tbc_plugins));
+    make_check(g, r++, "Standard icons (mode-agnostic classic set)",
+               g_prefs.toolbar_standard_icons, G_CALLBACK(on_tbc_standard));
+    return g;
+}
+
+/* GAP-17 — "Settings on cloud" (Windows/macOS parity). The chosen path
+ * lives in the LOCAL cloud/choice file, never in config.xml (which may
+ * itself be cloud-redirected). Applies on next launch. */
+static void cloud_choice_write(const char *path)
+{
+    const char *choice = npp_cloud_choice_file();
+    if (path && *path) {
+        gchar *dir = g_path_get_dirname(choice);
+        g_mkdir_with_parents(dir, 0700);
+        g_free(dir);
+        g_file_set_contents(choice, path, -1, NULL);
+    } else {
+        g_unlink(choice);
+    }
+}
+
+static void on_cloud_none(GtkToggleButton *b, gpointer entry)
+{
+    if (!npp_toggle_get_active(GTK_WIDGET(b))) return;
+    gtk_widget_set_sensitive(GTK_WIDGET(entry), FALSE);
+    cloud_choice_write(NULL);
+}
+
+static void on_cloud_path_radio(GtkToggleButton *b, gpointer entry)
+{
+    gboolean on = npp_toggle_get_active(GTK_WIDGET(b));
+    gtk_widget_set_sensitive(GTK_WIDGET(entry), on);
+    if (on)
+        cloud_choice_write(gtk_editable_get_text(GTK_EDITABLE(entry)));
+}
+
+static void on_cloud_path_changed(GtkEditable *e, gpointer radio)
+{
+    if (npp_toggle_get_active(GTK_WIDGET(radio)))
+        cloud_choice_write(gtk_editable_get_text(e));
+}
+
 static GtkWidget *page_cloud_link(void)
 {
     GtkWidget *g = make_grid();
     int r = 0;
+
+    GtkWidget *hc = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(hc), "<b>Settings on cloud</b>");
+    gtk_widget_set_halign(hc, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), hc, 0, r++, 2, 1);
+
+    gchar *saved = NULL;
+    g_file_get_contents(npp_cloud_choice_file(), &saved, NULL, NULL);
+    if (saved) g_strstrip(saved);
+
+    GtkWidget *rb_none = npp_radio_new(NULL, "No Cloud");
+    GtkWidget *rb_path = npp_radio_new(rb_none,
+                                       "Set your cloud location path here:");
+    GtkWidget *path_entry = gtk_entry_new();
+    gtk_widget_set_hexpand(path_entry, TRUE);
+    if (saved && *saved)
+        gtk_editable_set_text(GTK_EDITABLE(path_entry), saved);
+    npp_toggle_set_active(saved && *saved ? rb_path : rb_none, TRUE);
+    gtk_widget_set_sensitive(path_entry, saved && *saved);
+    g_free(saved);
+
+    gtk_grid_attach(GTK_GRID(g), rb_none, 0, r++, 2, 1);
+    gtk_grid_attach(GTK_GRID(g), rb_path, 0, r++, 2, 1);
+    gtk_grid_attach(GTK_GRID(g), path_entry, 0, r++, 2, 1);
+    GtkWidget *note = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(note),
+        "<small>Settings (config, styles, shortcuts, user languages) move to "
+        "the chosen folder on the next launch.\nSession, backups and plugins "
+        "always stay on this computer.</small>");
+    gtk_widget_set_halign(note, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), note, 0, r++, 2, 1);
+
+    g_signal_connect(rb_none, "toggled", G_CALLBACK(on_cloud_none), path_entry);
+    g_signal_connect(rb_path, "toggled", G_CALLBACK(on_cloud_path_radio), path_entry);
+    g_signal_connect(path_entry, "changed", G_CALLBACK(on_cloud_path_changed), rb_path);
+
     GtkWidget *h = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(h), "<b>Clickable Link Settings</b>");
     gtk_widget_set_halign(h, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(h, 12);
     gtk_grid_attach(GTK_GRID(g), h, 0, r++, 2, 1);
     make_check(g, r++, "Enable",              g_prefs.clickable_link_enable,       G_CALLBACK(on_link_enable));
     make_check(g, r++, "No underline",        g_prefs.clickable_link_no_underline, G_CALLBACK(on_link_nounder));
@@ -1900,6 +2104,7 @@ void prefs_dialog_show(GtkWidget *parent)
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_indentation()),     prefs_tab_label("Indentation"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_tab_bar()),         prefs_tab_label("Tab Bar"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_dark_mode()),       prefs_tab_label("Dark Mode"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_toolbar()),          prefs_tab_label("Toolbar"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_margins()),         prefs_tab_label("Margins"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_new_document()),    prefs_tab_label("New Document"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_backup()),          prefs_tab_label("Backup"));

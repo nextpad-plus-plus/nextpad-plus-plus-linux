@@ -6,6 +6,7 @@
  * GMarkupParser. Config override at $HOME/" APP_CONFIG_DIR "/stylers.xml.
  */
 #include "stylestore.h"
+#include "prefs.h"
 #include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
@@ -496,17 +497,44 @@ static sptr_t sci_msg(GtkWidget *sci, unsigned int m, uptr_t w, sptr_t l)
     return scintilla_send_message(SCINTILLA(sci), m, w, l);
 }
 
+static const StyleEntry *find_global(const char *name);
+
 static void apply_entry(GtkWidget *sci, int sid, const StyleEntry *e)
 {
-    if (e->fg >= 0) sci_msg(sci, SCI_STYLESETFORE, (uptr_t)sid, e->fg);
-    if (e->bg >= 0) sci_msg(sci, SCI_STYLESETBACK, (uptr_t)sid, e->bg);
-    if (e->bold      >= 0) sci_msg(sci, SCI_STYLESETBOLD,      (uptr_t)sid, e->bold);
-    if (e->italic    >= 0) sci_msg(sci, SCI_STYLESETITALIC,    (uptr_t)sid, e->italic);
-    if (e->underline >= 0) sci_msg(sci, SCI_STYLESETUNDERLINE, (uptr_t)sid, e->underline);
-    if (e->font_name[0])
-        sci_msg(sci, SCI_STYLESETFONT, (uptr_t)sid, (sptr_t)e->font_name);
-    if (e->font_size > 0)
-        sci_msg(sci, SCI_STYLESETSIZE, (uptr_t)sid, e->font_size);
+    /* GAP-43 — Global override (macOS d713bbc / Windows parity): each
+     * checked "Force ... for all styles" flag substitutes that attribute
+     * from the "Global override" entry into EVERY style, STYLE_DEFAULT
+     * included. */
+    StyleEntry eff = *e;
+    if (g_prefs.gov_fg || g_prefs.gov_bg || g_prefs.gov_font ||
+        g_prefs.gov_font_size || g_prefs.gov_bold || g_prefs.gov_italic ||
+        g_prefs.gov_underline) {
+        const StyleEntry *gov = find_global("Global override");
+        if (gov) {
+            if (g_prefs.gov_fg && gov->fg >= 0)   eff.fg = gov->fg;
+            if (g_prefs.gov_bg && gov->bg >= 0)   eff.bg = gov->bg;
+            if (g_prefs.gov_font && gov->font_name[0])
+                g_strlcpy(eff.font_name, gov->font_name,
+                          sizeof(eff.font_name));
+            if (g_prefs.gov_font_size && gov->font_size > 0)
+                eff.font_size = gov->font_size;
+            /* Flag-only substitution mirrors macOS: the override's state
+             * wins outright (absent attr counts as "off"). */
+            if (g_prefs.gov_bold)      eff.bold      = gov->bold > 0;
+            if (g_prefs.gov_italic)    eff.italic    = gov->italic > 0;
+            if (g_prefs.gov_underline) eff.underline = gov->underline > 0;
+        }
+    }
+
+    if (eff.fg >= 0) sci_msg(sci, SCI_STYLESETFORE, (uptr_t)sid, eff.fg);
+    if (eff.bg >= 0) sci_msg(sci, SCI_STYLESETBACK, (uptr_t)sid, eff.bg);
+    if (eff.bold      >= 0) sci_msg(sci, SCI_STYLESETBOLD,      (uptr_t)sid, eff.bold);
+    if (eff.italic    >= 0) sci_msg(sci, SCI_STYLESETITALIC,    (uptr_t)sid, eff.italic);
+    if (eff.underline >= 0) sci_msg(sci, SCI_STYLESETUNDERLINE, (uptr_t)sid, eff.underline);
+    if (eff.font_name[0])
+        sci_msg(sci, SCI_STYLESETFONT, (uptr_t)sid, (sptr_t)eff.font_name);
+    if (eff.font_size > 0)
+        sci_msg(sci, SCI_STYLESETSIZE, (uptr_t)sid, eff.font_size);
 }
 
 static const StyleEntry *find_global(const char *name)
@@ -572,6 +600,24 @@ void stylestore_apply_global(GtkWidget *sci)
 /* Fold-margin colour plus the 7 fold-marker glyph colours. Factored out so
  * the Search Results panel's fold marks match the editor's exactly. Safe to
  * call before a theme is loaded — find_global() then yields the fallbacks. */
+/* Public lookup of a GlobalStyles entry by name (macOS
+ * globalStyleNamed:) — GAP-43/44 consumers outside this file. */
+gboolean stylestore_get_global_entry(const char *name, NppStyleEntry *out)
+{
+    const StyleEntry *e = find_global(name);
+    if (!e || !out) return FALSE;
+    g_strlcpy(out->name, e->name, sizeof(out->name));
+    out->style_id  = e->style_id;
+    out->fg        = e->fg;
+    out->bg        = e->bg;
+    out->bold      = e->bold;
+    out->italic    = e->italic;
+    out->underline = e->underline;
+    g_strlcpy(out->font_name, e->font_name, sizeof(out->font_name));
+    out->font_size = e->font_size;
+    return TRUE;
+}
+
 void stylestore_apply_fold_marks(GtkWidget *sci)
 {
     const StyleEntry *fm = find_global("Fold margin");

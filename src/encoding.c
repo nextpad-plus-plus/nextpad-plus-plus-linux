@@ -26,6 +26,9 @@ const EncDef npp_encodings[] = {
     { "KOI8-R",        "KOI8-R",         FALSE },
     /* East Asian                                                    */
     { "Shift-JIS",     "SHIFT-JIS",      FALSE },
+    /* GB2312 decodes/saves through GBK — the strict GB2312 iconv table
+     * rejects common chars; Windows CP936 == GBK (macOS a642bab). */
+    { "GB2312",        "GBK",            FALSE },
     { "GB18030",       "GB18030",        FALSE },
     { "Big5",          "BIG5",           FALSE },
     { "EUC-KR",        "EUC-KR",         FALSE },
@@ -68,6 +71,57 @@ static gsize bom_size(const EncDef *e, const guchar *data, gsize len)
     return 0;
 }
 
+/* GAP-57 — uchardet sniffing. Returns one of our display names, or
+ * NULL when detection is empty/untrusted. */
+#include <uchardet/uchardet.h>
+
+static const char *canonical_cjk(const char *cs)
+{
+    /* Simplified Chinese family → GB2312 (decodes via GBK). */
+    if (!g_ascii_strcasecmp(cs, "GB18030")) return "GB18030";
+    if (!g_ascii_strncasecmp(cs, "GB", 2) ||
+        !g_ascii_strcasecmp(cs, "HZ-GB-2312") ||
+        !g_ascii_strcasecmp(cs, "EUC-CN"))            return "GB2312";
+    if (!g_ascii_strncasecmp(cs, "BIG5", 4))          return "Big5";
+    if (!g_ascii_strcasecmp(cs, "SHIFT_JIS") ||
+        !g_ascii_strcasecmp(cs, "SHIFT-JIS") ||
+        !g_ascii_strcasecmp(cs, "CP932"))             return "Shift-JIS";
+    if (!g_ascii_strcasecmp(cs, "EUC-KR") ||
+        !g_ascii_strcasecmp(cs, "UHC") ||
+        !g_ascii_strcasecmp(cs, "CP949"))             return "EUC-KR";
+    if (!g_ascii_strcasecmp(cs, "WINDOWS-1252"))      return "Windows-1252";
+    if (!g_ascii_strcasecmp(cs, "WINDOWS-1251"))      return "Windows-1251";
+    if (!g_ascii_strcasecmp(cs, "WINDOWS-1250"))      return "Windows-1250";
+    if (!g_ascii_strcasecmp(cs, "KOI8-R"))            return "KOI8-R";
+    if (!g_ascii_strcasecmp(cs, "ISO-8859-15"))       return "ISO-8859-15";
+    if (!g_ascii_strcasecmp(cs, "ISO-8859-2"))        return "ISO-8859-2";
+    return NULL;
+}
+
+static const char *encoding_sniff_uchardet(const guchar *data, gsize len)
+{
+    if (!len) return NULL;
+    uchardet_t ud = uchardet_new();
+    /* 256 KB sample is plenty for a confident verdict on big files. */
+    gsize sample = len < 256 * 1024 ? len : 256 * 1024;
+    uchardet_handle_data(ud, (const char *)data, sample);
+    uchardet_data_end(ud);
+    const char *cs = uchardet_get_charset(ud);
+    const char *display = (cs && *cs) ? canonical_cjk(cs) : NULL;
+    uchardet_delete(ud);
+    if (!display) return NULL;
+
+    /* Trust the verdict only when the whole buffer decodes cleanly
+     * (macOS: reject lossy conversions so Western files never regress). */
+    const EncDef *e = find_enc(display);
+    gsize wlen = 0;
+    char *probe = g_convert((const gchar *)data, (gssize)len, "UTF-8",
+                            e->iconv, NULL, &wlen, NULL);
+    if (!probe) return NULL;
+    g_free(probe);
+    return display;
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
@@ -86,6 +140,16 @@ const char *encoding_detect(const guchar *data, gsize len)
     /* No BOM: validate UTF-8 */
     if (g_utf8_validate((const gchar *)data, (gssize)len, NULL))
         return "UTF-8";
+
+    /* GAP-57 (macOS a642bab) — non-UTF-8: ask uchardet (the same
+     * detector Windows N++ ships) before assuming Latin-1, so CJK
+     * files stop opening as mojibake. Families are canonicalized to
+     * the encodings our menu carries; a result is only trusted when
+     * iconv can actually decode the buffer with it. */
+    {
+        const char *sniffed = encoding_sniff_uchardet(data, len);
+        if (sniffed) return sniffed;
+    }
     return "ISO-8859-1";
 }
 

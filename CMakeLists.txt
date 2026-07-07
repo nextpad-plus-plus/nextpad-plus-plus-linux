@@ -21,6 +21,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK4 REQUIRED gtk4)
 pkg_check_modules(ADW  REQUIRED libadwaita-1)
+pkg_check_modules(UCHARDET REQUIRED uchardet)   # GAP-57 CJK detection
 
 set(SCI_ROOT "${CMAKE_SOURCE_DIR}/scintilla")
 set(LEX_ROOT "${CMAKE_SOURCE_DIR}/lexilla")
@@ -196,10 +197,10 @@ set_target_properties(nextpad_pp PROPERTIES BUILD_RPATH "${SCI_ROOT}/bin")
 target_link_libraries(nextpad_pp PRIVATE
     "${SCI_SO}"
     lexilla
-    ${GTK4_LIBRARIES} ${ADW_LIBRARIES}
+    ${GTK4_LIBRARIES} ${ADW_LIBRARIES} ${UCHARDET_LIBRARIES}
     m
 )
-target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${ADW_LIBRARY_DIRS})
+target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${ADW_LIBRARY_DIRS} ${UCHARDET_LIBRARY_DIRS})
 
 # -----------------------------------------------------------------------------
 # Install / packaging targets

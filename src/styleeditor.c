@@ -26,6 +26,7 @@
 #include "styleeditor.h"
 #include "paths.h"
 #include "gtk_compat.h"
+#include <stddef.h>
 #include "branding.h"
 #include "stylestore.h"
 #include "prefs.h"
@@ -107,6 +108,11 @@ typedef struct {
     GtkWidget *default_ext_entry;
     GtkWidget *user_ext_entry;
 
+    /* GAP-43 — "Force ... for all styles" checkboxes; visible only when
+     * the "Global override" style row is selected (macOS d713bbc). */
+    GtkWidget *gov_box;
+    GtkWidget *gov_checks[7];
+
     /* selection state */
     int sel_block;
     int sel_entry;
@@ -147,6 +153,30 @@ static void update_breadcrumb(SEState *s)
 /* Load entry into attribute panel                                    */
 /* ------------------------------------------------------------------ */
 
+static const struct { const char *label; size_t off; } kGovFlags[7] = {
+    { "Force foreground color for all styles", offsetof(NppPrefs, gov_fg) },
+    { "Force background color for all styles", offsetof(NppPrefs, gov_bg) },
+    { "Force font choice for all styles",      offsetof(NppPrefs, gov_font) },
+    { "Force font size choice for all styles", offsetof(NppPrefs, gov_font_size) },
+    { "Force bold choice for all styles",      offsetof(NppPrefs, gov_bold) },
+    { "Force italic choice for all styles",    offsetof(NppPrefs, gov_italic) },
+    { "Force underline choice for all styles", offsetof(NppPrefs, gov_underline) },
+};
+
+static void on_gov_toggled(GtkToggleButton *tb, gpointer data)
+{
+    SEState *s = (SEState *)data;
+    if (s->loading) return;
+    for (int i = 0; i < 7; i++) {
+        if (s->gov_checks[i] != GTK_WIDGET(tb)) continue;
+        gboolean *flag = (gboolean *)((char *)&g_prefs + kGovFlags[i].off);
+        *flag = npp_toggle_get_active(GTK_WIDGET(tb));
+        break;
+    }
+    prefs_save();
+    if (s->on_apply) s->on_apply();   /* live re-skin, like macOS */
+}
+
 static void load_entry_to_panel(SEState *s)
 {
     if (s->sel_block < 0 || s->sel_entry < 0) return;
@@ -183,6 +213,19 @@ static void load_entry_to_panel(SEState *s)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->bold_check),      e.bold > 0);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->italic_check),    e.italic > 0);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->underline_check), e.underline > 0);
+
+    /* GAP-43 — the Force-checkbox panel appears only on the
+     * "Global override" row; sync states while loading is TRUE. */
+    if (s->gov_box) {
+        gboolean is_gov = strcmp(e.name, "Global override") == 0;
+        gtk_widget_set_visible(s->gov_box, is_gov);
+        if (is_gov)
+            for (int i = 0; i < 7; i++) {
+                gboolean *flag =
+                    (gboolean *)((char *)&g_prefs + kGovFlags[i].off);
+                npp_toggle_set_active(s->gov_checks[i], *flag);
+            }
+    }
 
     s->loading = FALSE;
     update_breadcrumb(s);
@@ -689,6 +732,19 @@ void styleeditor_show(GtkWidget *parent, SEApplyFn on_apply)
     gtk_grid_set_column_spacing(GTK_GRID(ext_grid), 8);
     gtk_widget_set_margin_top(ext_grid, 8);
     npp_box_pack(GTK_BOX(right), ext_grid, FALSE, 0);
+
+    /* GAP-43 — Global override force-flags (hidden unless selected). */
+    s->gov_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_margin_top(s->gov_box, 8);
+    for (int i = 0; i < 7; i++) {
+        s->gov_checks[i] =
+            gtk_check_button_new_with_label(kGovFlags[i].label);
+        g_signal_connect(s->gov_checks[i], "toggled",
+                         G_CALLBACK(on_gov_toggled), s);
+        npp_box_pack(GTK_BOX(s->gov_box), s->gov_checks[i], FALSE, 0);
+    }
+    npp_box_pack(GTK_BOX(right), s->gov_box, FALSE, 0);
+    gtk_widget_set_visible(s->gov_box, FALSE);
 
     GtkWidget *de_lbl = gtk_label_new("Default ext.:");
     gtk_label_set_xalign(GTK_LABEL(de_lbl), 0.0f);

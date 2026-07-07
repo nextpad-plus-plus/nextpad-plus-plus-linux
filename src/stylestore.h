@@ -40,6 +40,7 @@ void stylestore_save_user(void);
 /* Save to the active style file: NULL/"Default" -> user stylers.xml,
  * else the user's themes/<name>.xml copy (macOS parity). */
 void stylestore_save_active(const char *theme_name);
+gboolean stylestore_get_global_entry(const char *name, NppStyleEntry *out);
 
 /* ------------------------------------------------------------------ */
 /* Apply to Scintilla                                                  */

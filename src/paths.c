@@ -11,7 +11,21 @@
 #define RESOURCES_DIR "/usr/share/nextpad-plus-plus"
 #endif
 
-gchar *npp_user_dir(void) {
+/* ALWAYS-local base — never redirected to the cloud. Session, backup,
+ * plugins and caches resolve through here so a "Settings on cloud"
+ * redirect can't move machine-local data off-device (macOS
+ * NppLocalConfigDir, GAP-17 / ef295c3). */
+/* GAP-62 — -settingsDir=DIR overrides the settings base entirely
+ * (both the local base and, transitively, the cloud pointer under it). */
+static char s_dir_override[512];
+
+void npp_paths_set_override(const char *dir)
+{
+    if (dir && *dir) g_strlcpy(s_dir_override, dir, sizeof(s_dir_override));
+}
+
+gchar *npp_local_dir(void) {
+    if (s_dir_override[0]) return g_strdup(s_dir_override);
     /* $XDG_DATA_HOME/nextpad++ (default ~/.local/share/nextpad++) —
      * the Linux analog of macOS's move to ~/Library/Application
      * Support/Nextpad++ (issue #67). The one-time migration from the
@@ -19,18 +33,76 @@ gchar *npp_user_dir(void) {
     return g_build_filename(g_get_user_data_dir(), APP_USER_SUBDIR, NULL);
 }
 
+gchar *npp_local_file(const char *subdir_or_null, const char *leaf) {
+    gchar *base = npp_local_dir();   /* honours -settingsDir override */
+    gchar *p = (subdir_or_null && *subdir_or_null)
+        ? g_build_filename(base, subdir_or_null, leaf, NULL)
+        : g_build_filename(base, leaf, NULL);
+    g_free(base);
+    return p;
+}
+
+/* "Settings on cloud" (GAP-17, Windows/macOS parity): the user's cloud
+ * folder if set AND usable, else NULL. The pointer lives in the LOCAL
+ * file cloud/choice — never in the cloud folder itself (bootstrap:
+ * config.xml may already be cloud-redirected). Resolved ONCE at first
+ * use; a change applies on the next launch ("restart to apply"). */
+static gchar    *s_cloud_dir;
+static gboolean  s_cloud_resolved;
+
+const char *npp_cloud_choice_file(void) {
+    static gchar *p;
+    if (!p) {
+        gchar *local = npp_local_dir();
+        p = g_build_filename(local, "cloud", "choice", NULL);
+        g_free(local);
+    }
+    return p;
+}
+
+static const char *cloud_dir_resolved(void) {
+    if (s_cloud_resolved) return s_cloud_dir;
+    s_cloud_resolved = TRUE;
+
+    gchar *raw = NULL;
+    if (!g_file_get_contents(npp_cloud_choice_file(), &raw, NULL, NULL))
+        return NULL;
+    g_strstrip(raw);
+    if (!raw[0]) { g_free(raw); return NULL; }
+
+    g_mkdir_with_parents(raw, 0700);
+    if (g_file_test(raw, G_FILE_TEST_IS_DIR) &&
+        g_access(raw, W_OK) == 0) {
+        s_cloud_dir = raw;   /* owned for process lifetime */
+    } else {
+        g_warning("cloud settings path unusable (%s) — using local", raw);
+        g_free(raw);
+    }
+    return s_cloud_dir;
+}
+
+/* Settings base — cloud when configured & usable, else local. */
+gchar *npp_user_dir(void) {
+    const char *cloud = cloud_dir_resolved();
+    if (cloud) return g_strdup(cloud);
+    return npp_local_dir();
+}
+
 gchar *npp_user_subdir(const char *subpath) {
     if (!subpath || !*subpath) return npp_user_dir();
-    return g_build_filename(g_get_user_data_dir(), APP_USER_SUBDIR,
-                            subpath, NULL);
+    gchar *base = npp_user_dir();
+    gchar *p = g_build_filename(base, subpath, NULL);
+    g_free(base);
+    return p;
 }
 
 gchar *npp_user_file(const char *subdir_or_null, const char *leaf) {
-    if (subdir_or_null && *subdir_or_null)
-        return g_build_filename(g_get_user_data_dir(), APP_USER_SUBDIR,
-                                subdir_or_null, leaf, NULL);
-    return g_build_filename(g_get_user_data_dir(), APP_USER_SUBDIR,
-                            leaf, NULL);
+    gchar *base = npp_user_dir();
+    gchar *p = (subdir_or_null && *subdir_or_null)
+        ? g_build_filename(base, subdir_or_null, leaf, NULL)
+        : g_build_filename(base, leaf, NULL);
+    g_free(base);
+    return p;
 }
 
 gchar *npp_backup_dir(void)
@@ -45,7 +117,9 @@ gchar *npp_backup_dir(void)
             g_access(custom, W_OK) == 0)
             return g_strdup(custom);
     }
-    gchar *dflt = npp_user_subdir("backup");
+    gchar *local = npp_local_dir();   /* backup: local, never cloud */
+    gchar *dflt = g_build_filename(local, "backup", NULL);
+    g_free(local);
     g_mkdir_with_parents(dflt, 0700);
     return dflt;
 }
@@ -205,12 +279,19 @@ void npp_ensure_user_dirs(void) {
     g_free(root);
 
     /* Create user subdirs that macOS expects. */
+    /* Settings-class dirs follow the cloud redirect; backup/ and
+     * plugins/ are pinned local (GAP-17). */
     static const char *subs[] = {
-        "backup", "themes", "functionList", "userDefineLangs",
-        "plugins", "toolbarIcons", NULL
+        "themes", "functionList", "userDefineLangs", "toolbarIcons", NULL
     };
     for (int i = 0; subs[i]; i++) {
         gchar *d = npp_user_subdir(subs[i]);
+        g_mkdir_with_parents(d, 0700);
+        g_free(d);
+    }
+    static const char *local_subs[] = { "backup", "plugins", NULL };
+    for (int i = 0; local_subs[i]; i++) {
+        gchar *d = npp_local_file(local_subs[i], NULL);
         g_mkdir_with_parents(d, 0700);
         g_free(d);
     }

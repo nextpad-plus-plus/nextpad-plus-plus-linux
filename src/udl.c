@@ -3,6 +3,8 @@
  * then applies the "user" Lexilla lexer with the proper properties and keyword lists.
  */
 #include "udl.h"
+#include "prefs.h"
+#include "theme.h"
 #include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
@@ -64,6 +66,7 @@ typedef struct {
     char          name[128];
     char          ext[512];    /* space-separated file extensions */
     char          key[136];    /* "udl:" + name, stable pointer    */
+    gboolean      dark_mode_theme;   /* darkModeTheme="yes" (macOS) */
     /* Settings/Global */
     int           case_ignored;
     int           allow_fold_comments;
@@ -314,6 +317,9 @@ static void udl_start(GMarkupParseContext *ctx G_GNUC_UNUSED,
                 g_strlcpy(def->name, attr_values[i], sizeof(def->name));
             else if (strcmp(attr_names[i], "ext") == 0)
                 g_strlcpy(def->ext, attr_values[i], sizeof(def->ext));
+            else if (strcmp(attr_names[i], "darkModeTheme") == 0)
+                def->dark_mode_theme =
+                    strcmp(attr_values[i], "yes") == 0;
         }
         snprintf(def->key, sizeof(def->key), "udl:%s", def->name);
         pc->cur   = def;
@@ -652,13 +658,46 @@ void udl_apply(GtkWidget *sci, int index)
         sci_msg(sci, SCI_SETKEYWORDS, (uptr_t)i, (sptr_t)(val ? val : ""));
     }
 
-    /* Per-style colors and fonts */
+    /* GAP-44 — Global override applies to UDL styles in BOTH modes
+     * (macOS UserDefineLangManager). The AUTOMATIC dark-mode blend is
+     * dark-only: a light UDL's per-token light backgrounds render as
+     * light boxes on a dark editor, so with no forced bg we blend each
+     * token into the editor's Default Style background instead. */
+    NppStyleEntry gov;
+    gboolean have_gov = stylestore_get_global_entry("Global override", &gov);
+    gboolean force_fg = have_gov && g_prefs.gov_fg && gov.fg >= 0;
+    gboolean force_bg = have_gov && g_prefs.gov_bg && gov.bg >= 0;
+    gboolean dark_suppress = theme_effective_dark() &&
+                             !def->dark_mode_theme && !force_bg;
+    int dark_bg = -1;
+    if (dark_suppress) {
+        NppStyleEntry ds;
+        if (stylestore_get_global_entry("Default Style", &ds) && ds.bg >= 0)
+            dark_bg = ds.bg;
+        else
+            dark_suppress = FALSE;   /* nothing to blend into */
+    }
+
+    /* Per-style colors and fonts. colorStyle semantics (Windows parity):
+     * absent/0 = both custom colors apply; 1 = foreground only;
+     * 2 = background only; 3 = both. */
     for (int s = 0; s < UDL_STYLE_TOTAL; s++) {
         UdlStyleEntry *st = &def->styles[s];
-        if (st->color_style == 1) {
-            if (st->fg >= 0) sci_msg(sci, SCI_STYLESETFORE,      s, st->fg);
-            if (st->bg >= 0) sci_msg(sci, SCI_STYLESETBACK,      s, st->bg);
-        }
+        gboolean use_fg = st->color_style == 0 || (st->color_style & 1);
+        gboolean use_bg = st->color_style == 0 || (st->color_style & 2);
+
+        if (force_fg)
+            sci_msg(sci, SCI_STYLESETFORE, s, gov.fg);
+        else if (use_fg && st->fg >= 0)
+            sci_msg(sci, SCI_STYLESETFORE, s, st->fg);
+
+        if (force_bg)
+            sci_msg(sci, SCI_STYLESETBACK, s, gov.bg);
+        else if (dark_suppress)
+            sci_msg(sci, SCI_STYLESETBACK, s, dark_bg);
+        else if (use_bg && st->bg >= 0)
+            sci_msg(sci, SCI_STYLESETBACK, s, st->bg);
+
         sci_msg(sci, SCI_STYLESETBOLD,      s, (st->font_style & 1) != 0);
         sci_msg(sci, SCI_STYLESETITALIC,    s, (st->font_style & 2) != 0);
         sci_msg(sci, SCI_STYLESETUNDERLINE, s, (st->font_style & 4) != 0);

@@ -17,6 +17,14 @@
 
 /* Returns the user data dir — caller MUST free with g_free(). */
 gchar *npp_user_dir(void);
+/* GAP-17 — always-local base (never cloud-redirected): session, backup,
+ * plugins, caches. */
+gchar *npp_local_dir(void);
+gchar *npp_local_file(const char *subdir_or_null, const char *leaf);
+/* Path of the local cloud/choice pointer file (Windows parity). */
+const char *npp_cloud_choice_file(void);
+/* GAP-62 — -settingsDir= override; call before any other paths use. */
+void npp_paths_set_override(const char *dir);
 
 /* Returns "<user data dir>/<subpath>" — caller MUST free. */
 gchar *npp_user_subdir(const char *subpath);

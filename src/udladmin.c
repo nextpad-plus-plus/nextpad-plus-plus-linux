@@ -128,7 +128,7 @@ int udladmin_catalog_load(void)
     gchar *data = NULL;
     gsize  len  = 0;
 
-    gchar *cache = npp_user_file(NULL, UDL_CACHE_LEAF);
+    gchar *cache = npp_local_file(NULL, UDL_CACHE_LEAF);   /* cache: local */
     if (!g_file_get_contents(cache, &data, &len, NULL)) {
         gchar *bundled = npp_bundle_file(NULL, "udl-ac-index.json");
         g_file_get_contents(bundled, &data, &len, NULL);
@@ -318,7 +318,7 @@ gboolean udladmin_remove(const UdlEntry *e)
 static void refresh_from_remote(void)
 {
     gchar *url = g_strdup_printf("%sudl-ac-index.json", raw_base());
-    gchar *cache = npp_user_file(NULL, UDL_CACHE_LEAF);
+    gchar *cache = npp_local_file(NULL, UDL_CACHE_LEAF);   /* cache: local */
     gchar *tmp = g_strdup_printf("%s.part", cache);
     if (http_get_to_file(url, tmp)) {
         gchar *data = NULL; gsize len = 0;

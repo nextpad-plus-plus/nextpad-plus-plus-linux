@@ -106,33 +106,112 @@ static gboolean is_dark_mode(void)
 /* GtkImage downsample it ONCE, at the true device-pixel size           */
 /* (scale-factor aware), via gtk_image_set_pixel_size().                 */
 /* ------------------------------------------------------------------ */
+/* GAP-46 — resolve the colorization target (macOS _nppToolbarTargetColor;
+ * palette = Windows fluent list). "System Accent" has no portable GTK4
+ * query on this libadwaita, so it maps to the stock fluent blue. */
+static void toolbar_target_rgb(double *r, double *g, double *b)
+{
+    static const struct { double r, g, b; } kPal[7] = {
+        { 0xE8/255.0, 0x11/255.0, 0x23/255.0 },   /* red    */
+        { 0x00/255.0, 0x8B/255.0, 0x00/255.0 },   /* green  */
+        { 0x00/255.0, 0x78/255.0, 0xD4/255.0 },   /* blue   */
+        { 0xB1/255.0, 0x46/255.0, 0xC2/255.0 },   /* purple */
+        { 0x00/255.0, 0xB7/255.0, 0xC3/255.0 },   /* cyan   */
+        { 0x49/255.0, 0x82/255.0, 0x05/255.0 },   /* olive  */
+        { 0xFF/255.0, 0xB9/255.0, 0x00/255.0 },   /* yellow */
+    };
+    int c = g_prefs.toolbar_color_choice;
+    if (c >= 0 && c <= 6) { *r = kPal[c].r; *g = kPal[c].g; *b = kPal[c].b; return; }
+    if (c == 8) {
+        GdkRGBA rgba;
+        if (gdk_rgba_parse(&rgba, g_prefs.toolbar_color_custom)) {
+            *r = rgba.red; *g = rgba.green; *b = rgba.blue; return;
+        }
+    }
+    *r = 0x00/255.0; *g = 0x78/255.0; *b = 0xD4/255.0;   /* accent fallback */
+}
+
+/* Colorize a pixbuf in place. Partial: repaint saturated (accent) pixels
+ * with the target hue, leaving greys/blacks; Complete: solid mono fill
+ * over the alpha mask (macOS a2ee1ab / Windows "fluent" parity). */
+static void toolbar_colorize_pixbuf(GdkPixbuf *pb)
+{
+    if (g_prefs.toolbar_color_mode == 0 || !gdk_pixbuf_get_has_alpha(pb))
+        return;
+    double tr, tg, tb;
+    toolbar_target_rgb(&tr, &tg, &tb);
+
+    int w = gdk_pixbuf_get_width(pb), h = gdk_pixbuf_get_height(pb);
+    int stride = gdk_pixbuf_get_rowstride(pb);
+    guchar *px = gdk_pixbuf_get_pixels(pb);
+    gboolean complete = g_prefs.toolbar_color_mode == 2;
+
+    for (int y = 0; y < h; y++) {
+        guchar *row = px + (gsize)y * stride;
+        for (int x = 0; x < w; x++) {
+            guchar *p = row + x * 4;
+            if (p[3] == 0) continue;
+            if (complete) {
+                p[0] = (guchar)(tr * 255); p[1] = (guchar)(tg * 255);
+                p[2] = (guchar)(tb * 255);
+                continue;
+            }
+            /* Partial: saturation test — recolor only vivid pixels. */
+            int mx = MAX(p[0], MAX(p[1], p[2]));
+            int mn = MIN(p[0], MIN(p[1], p[2]));
+            if (mx == 0 || (mx - mn) * 255 < mx * 64) continue;  /* grey */
+            double lum = mx / 255.0;   /* keep the pixel's brightness */
+            p[0] = (guchar)(tr * lum * 255);
+            p[1] = (guchar)(tg * lum * 255);
+            p[2] = (guchar)(tb * lum * 255);
+        }
+    }
+}
+
 static GtkWidget *load_icon(const char *name)
 {
     char path[512];
     gboolean dark = is_dark_mode();
-
-    if (dark)
-        snprintf(path, sizeof(path),
-                 RESOURCES_DIR "/icons/dark/toolbar/regular/%s_off.png", name);
-    else
-        snprintf(path, sizeof(path),
-                 RESOURCES_DIR "/icons/light/toolbar/regular/%s_off.png", name);
-
     GError *err = NULL;
-    GdkTexture *tex = gdk_texture_new_from_filename(path, &err);
-    if (!tex) {
+    GdkPixbuf *pb = NULL;
+
+    /* GAP-47 — "Standard icons" pref: the mode-agnostic classic set
+     * takes priority when enabled (macOS fbf4a86). */
+    if (g_prefs.toolbar_standard_icons) {
+        snprintf(path, sizeof(path),
+                 RESOURCES_DIR "/icons/standard/toolbar/%s.png", name);
+        pb = gdk_pixbuf_new_from_file(path, NULL);
+    }
+    if (!pb) {
+        snprintf(path, sizeof(path),
+                 RESOURCES_DIR "/icons/%s/toolbar/regular/%s_off.png",
+                 dark ? "dark" : "light", name);
+        pb = gdk_pixbuf_new_from_file(path, &err);
+    }
+    if (!pb) {
         if (err) g_clear_error(&err);
         /* Fallback: try standard/ (16×16 classic icons) */
         snprintf(path, sizeof(path),
                  RESOURCES_DIR "/icons/standard/toolbar/%s.png", name);
-        tex = gdk_texture_new_from_filename(path, &err);
-        if (!tex) {
+        pb = gdk_pixbuf_new_from_file(path, &err);
+        if (!pb) {
             if (err) g_clear_error(&err);
             GtkWidget *mi = gtk_image_new_from_icon_name("image-missing");
             gtk_image_set_pixel_size(GTK_IMAGE(mi), icon_px());
             return mi;
         }
     }
+
+    /* Colorization needs RGBA pixels. */
+    if (!gdk_pixbuf_get_has_alpha(pb)) {
+        GdkPixbuf *a = gdk_pixbuf_add_alpha(pb, FALSE, 0, 0, 0);
+        g_object_unref(pb);
+        pb = a;
+    }
+    toolbar_colorize_pixbuf(pb);
+
+    GdkTexture *tex = gdk_texture_new_for_pixbuf(pb);
+    g_object_unref(pb);
     GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
     g_object_unref(tex);
     /* Render the high-res texture at the logical icon size; GTK4 applies

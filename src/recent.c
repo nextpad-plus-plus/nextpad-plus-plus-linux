@@ -15,7 +15,7 @@ static GPtrArray *s_recent = NULL;
 
 static char *recent_file_path(void)
 {
-    return npp_user_file(NULL, "recentfiles.txt");
+    return npp_local_file(NULL, "recentfiles.txt");   /* machine paths: local */
 }
 
 static void ensure_init(void)

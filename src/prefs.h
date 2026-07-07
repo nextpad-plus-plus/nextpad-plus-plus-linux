@@ -152,6 +152,17 @@ typedef struct {
 
     /* GAP-37 — clickable links (macOS Cloud-and-Link pane; defaults
      * match Windows urlUnderLineFg behaviour). */
+    /* GAP-46/47 — toolbar icon colorization + standard icon set. */
+    int      toolbar_color_mode;     /* 0=off 1=partial 2=complete */
+    int      toolbar_color_choice;   /* 0-6 palette, 7 accent, 8 custom */
+    char     toolbar_color_custom[8];/* "#RRGGBB" */
+    gboolean toolbar_color_plugins;
+    gboolean toolbar_standard_icons;
+
+    /* GAP-43 — Style Configurator Global override "Force ..." flags. */
+    gboolean gov_fg, gov_bg, gov_font, gov_font_size;
+    gboolean gov_bold, gov_italic, gov_underline;
+
     gboolean clickable_link_enable;       /* default TRUE  */
     gboolean clickable_link_no_underline; /* default FALSE */
     gboolean clickable_link_fullbox;      /* default FALSE */

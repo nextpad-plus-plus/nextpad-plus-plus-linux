@@ -10,6 +10,8 @@ void session_save(void);
 /* Reopen tabs from ~/.config/notetux/session.xml and restore scroll/caret.
  * Silently skips files that no longer exist on disk. */
 void session_restore(void);
+void session_restore_from(const char *path);
+void session_set_disabled(gboolean d);
 
 /* Read the saved main-window frame from session.xml without opening any
  * tabs. Returns FALSE if no session file or no frame element. */

@@ -158,7 +158,7 @@ void plugin_refresh_handles(void)
 void plugin_load_all(void)
 {
     /* User plugins */
-    gchar *user_dir = npp_user_subdir("plugins");
+    gchar *user_dir = npp_local_file("plugins", NULL);
     g_mkdir_with_parents(user_dir, 0755);
     scan_dir(user_dir);
     g_free(user_dir);
@@ -400,7 +400,7 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         char *buf = (char *)(intptr_t)lParam;
         if (!buf) return 0L;
         {
-            gchar *p = npp_user_subdir("plugins");
+            gchar *p = npp_local_file("plugins", NULL);
             g_strlcpy(buf, p, 2048);
             g_free(p);
         }
@@ -412,7 +412,7 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         /* Plugins live alongside their .so under .../plugins/<Name>/. We don't
          * track which plugin is calling, so return the parent dir. */
         {
-            gchar *p = npp_user_subdir("plugins");
+            gchar *p = npp_local_file("plugins", NULL);
             g_strlcpy(buf, p, 2048);
             g_free(p);
         }

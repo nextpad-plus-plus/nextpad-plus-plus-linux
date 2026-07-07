@@ -409,6 +409,13 @@ static const char *locale_to_stem(const char *locale)
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
+/* GAP-62 — -LXX one-shot localization override (never persisted). */
+static char s_cli_locale[16];
+void i18n_set_cli_locale(const char *code)
+{
+    if (code && *code) g_strlcpy(s_cli_locale, code, sizeof(s_cli_locale));
+}
+
 void i18n_init(void)
 {
     s_plain    = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
@@ -416,8 +423,17 @@ void i18n_init(void)
 
     char path[1024] = "";
 
+    /* 0. GAP-62: -LXX CLI override — resolved like a saved choice but
+     * never persisted. Falls through when no such catalog exists. */
+    if (s_cli_locale[0]) {
+        snprintf(path, sizeof(path), RESOURCES_DIR "/localization/%s.xml",
+                 s_cli_locale);
+        if (!g_file_test(path, G_FILE_TEST_EXISTS))
+            path[0] = '\0';
+    }
+
     /* 1. An explicit choice from Preferences > General > Language. */
-    if (g_prefs.ui_language[0]) {
+    if (!path[0] && g_prefs.ui_language[0]) {
         snprintf(path, sizeof(path), RESOURCES_DIR "/localization/%s.xml",
                  g_prefs.ui_language);
         if (!g_file_test(path, G_FILE_TEST_EXISTS))

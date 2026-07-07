@@ -171,6 +171,11 @@ static gboolean load_theme_for_mode(gboolean dark)
  * it (GAP-70). */
 static gboolean s_effective_dark = FALSE;
 
+gboolean theme_effective_dark(void)
+{
+    return s_effective_dark;
+}
+
 void theme_apply(ThemeMode mode)
 {
     /* 1) Resolve effective dark/light. */

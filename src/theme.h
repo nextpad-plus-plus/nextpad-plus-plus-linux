@@ -43,6 +43,8 @@ typedef enum {
  * Call once at startup AFTER prefs load + editor_init, then on every
  * preference change. Safe to call repeatedly. */
 void theme_apply(ThemeMode mode);
+/* Resolved light/dark after the last theme_apply (GAP-44 UDL blend). */
+gboolean theme_effective_dark(void);
 
 /* Convenience: read mode from g_prefs.appearance. */
 ThemeMode theme_mode_from_prefs(void);

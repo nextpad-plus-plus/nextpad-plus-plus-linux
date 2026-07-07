@@ -40,7 +40,7 @@ Dev dependencies (Ubuntu 24.04):
 
 ```sh
 sudo apt install build-essential cmake pkg-config \
-                 libgtk-4-dev libadwaita-1-dev libglib2.0-dev
+                 libgtk-4-dev libadwaita-1-dev libglib2.0-dev libuchardet-dev
 ```
 
 The Scintilla GTK4 backend builds via its own makefile (`scintilla/gtk4/`),
