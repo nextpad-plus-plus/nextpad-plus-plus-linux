@@ -85,8 +85,8 @@ must be wrapped in a `GtkScrolledWindow` at each editor-creation site.
 
 - notetux-plus-plus is **no longer a reference** — the project has moved past
   it. The macOS Nextpad++ port is the source-of-truth for feature behaviour.
-- User is **aletik** (Andrey Letov), macOS port author. Eventual Linux
-  maintainer is Andrea Coi; aletik helps. Wants meticulous, concise work.
+- User is **aletik** (Andrey Letov), macOS port author and Linux port
+  maintainer. Wants meticulous, concise work.
 
 ## Backporting from GTK3
 
