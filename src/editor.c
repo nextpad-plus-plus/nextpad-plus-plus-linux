@@ -1164,6 +1164,29 @@ static gboolean strip_remove_child_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* GAP-70 — ▾ trailing control: rebuild the open-documents menu each
+ * time it pops (tab set changes constantly). */
+static void tab_list_popup(GtkMenuButton *mb, gpointer u)
+{
+    (void)u;
+    GMenu *menu = g_menu_new();
+    int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
+    for (int i = 0; i < n; i++) {
+        GtkWidget *sci = sci_of_page(i);
+        NppDoc *d = sci ? doc_of_sci(sci) : NULL;
+        if (!d) continue;
+        char name[128];
+        editor_doc_display_name(d, name, sizeof(name));
+        GMenuItem *mi = g_menu_item_new(name, NULL);
+        g_menu_item_set_action_and_target(mi, "app.tab-goto", "i", i);
+        g_menu_append_item(menu, mi);
+        g_object_unref(mi);
+    }
+    GtkWidget *pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+    g_object_unref(menu);
+    gtk_menu_button_set_popover(mb, pop);
+}
+
 static void on_page_removed(GtkNotebook *nb, GtkWidget *child, guint page,
                             gpointer u)
 {
@@ -2057,6 +2080,37 @@ GtkWidget *editor_init(GtkWidget *window)
                      G_CALLBACK(on_page_removed), NULL);
     g_signal_connect(s_notebook, "page-reordered",
                      G_CALLBACK(on_page_reordered), NULL);
+    /* GAP-70 — Tahoe: trailing tab-bar controls (+ new · ▾ tab list ·
+     * ✕ close current), mirroring the macOS Tahoe tab bar. */
+    if (g_prefs.appearance_style == 1) {
+        GtkWidget *tbx = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_widget_add_css_class(tbx, "npp-tab-controls");
+
+        GtkWidget *bnew = gtk_button_new_from_icon_name("list-add-symbolic");
+        gtk_button_set_has_frame(GTK_BUTTON(bnew), FALSE);
+        gtk_widget_set_tooltip_text(bnew, "New Document");
+        gtk_actionable_set_action_name(GTK_ACTIONABLE(bnew), "app.new");
+        gtk_box_append(GTK_BOX(tbx), bnew);
+
+        GtkWidget *blist = gtk_menu_button_new();
+        gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(blist),
+                                      "pan-down-symbolic");
+        gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(blist), FALSE);
+        gtk_widget_set_tooltip_text(blist, "Open Documents");
+        gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(blist),
+                                              tab_list_popup, NULL, NULL);
+        gtk_box_append(GTK_BOX(tbx), blist);
+
+        GtkWidget *bclose =
+            gtk_button_new_from_icon_name("window-close-symbolic");
+        gtk_button_set_has_frame(GTK_BUTTON(bclose), FALSE);
+        gtk_widget_set_tooltip_text(bclose, "Close Document");
+        gtk_actionable_set_action_name(GTK_ACTIONABLE(bclose), "app.close");
+        gtk_box_append(GTK_BOX(tbx), bclose);
+
+        gtk_notebook_set_action_widget(GTK_NOTEBOOK(s_notebook), tbx,
+                                       GTK_PACK_END);
+    }
     editor_new_doc();
 
     /* Incremental search bar — hidden by default, shown via Ctrl+I */

@@ -18,6 +18,7 @@
 #include "sci_c.h"
 #include "toolbarconf.h"
 #include "prefs.h"
+#include "paths.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -663,10 +664,11 @@ static GtkWidget *capsule_begin(GtkWidget *tb, const char *label,
  * make_btn/make_toggle calls assign the same statics, so sensitivity and
  * toggle mirroring keep working); only grouping and chrome differ.
  * Groups + primary/overflow split mirror macOS tahoeToolbarGroups(). */
-static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
+/* GAP-70 — Tahoe capsule groups, table-driven so
+ * toolbarButtonsTahoeConf.xml can hide/reorder them. */
+static void cap_file(GtkWidget *tb, GtkWidget *parent_window)
 {
-    GtkWidget *row;
-    GMenu *m;
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* File: primary New Open Save Print · overflow SaveAll Close CloseAll */
     m = g_menu_new();
@@ -679,6 +681,11 @@ static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
     s_btn_save = make_btn("save", "Save (Ctrl+S)", G_CALLBACK(on_save), NULL);
     gtk_box_append(GTK_BOX(row), s_btn_save);
     gtk_box_append(GTK_BOX(row), make_btn("print", "Print… (Ctrl+P)", G_CALLBACK(on_print), NULL));
+}
+
+static void cap_edit(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* Edit: primary Copy Paste Undo Redo · overflow Cut */
     m = g_menu_new();
@@ -690,17 +697,32 @@ static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
     s_btn_redo = make_btn("redo", "Redo (Ctrl+Shift+Z)", G_CALLBACK(on_redo), NULL);
     gtk_box_append(GTK_BOX(row), s_btn_undo);
     gtk_box_append(GTK_BOX(row), s_btn_redo);
+}
+
+static void cap_find(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* Find: primary Find · overflow Replace */
     m = g_menu_new();
     g_menu_append(m, "Replace…", "app.replace");
     row = capsule_begin(tb, "Find", m);
     gtk_box_append(GTK_BOX(row), make_btn("find", "Find… (Ctrl+F)", G_CALLBACK(on_find), parent_window));
+}
+
+static void cap_zoom(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* Zoom: primary In Out · no overflow */
     row = capsule_begin(tb, "Zoom", NULL);
     gtk_box_append(GTK_BOX(row), make_btn("zoomIn",  "Zoom In",  G_CALLBACK(on_zoom_in),  NULL));
     gtk_box_append(GTK_BOX(row), make_btn("zoomOut", "Zoom Out", G_CALLBACK(on_zoom_out), NULL));
+}
+
+static void cap_view(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* View: primary Wrap IndentGuide · overflow AllChars */
     m = g_menu_new();
@@ -710,6 +732,11 @@ static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
     s_tgl_indent = make_toggle("indentGuide", "Toggle Indent Guide", G_CALLBACK(on_indent), NULL);
     gtk_box_append(GTK_BOX(row), s_tgl_wrap);
     gtk_box_append(GTK_BOX(row), s_tgl_indent);
+}
+
+static void cap_sync(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* Sync: primary SyncV · overflow SyncH */
     m = g_menu_new();
@@ -717,6 +744,11 @@ static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
     row = capsule_begin(tb, "Sync", m);
     gtk_box_append(GTK_BOX(row), make_toggle("syncV",
         "Synchronise Vertical Scrolling", G_CALLBACK(on_syncv), NULL));
+}
+
+static void cap_panels(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* Panels: primary DocList FileBrowser FuncList · overflow the rest */
     m = g_menu_new();
@@ -732,12 +764,22 @@ static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
     gtk_box_append(GTK_BOX(row), s_tgl_doclist);
     gtk_box_append(GTK_BOX(row), s_tgl_workspace);
     gtk_box_append(GTK_BOX(row), s_tgl_funclist);
+}
+
+static void cap_monitor(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* Monitor: standalone toggle · no overflow */
     row = capsule_begin(tb, "Monitor", NULL);
     s_tgl_monitoring = make_toggle("monitoring",
         "File Monitoring (tail -f)", G_CALLBACK(on_tgl_monitoring), NULL);
     gtk_box_append(GTK_BOX(row), s_tgl_monitoring);
+}
+
+static void cap_macro(GtkWidget *tb, GtkWidget *parent_window)
+{
+    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
 
     /* Macro: primary Start Stop · overflow Play/PlayMulti/Save */
     m = g_menu_new();
@@ -749,6 +791,79 @@ static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
     s_btn_stoprecord  = make_btn("stoprecord",  "Stop Recording",                 G_CALLBACK(on_macro_stop),  NULL);
     gtk_box_append(GTK_BOX(row), s_btn_startrecord);
     gtk_box_append(GTK_BOX(row), s_btn_stoprecord);
+}
+
+typedef void (*CapsuleBuildFn)(GtkWidget *, GtkWidget *);
+static const struct { const char *id; CapsuleBuildFn build; } kCapsules[] = {
+    { "File", cap_file },
+    { "Edit", cap_edit },
+    { "Find", cap_find },
+    { "Zoom", cap_zoom },
+    { "View", cap_view },
+    { "Sync", cap_sync },
+    { "Panels", cap_panels },
+    { "Monitor", cap_monitor },
+    { "Macro", cap_macro }
+};
+
+/* Load group order/visibility from toolbarButtonsTahoeConf.xml in the
+ * settings dir; materialize the default layout on first use. Format:
+ *   <TahoeToolbar><Group id="File" visible="yes"/>…</TahoeToolbar> */
+static int tahoeconf_load(const char *out_ids[16])
+{
+    gchar *path = npp_user_file(NULL, "toolbarButtonsTahoeConf.xml");
+    gchar *data = NULL;
+    int n = 0;
+
+    if (!g_file_get_contents(path, &data, NULL, NULL)) {
+        GString *xml = g_string_new(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<TahoeToolbar>\n");
+        for (size_t i = 0; i < G_N_ELEMENTS(kCapsules); i++)
+            g_string_append_printf(xml,
+                "    <Group id=\"%s\" visible=\"yes\" />\n",
+                kCapsules[i].id);
+        g_string_append(xml, "</TahoeToolbar>\n");
+        g_file_set_contents(path, xml->str, (gssize)xml->len, NULL);
+        g_string_free(xml, TRUE);
+        g_free(path);
+        for (size_t i = 0; i < G_N_ELEMENTS(kCapsules); i++)
+            out_ids[n++] = kCapsules[i].id;
+        return n;
+    }
+    g_free(path);
+
+    /* Tiny forgiving parse: Group elements in file order. */
+    for (char *p = data; (p = strstr(p, "<Group")) != NULL; p++) {
+        char *idp = strstr(p, "id=\"");
+        char *vis = strstr(p, "visible=\"");
+        char *close = strchr(p, '>');
+        if (!idp || !close || idp > close) continue;
+        idp += 4;
+        char *q = strchr(idp, '"');
+        if (!q) continue;
+        gboolean shown = !(vis && vis < close &&
+                           g_str_has_prefix(vis + 9, "no"));
+        if (!shown) continue;
+        for (size_t i = 0; i < G_N_ELEMENTS(kCapsules) && n < 16; i++)
+            if ((size_t)(q - idp) == strlen(kCapsules[i].id) &&
+                strncmp(idp, kCapsules[i].id, (size_t)(q - idp)) == 0)
+                out_ids[n++] = kCapsules[i].id;
+    }
+    g_free(data);
+    if (n == 0)   /* unparsable file → defaults */
+        for (size_t i = 0; i < G_N_ELEMENTS(kCapsules); i++)
+            out_ids[n++] = kCapsules[i].id;
+    return n;
+}
+
+static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
+{
+    const char *ids[16];
+    int n = tahoeconf_load(ids);
+    for (int i = 0; i < n; i++)
+        for (size_t k = 0; k < G_N_ELEMENTS(kCapsules); k++)
+            if (strcmp(ids[i], kCapsules[k].id) == 0)
+                kCapsules[k].build(tb, parent_window);
 }
 
 GtkWidget *toolbar_init(GtkWidget *parent_window)
@@ -906,13 +1021,19 @@ void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
 {
     if (!s_toolbar) return;
     if (!s_plugin_group) {
-        GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
-        gtk_widget_set_margin_start(sep, 4);
-        gtk_widget_set_margin_end(sep, 4);
-        gtk_box_append(GTK_BOX(s_toolbar), sep);
-        s_plugin_group = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
-        gtk_widget_add_css_class(s_plugin_group, "npp-plugin-toolbar-group");
-        gtk_box_append(GTK_BOX(s_toolbar), s_plugin_group);
+        if (g_prefs.appearance_style == 1) {
+            /* GAP-70 — Tahoe: plugin buttons get their own capsule. */
+            s_plugin_group = capsule_begin(s_toolbar, "Plugins", NULL);
+        } else {
+            GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
+            gtk_widget_set_margin_start(sep, 4);
+            gtk_widget_set_margin_end(sep, 4);
+            gtk_box_append(GTK_BOX(s_toolbar), sep);
+            s_plugin_group = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+            gtk_widget_add_css_class(s_plugin_group,
+                                     "npp-plugin-toolbar-group");
+            gtk_box_append(GTK_BOX(s_toolbar), s_plugin_group);
+        }
     }
 
     GtkWidget *btn = gtk_button_new();
