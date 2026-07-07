@@ -199,6 +199,7 @@ typedef struct {
     gboolean doclist_show_ext;        /* default TRUE  */
     gboolean doclist_show_path;       /* default TRUE  */
     gboolean tab_bar_wrap;            /* default FALSE */
+    gboolean tab_follow_zoom;         /* GAP-31 — tabs grow with editor zoom */
     int      tab_max_label_width;     /* px, default 200 */
     gboolean hide_tab_bar;            /* default FALSE (macOS #183) */
 

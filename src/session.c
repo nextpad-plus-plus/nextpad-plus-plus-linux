@@ -161,6 +161,9 @@ static gboolean session_wants_doc(NppDoc *d)
             return FALSE;
         return TRUE;
     }
+    /* Renamed organizational tabs survive relaunch even when empty
+     * (macOS #177). */
+    if (d->custom_name && d->custom_name[0]) return TRUE;
     return d->backup_filepath != NULL &&
            g_file_test(d->backup_filepath, G_FILE_TEST_EXISTS);
 }
@@ -232,6 +235,8 @@ void session_save(void)
             ? g_markup_escape_text(doc->filepath, -1) : g_strdup("");
         gchar *esc_enc   = g_markup_escape_text(doc->encoding ? doc->encoding : "UTF-8", -1);
         gchar *esc_lang  = g_markup_escape_text(doc->language ? doc->language : "", -1);
+        gchar *esc_custom = g_markup_escape_text(
+            doc->custom_name ? doc->custom_name : "", -1);
         gchar *esc_backup= doc->backup_filepath
             ? g_markup_escape_text(doc->backup_filepath, -1) : g_strdup("");
 
@@ -244,6 +249,7 @@ void session_save(void)
             " encoding=\"%s\" hasBOM=\"%s\""
             " language=\"%s\""
             " userReadOnly=\"%s\""
+            " customTabName=\"%s\""
             " tabColorId=\"%d\" pinned=\"%s\""
             " backupFilePath=\"%s\""
             " bookmarks=\"%s\""
@@ -256,6 +262,7 @@ void session_save(void)
             esc_enc, doc->has_bom ? "yes" : "no",
             esc_lang,
             doc->user_readonly ? "yes" : "no",
+            esc_custom,
             doc->color_tag, doc->pinned ? "yes" : "no",
             esc_backup,
             bookmarks, folds);
@@ -265,6 +272,7 @@ void session_save(void)
         g_free(esc_path);
         g_free(esc_enc);
         g_free(esc_lang);
+        g_free(esc_custom);
         g_free(esc_backup);
     }
     g_ptr_array_free(docs, TRUE);
@@ -293,6 +301,7 @@ void session_save(void)
 typedef struct {
     char  filepath[1024];
     int   untitled_index; /* >0 → untitled tab restored from backup */
+    char *custom_name;    /* GAP-33 — renamed untitled tab, or NULL */
     long  first_line;
     long  xoffset;
     long  start_pos;
@@ -388,10 +397,12 @@ static void xml_start(GMarkupParseContext *ctx, const gchar *el,
         else if (!strcmp(k, "backupFilePath"))   g_strlcpy(e->backup_filepath, v, sizeof(e->backup_filepath));
         else if (!strcmp(k, "bookmarks"))        e->bookmarks = g_strdup(v);
         else if (!strcmp(k, "folds"))            e->folds = g_strdup(v);
+        else if (!strcmp(k, "customTabName"))    e->custom_name = g_strdup(v);
     }
     /* Named entries need a path; untitled entries need a backup file to
      * restore content from. */
-    if (e->filepath[0] || (e->untitled_index > 0 && e->backup_filepath[0]))
+    if (e->filepath[0] || (e->untitled_index > 0 &&
+        (e->backup_filepath[0] || (e->custom_name && e->custom_name[0]))))
         st->count++;
 }
 
@@ -459,20 +470,30 @@ void session_restore_from(const char *path)
              * is nothing to restore. resolve_backup_path remaps paths
              * recorded before the config-dir migration (GAP-59). */
             gchar *content = NULL;
-            gchar *bp = resolve_backup_path(e->backup_filepath);
-            if (!bp || !g_file_get_contents(bp, &content, NULL, NULL)) {
-                g_free(bp);
-                g_free(e->bookmarks); g_free(e->folds);
+            gchar *bp = e->backup_filepath[0]
+                ? resolve_backup_path(e->backup_filepath) : NULL;
+            if (bp) g_file_get_contents(bp, &content, NULL, NULL);
+            g_free(bp);
+            /* A renamed-but-empty tab restores with no content (macOS
+             * #177: organizational tabs survive relaunch); anything else
+             * without a readable snapshot has nothing to restore. */
+            if (!content &&
+                !(e->custom_name && e->custom_name[0])) {
+                g_free(e->bookmarks); g_free(e->folds); g_free(e->custom_name);
                 continue;
             }
-            g_free(bp);
             editor_new_doc();
             NppDoc *nd = editor_current_doc();
             if (nd) {
                 nd->new_index = e->untitled_index;   /* label re-renders on
                                                         the modify event */
-                scintilla_send_message(SCINTILLA(nd->sci), SCI_SETTEXT,
-                                       0, (sptr_t)content);
+                if (e->custom_name && e->custom_name[0]) {
+                    g_free(nd->custom_name);
+                    nd->custom_name = g_strdup(e->custom_name);
+                }
+                if (content)
+                    scintilla_send_message(SCINTILLA(nd->sci), SCI_SETTEXT,
+                                           0, (sptr_t)content);
                 /* Restoring is not editing — reset the change-history
                  * baseline (needs an empty undo stack; the restore
                  * itself is not undoable, which is fine on a fresh
@@ -489,7 +510,7 @@ void session_restore_from(const char *path)
             g_free(content);
         } else {
             if (!g_file_test(e->filepath, G_FILE_TEST_EXISTS)) {
-                g_free(e->bookmarks); g_free(e->folds);
+                g_free(e->bookmarks); g_free(e->folds); g_free(e->custom_name);
                 continue;
             }
             /* Unsaved edits snapshot: the session recorded a backup for
@@ -508,7 +529,7 @@ void session_restore_from(const char *path)
             }
             if (!editor_open_path(e->filepath)) {
                 g_free(backup_content);
-                g_free(e->bookmarks); g_free(e->folds);
+                g_free(e->bookmarks); g_free(e->folds); g_free(e->custom_name);
                 continue;
             }
             /* Apply the newer backup content over the disk copy and

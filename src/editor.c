@@ -1110,16 +1110,217 @@ static void on_close_leave(GtkEventControllerMotion *c, gpointer img)
     if (t) gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(t));
 }
 
+/* GAP-32 — multi-row tab strip (opt-in via the "Wrap tabs to multiple
+ * lines" pref; GtkNotebook headers cannot wrap). A GtkFlowBox above the
+ * split panes hosts the SAME tab-label widgets ("tab-box" object data),
+ * so refresh_tab_label and editor_apply_tab_color keep working: the box
+ * lives either in the notebook tab slot (wrap off) or in a flowbox
+ * child (wrap on). Primary notebook only — split views keep native
+ * headers. */
+static GtkWidget *s_tabstrip;      /* GtkFlowBox, hidden when wrap off */
+
+/* Test/debug helper: number of strip children (-1 when no strip). */
+int editor_tabstrip_child_count(void)
+{
+    if (!s_tabstrip) return -1;
+    int n = 0;
+    for (GtkWidget *c = gtk_widget_get_first_child(s_tabstrip); c;
+         c = gtk_widget_get_next_sibling(c))
+        n++;
+    return n;
+}
+
+static gboolean tabstrip_active(void)
+{
+    return g_prefs.tab_bar_wrap && s_tabstrip != NULL;
+}
+
+static void tabstrip_mark_active(int cur_page)
+{
+    if (!s_tabstrip) return;
+    int i = 0;
+    for (GtkWidget *c = gtk_widget_get_first_child(s_tabstrip); c;
+         c = gtk_widget_get_next_sibling(c), i++) {
+        if (i == cur_page) gtk_widget_add_css_class(c, "active-tab");
+        else               gtk_widget_remove_css_class(c, "active-tab");
+    }
+}
+
+/* Deferred to idle: destroying the strip child (and with it the shared
+ * tab-box) INSIDE the notebook's page-removed emission re-enters GTK
+ * mid-teardown of the page widget — racy segfaults on close. */
+static gboolean strip_remove_child_idle(gpointer data)
+{
+    GtkWidget *strip_child = data;
+    if (gtk_widget_get_parent(strip_child) == s_tabstrip)
+        gtk_flow_box_remove(GTK_FLOW_BOX(s_tabstrip), strip_child);
+    g_object_unref(strip_child);
+    if (tabstrip_active()) {
+        int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
+        gtk_widget_set_visible(s_tabstrip, n > 0);
+        tabstrip_mark_active(
+            gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook)));
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void on_page_removed(GtkNotebook *nb, GtkWidget *child, guint page,
+                            gpointer u)
+{
+    (void)nb; (void)page; (void)u;
+    if (!s_tabstrip) return;
+    /* Identity-based: find the strip child hosting the REMOVED page's
+     * tab-box (object data is still readable during dispose). */
+    GtkWidget *sci = page_to_sci(child);
+    GtkWidget *box = sci ? g_object_get_data(G_OBJECT(sci), "tab-box")
+                         : NULL;
+    GtkWidget *par = box ? gtk_widget_get_parent(box) : NULL;
+    if (par && GTK_IS_FLOW_BOX_CHILD(par) &&
+        gtk_widget_get_parent(par) == s_tabstrip)
+        g_idle_add(strip_remove_child_idle, g_object_ref(par));
+}
+
+static void on_page_reordered(GtkNotebook *nb, GtkWidget *child, guint page,
+                              gpointer u)
+{
+    (void)nb; (void)u;
+    if (!tabstrip_active()) return;
+    GtkWidget *sci = page_to_sci(child);
+    GtkWidget *box = sci ? g_object_get_data(G_OBJECT(sci), "tab-box") : NULL;
+    GtkWidget *par = box ? gtk_widget_get_parent(box) : NULL;
+    if (!par || !GTK_IS_FLOW_BOX_CHILD(par)) return;
+    if ((guint)gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(par)) == page)
+        return;
+    g_object_ref(box);
+    gtk_flow_box_remove(GTK_FLOW_BOX(s_tabstrip), par);
+    gtk_flow_box_insert(GTK_FLOW_BOX(s_tabstrip), box, (int)page);
+    gtk_widget_add_css_class(gtk_widget_get_parent(box), "npp-strip-tab");
+    g_object_unref(box);
+    editor_apply_tab_color(sci);
+    tabstrip_mark_active(
+        gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook)));
+}
+
+static void on_strip_child_activated(GtkFlowBox *fb, GtkFlowBoxChild *child,
+                                     gpointer u)
+{
+    (void)fb; (void)u;
+    int idx = gtk_flow_box_child_get_index(child);
+    if (idx >= 0)
+        gtk_notebook_set_current_page(GTK_NOTEBOOK(s_notebook), idx);
+}
+
+/* Move one page's tab-box between the notebook tab slot and the strip. */
+static void tabstrip_host_page(int page, gboolean in_strip)
+{
+    GtkWidget *sci = sci_of_page(page);
+    if (!sci) return;
+    GtkWidget *box = g_object_get_data(G_OBJECT(sci), "tab-box");
+    GtkWidget *pagew = gtk_notebook_get_nth_page(GTK_NOTEBOOK(s_notebook),
+                                                 page);
+    if (!box || !pagew) return;
+
+    g_object_ref(box);
+    GtkWidget *parent = gtk_widget_get_parent(box);
+    if (in_strip) {
+        if (parent)   /* notebook tab slot → replace with a blank label */
+            gtk_notebook_set_tab_label(GTK_NOTEBOOK(s_notebook), pagew,
+                                       gtk_label_new(""));
+        gtk_flow_box_insert(GTK_FLOW_BOX(s_tabstrip), box, page);
+        GtkWidget *child = gtk_widget_get_parent(box);
+        gtk_widget_add_css_class(child, "npp-strip-tab");
+    } else {
+        if (parent && GTK_IS_FLOW_BOX_CHILD(parent)) {
+            gtk_flow_box_remove(GTK_FLOW_BOX(s_tabstrip), parent);
+        }
+        gtk_notebook_set_tab_label(GTK_NOTEBOOK(s_notebook), pagew, box);
+    }
+    g_object_unref(box);
+    /* Re-anchor the colour class on the new host node. */
+    editor_apply_tab_color(sci);
+}
+
+/* Rebuild strip membership to match the pref (live toggle + startup). */
+void editor_tabstrip_sync(void)
+{
+    if (!s_tabstrip || !s_notebook) return;
+    gboolean on = g_prefs.tab_bar_wrap;
+    int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
+
+    if (on) {
+        for (int i = 0; i < n; i++) {
+            GtkWidget *sci = sci_of_page(i);
+            GtkWidget *box = sci ? g_object_get_data(G_OBJECT(sci),
+                                                     "tab-box") : NULL;
+            GtkWidget *par = box ? gtk_widget_get_parent(box) : NULL;
+            if (par && !GTK_IS_FLOW_BOX_CHILD(par))
+                tabstrip_host_page(i, TRUE);
+        }
+    } else {
+        for (int i = 0; i < n; i++) {
+            GtkWidget *sci = sci_of_page(i);
+            GtkWidget *box = sci ? g_object_get_data(G_OBJECT(sci),
+                                                     "tab-box") : NULL;
+            GtkWidget *par = box ? gtk_widget_get_parent(box) : NULL;
+            if (par && GTK_IS_FLOW_BOX_CHILD(par))
+                tabstrip_host_page(i, FALSE);
+        }
+    }
+    gtk_widget_set_visible(s_tabstrip, on && n > 0);
+    gtk_notebook_set_show_tabs(GTK_NOTEBOOK(s_notebook),
+                               !on && !g_prefs.hide_tab_bar);
+    if (on)
+        tabstrip_mark_active(
+            gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook)));
+}
+
+/* GAP-31 — tab font size: 10pt base, scaled UP with the current
+ * editor's zoom when the pref is on (macOS #158: tabs grow with zoom,
+ * never shrink below base — zoom-out is a no-op on tabs). */
+static int tab_font_pt(void)
+{
+    if (!g_prefs.tab_follow_zoom) return 10;
+    NppDoc *doc = editor_current_doc();
+    if (!doc || !doc->sci) return 10;
+    int zoom = (int)sci_msg(doc->sci, SCI_GETZOOM, 0, 0);   /* pt delta */
+    int base = 11;   /* matches the default editor font size */
+    double scale = (base + zoom) / (double)base;
+    if (scale < 1.0) scale = 1.0;
+    int pt = (int)(10 * scale + 0.5);
+    return pt > 28 ? 28 : pt;
+}
+
+void editor_refresh_all_tab_labels(void)
+{
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (d && d->sci) {
+            int page = sci_page_num(d->sci);
+            if (page >= 0) refresh_tab_label(page);
+        }
+    }
+    g_ptr_array_free(docs, TRUE);
+}
+
+const char *editor_doc_display_name(const NppDoc *doc, char *buf, size_t n)
+{
+    if (doc->filepath) {
+        char *b = g_path_get_basename(doc->filepath);
+        g_strlcpy(buf, b, n);
+        g_free(b);
+    } else if (doc->custom_name && doc->custom_name[0]) {
+        g_strlcpy(buf, doc->custom_name, n);
+    } else {
+        g_snprintf(buf, n, "new %d", doc->new_index);
+    }
+    return buf;
+}
+
 static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
 {
-    const char *base = doc->filepath
-        ? g_path_get_basename(doc->filepath)
-        : NULL;
-    char buf[64];
-    if (base)
-        snprintf(buf, sizeof(buf), "%s", base);
-    else
-        snprintf(buf, sizeof(buf), "new %d", doc->new_index);
+    char buf[128];
+    editor_doc_display_name(doc, buf, sizeof(buf));
 
     /* G3.6: a click gesture on the tab box intercepts middle-click (close),
      * double-click (close) and right-click (context menu).
@@ -1141,7 +1342,8 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     GtkWidget *label = gtk_label_new(NULL);
     {
         gchar *escaped = g_markup_escape_text(buf, -1);
-        char  *markup  = g_strdup_printf("<span size=\"10pt\">%s</span>", escaped);
+        char  *markup  = g_strdup_printf("<span size=\"%dpt\">%s</span>",
+                                         tab_font_pt(), escaped);
         gtk_label_set_markup(GTK_LABEL(label), markup);
         g_free(markup);
         g_free(escaped);
@@ -1232,20 +1434,15 @@ static void refresh_tab_label(int page)
     GtkWidget *status = g_object_get_data(G_OBJECT(sci), "tab-status-icon");
     if (status) set_tab_status_icon(status, doc->modified);
 
-    const char *base = doc->filepath
-        ? g_path_get_basename(doc->filepath)
-        : NULL;
-    char buf[80];
-    if (base)
-        snprintf(buf, sizeof(buf), "%s", base);
-    else
-        snprintf(buf, sizeof(buf), "new %d", doc->new_index);
+    char buf[128];
+    editor_doc_display_name(doc, buf, sizeof(buf));
 
     /* Keep the 11pt tab font and update ellipsization based on length —
      * matches make_tab_label() behaviour above. */
     {
         gchar *escaped = g_markup_escape_text(buf, -1);
-        char  *markup  = g_strdup_printf("<span size=\"10pt\">%s</span>", escaped);
+        char  *markup  = g_strdup_printf("<span size=\"%dpt\">%s</span>",
+                                         tab_font_pt(), escaped);
         gtk_label_set_markup(GTK_LABEL(label), markup);
         g_free(markup);
         g_free(escaped);
@@ -1313,15 +1510,14 @@ static void update_window_title(void)
     extern const char *main_cli_title_add(void);
     const char *extra = main_cli_title_add();
     char buf[512];
-    if (doc->filepath) {
-        const char *name = g_prefs.show_full_path_in_title
-                           ? doc->filepath
-                           : g_path_get_basename(doc->filepath);
+    if (doc->filepath && g_prefs.show_full_path_in_title) {
+        snprintf(buf, sizeof(buf), "%s%s — " APP_NAME "%s%s", mod,
+                 doc->filepath, extra ? " " : "", extra ? extra : "");
+    } else {
+        char name[128];
+        editor_doc_display_name(doc, name, sizeof(name));
         snprintf(buf, sizeof(buf), "%s%s — " APP_NAME "%s%s", mod, name,
                  extra ? " " : "", extra ? extra : "");
-    } else {
-        snprintf(buf, sizeof(buf), "%snew %d — " APP_NAME "%s%s", mod,
-                 doc->new_index, extra ? " " : "", extra ? extra : "");
     }
 
     gtk_window_set_title(GTK_WINDOW(s_window), buf);
@@ -1573,6 +1769,10 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         if (n->updated & (SC_UPDATE_CONTENT | SC_UPDATE_V_SCROLL |
                           SC_UPDATE_H_SCROLL))
             link_update_schedule(sci);
+    } else if (code == SCN_ZOOM) {
+        /* GAP-31 — tabs follow the editor zoom when the pref is on. */
+        if (g_prefs.tab_follow_zoom)
+            editor_refresh_all_tab_labels();
     } else if (code == SCN_DOUBLECLICK) {
         /* GAP-37 — plain double-click on a marked link opens it. */
         link_double_click(sci, (sptr_t)n->position, (int)n->modifiers);
@@ -1676,6 +1876,8 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
     findreplace_set_sci(sci);
     toolbar_sync_toggles(sci);
     watermark_refresh_for(sci);   /* GAP-64 — `sci` is the INCOMING page */
+    if (tabstrip_active())
+        tabstrip_mark_active((int)page_num);
     /* Q-fix: repopulate Function List so switching tabs immediately shows
      * the new file's functions (previously only SCN_MODIFIED on edits
      * triggered an update, so opening a file and looking at the panel
@@ -1851,6 +2053,10 @@ GtkWidget *editor_init(GtkWidget *window)
     gtk_notebook_set_show_tabs(GTK_NOTEBOOK(s_notebook),
                                !g_prefs.hide_tab_bar);   /* macOS #183 */
     g_signal_connect(s_notebook, "switch-page", G_CALLBACK(on_switch_page), NULL);
+    g_signal_connect(s_notebook, "page-removed",
+                     G_CALLBACK(on_page_removed), NULL);
+    g_signal_connect(s_notebook, "page-reordered",
+                     G_CALLBACK(on_page_reordered), NULL);
     editor_new_doc();
 
     /* Incremental search bar — hidden by default, shown via Ctrl+I */
@@ -1902,7 +2108,22 @@ GtkWidget *editor_init(GtkWidget *window)
     s_active_notebook = s_notebook;
 
     s_editor_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    /* GAP-32 — multi-row tab strip (hidden unless the wrap pref is on). */
+    s_tabstrip = gtk_flow_box_new();
+    gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(s_tabstrip),
+                                    GTK_SELECTION_NONE);
+    gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(s_tabstrip), 100);
+    gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(s_tabstrip), 2);
+    gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(s_tabstrip), 2);
+    gtk_flow_box_set_activate_on_single_click(GTK_FLOW_BOX(s_tabstrip),
+                                              TRUE);
+    gtk_widget_add_css_class(s_tabstrip, "npp-tabstrip");
+    g_signal_connect(s_tabstrip, "child-activated",
+                     G_CALLBACK(on_strip_child_activated), NULL);
+    gtk_widget_set_visible(s_tabstrip, FALSE);
+    npp_box_pack(GTK_BOX(s_editor_container), s_tabstrip, FALSE, 0);
     npp_box_pack(GTK_BOX(s_editor_container), s_split_h, TRUE, 0);
+    editor_tabstrip_sync();   /* apply the wrap pref to the first tab */
     npp_box_pack(GTK_BOX(s_editor_container), s_search_bar, FALSE, 0);
     return s_editor_container;
 }
@@ -1985,6 +2206,7 @@ void editor_new_doc(void)
     gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(s_notebook), sw, TRUE);
     gtk_widget_show_all(s_notebook);
     editor_apply_tab_color(sci);   /* tab node exists once appended */
+    if (tabstrip_active()) tabstrip_host_page(page, TRUE);
     gtk_notebook_set_current_page(GTK_NOTEBOOK(s_notebook), page);
     main_doclist_refresh();
 }
@@ -2041,6 +2263,10 @@ gboolean editor_open_path(const char *path)
         gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(s_notebook), sw, TRUE);
         gtk_widget_show_all(s_notebook);
         editor_apply_tab_color(sci);   /* tab node exists once appended */
+        if (tabstrip_active())
+            tabstrip_host_page(
+                gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) - 1,
+                TRUE);
         cur = doc;
     }
 
@@ -2349,6 +2575,7 @@ static gboolean close_sci_full(GtkWidget *sci, gboolean *dont_save_all)
     backup_clean(doc);
     gtk_notebook_remove_page(nb, gtk_notebook_page_num(nb, sw));
     g_free(doc->filepath);
+    g_free(doc->custom_name);
     g_free(doc->encoding);
     g_free(doc->language);
     g_free(doc->backup_filepath);
@@ -3150,7 +3377,50 @@ gboolean editor_save_copy_as(void)
 gboolean editor_rename(void)
 {
     NppDoc *doc = editor_current_doc();
-    if (!doc || !doc->filepath) return FALSE;
+    if (!doc) return FALSE;
+
+    /* GAP-33 (macOS #177) — renaming an UNTITLED tab sets a custom
+     * display name instead of touching the filesystem. */
+    if (!doc->filepath) {
+        char cur[128];
+        editor_doc_display_name(doc, cur, sizeof(cur));
+        GtkWidget *dlg = gtk_dialog_new_with_buttons(
+            "Rename Tab", GTK_WINDOW(s_window),
+            GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+            "_Cancel", GTK_RESPONSE_CANCEL,
+            "_Rename", GTK_RESPONSE_ACCEPT,
+            NULL);
+        gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+        GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+        GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_margin_start(hbox, 12);
+        gtk_widget_set_margin_end(hbox, 12);
+        gtk_widget_set_margin_top(hbox, 8);
+        gtk_widget_set_margin_bottom(hbox, 8);
+        npp_box_pack(GTK_BOX(content), hbox, FALSE, 0);
+        npp_box_pack(GTK_BOX(hbox), gtk_label_new("Tab name:"), FALSE, 0);
+        GtkWidget *entry = gtk_entry_new();
+        gtk_entry_set_text(GTK_ENTRY(entry), cur);
+        gtk_entry_set_width_chars(GTK_ENTRY(entry), 30);
+        gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+        npp_box_pack(GTK_BOX(hbox), entry, TRUE, 0);
+        gtk_widget_show_all(dlg);
+
+        gboolean renamed = FALSE;
+        if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+            const char *nn = gtk_entry_get_text(GTK_ENTRY(entry));
+            if (nn && *nn && g_strcmp0(nn, cur) != 0) {
+                g_free(doc->custom_name);
+                doc->custom_name = g_strdup(nn);
+                refresh_tab_label(editor_current_page());
+                update_window_title();
+                main_doclist_refresh();
+                renamed = TRUE;
+            }
+        }
+        gtk_widget_destroy(dlg);
+        return renamed;
+    }
 
     char *dir  = g_path_get_dirname(doc->filepath);
     char *base = g_path_get_basename(doc->filepath);

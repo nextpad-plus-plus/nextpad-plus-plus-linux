@@ -4811,6 +4811,20 @@ static void install_tab_color_css(void) {
          * extra :checked, so it out-specifies the active-tab orange
          * `tab:checked` rule further down) the active tab — a coloured
          * tab keeps its colour whether active or not, like macOS. */
+        /* GAP-32 — multi-row strip (flowbox) tabs: same stripe palette;
+         * the .tab-color-N class lands on the flowboxchild (the parent
+         * of the shared tab-box, mirroring the notebook `tab` node). */
+        ".npp-tabstrip { background: #d8d8d8; padding: 2px; }\n"
+        ".npp-tabstrip flowboxchild.npp-strip-tab {\n"
+        "  background: #e3e3e3; border-radius: 4px 4px 0 0;\n"
+        "  padding: 2px 6px; margin: 0; }\n"
+        ".npp-tabstrip flowboxchild.npp-strip-tab.active-tab {\n"
+        "  background: #fdfdfd; }\n"
+        ".npp-tabstrip flowboxchild.tab-color-1 { box-shadow: inset 0 3px 0 0 #FCE386; }\n"
+        ".npp-tabstrip flowboxchild.tab-color-2 { box-shadow: inset 0 3px 0 0 #A9F08C; }\n"
+        ".npp-tabstrip flowboxchild.tab-color-3 { box-shadow: inset 0 3px 0 0 #7AC9F5; }\n"
+        ".npp-tabstrip flowboxchild.tab-color-4 { box-shadow: inset 0 3px 0 0 #F5B67A; }\n"
+        ".npp-tabstrip flowboxchild.tab-color-5 { box-shadow: inset 0 3px 0 0 #F08CF0; }\n"
         "notebook.npp-editor-tabs > header > tabs > tab.tab-color-1,\n"
         "notebook.npp-editor-tabs > header > tabs > tab.tab-color-1:checked { box-shadow: inset 0 3px 0 0 #FCE386; }\n"
         "notebook.npp-editor-tabs > header > tabs > tab.tab-color-2,\n"

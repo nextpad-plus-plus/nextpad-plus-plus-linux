@@ -7,6 +7,9 @@
 typedef struct {
     GtkWidget    *sci;
     char         *filepath;           /* NULL = unsaved */
+    char         *custom_name;        /* GAP-33 — user-renamed untitled tab
+                                       * (macOS customTabName, #177); NULL
+                                       * unless renamed. Cleared on save-as. */
     char         *encoding;           /* e.g. "UTF-8", "ISO-8859-1" — does NOT
                                        * include BOM marker; see has_bom field */
     gboolean      has_bom;            /* file carries a UTF byte-order mark on
@@ -74,7 +77,12 @@ gboolean   editor_save_at(int page);               /* save specific page     */
 gboolean   editor_save_all(void);                  /* save all modified docs  */
 gboolean   editor_save_as_dialog(void);            /* shows GTK save dialog  */
 gboolean   editor_save_copy_as(void);             /* save copy to new path, keep current */
-gboolean   editor_rename(void);                   /* rename current file in-place */
+gboolean   editor_rename(void);                   /* rename file / untitled tab */
+/* GAP-33 — display name for tabs/titles: basename, custom name, or "new N". */
+const char *editor_doc_display_name(const NppDoc *doc, char *buf, size_t n);
+void       editor_refresh_all_tab_labels(void);
+/* GAP-32 — apply the "wrap tabs" pref (build/dissolve the flow strip). */
+void       editor_tabstrip_sync(void);
 void       editor_reload_current(void);            /* reload current doc from disk */
 void       editor_reload_as(const char *encoding); /* re-read with forced encoding */
 gboolean   editor_close_page(int page);            /* -1 = current           */

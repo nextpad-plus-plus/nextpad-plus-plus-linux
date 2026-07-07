@@ -271,6 +271,7 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         if      (!strcmp(attr, "closeButton"))        g_prefs.tab_close_button       = is_yes(val);
         else if (!strcmp(attr, "doubleClick2Close"))  g_prefs.double_click_tab_close = is_yes(val);
         else if (!strcmp(attr, "multiLine"))          g_prefs.tab_bar_wrap           = is_yes(val);
+        else if (!strcmp(attr, "followZoom"))         g_prefs.tab_follow_zoom        = is_yes(val);
         else if (!strcmp(attr, "tabCompactLabelLen")) g_prefs.tab_max_label_width    = atoi(val);
         else if (!strcmp(attr, "hide"))               g_prefs.hide_tab_bar           = is_yes(val);
     }
@@ -654,9 +655,10 @@ void prefs_save(void)
     g_string_append_printf(b,
         "        <GUIConfig name=\"TabBar\" closeButton=\"%s\" doubleClick2Close=\"%s\" "
         "reduce=\"yes\" dragAndDrop=\"yes\" drawTopBar=\"yes\" drawInactiveTab=\"yes\" "
-        "pinButton=\"yes\" multiLine=\"%s\" tabCompactLabelLen=\"%d\" hide=\"%s\" />\n",
+        "pinButton=\"yes\" multiLine=\"%s\" followZoom=\"%s\" tabCompactLabelLen=\"%d\" hide=\"%s\" />\n",
         b2yn(g_prefs.tab_close_button), b2yn(g_prefs.double_click_tab_close),
-        b2yn(g_prefs.tab_bar_wrap), g_prefs.tab_max_label_width,
+        b2yn(g_prefs.tab_bar_wrap), b2yn(g_prefs.tab_follow_zoom),
+g_prefs.tab_max_label_width,
         b2yn(g_prefs.hide_tab_bar));
 
     /* Line spacing (macOS #149) */
@@ -939,7 +941,9 @@ void prefs_save(void)
 /* ------------------------------------------------------------------ */
 
 void editor_apply_prefs(void);
-void editor_refresh_clickable_links(void);   /* GAP-37 */
+void editor_refresh_clickable_links(void);
+void editor_refresh_all_tab_labels(void);
+void editor_tabstrip_sync(void);   /* GAP-37 */
 void main_refresh_title(void);
 void statusbar_set_visible(gboolean v);   /* defined in statusbar.c */
 void toolbar_apply_icon_scale(int scale); /* may be stubbed */
@@ -1086,7 +1090,8 @@ CHK(lf_allow_bm,       large_file_allow_brace_match,  (void)0)
 CHK(lf_allow_url,      large_file_allow_url_click,    (void)0)
 CHK(tab_close_btn,     tab_close_button,           (void)0)
 CHK(tab_dclose,        double_click_tab_close,     (void)0)
-CHK(tab_wrap,          tab_bar_wrap,               (void)0)
+CHK(tab_wrap,          tab_bar_wrap,               editor_tabstrip_sync())   /* GAP-32 */
+CHK(tab_follow_zoom,   tab_follow_zoom,            editor_refresh_all_tab_labels())   /* GAP-31 */
 CHK(hide_tab_bar,      hide_tab_bar,               editor_apply_prefs())
 CHK(status_visible,    show_status_bar,            statusbar_set_visible(g_prefs.show_status_bar))
 
@@ -1291,6 +1296,7 @@ static GtkWidget *page_tab_bar(void)
     make_check(g, r++, "Show close button on tabs",      g_prefs.tab_close_button,      G_CALLBACK(on_tab_close_btn));
     make_check(g, r++, "Double-click to close tab",      g_prefs.double_click_tab_close, G_CALLBACK(on_tab_dclose));
     make_check(g, r++, "Wrap tabs to multiple lines",    g_prefs.tab_bar_wrap,          G_CALLBACK(on_tab_wrap));
+    make_check(g, r++, "Tab size follows document zoom", g_prefs.tab_follow_zoom,       G_CALLBACK(on_tab_follow_zoom));
     make_check(g, r++, "Hide tab bar",                   g_prefs.hide_tab_bar,          G_CALLBACK(on_hide_tab_bar));
 
     GtkWidget *ml = gtk_spin_button_new_with_range(40, 1000, 10);
