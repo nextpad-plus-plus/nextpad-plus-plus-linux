@@ -248,7 +248,7 @@ void plugin_notify_shutdown(void);
  *   void        setInfo(NppData nppData);
  *
  * Plugin directory layout:
- *   ~/.config/notetux/plugins/<PluginName>/<PluginName>.so
+ *   <local data dir>/plugins/<PluginName>/<PluginName>.so
  * ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------

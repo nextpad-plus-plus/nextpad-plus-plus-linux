@@ -3,11 +3,11 @@
 
 #include <glib.h>
 
-/* Serialise all open (saved) tabs to ~/.config/notetux/session.xml.
+/* Serialise all open (saved) tabs to the machine-local session.xml.
  * Call before closing tabs so positions are still readable. */
 void session_save(void);
 
-/* Reopen tabs from ~/.config/notetux/session.xml and restore scroll/caret.
+/* Reopen tabs from the machine-local session.xml and restore scroll/caret.
  * Silently skips files that no longer exist on disk. */
 void session_restore(void);
 void session_restore_from(const char *path);

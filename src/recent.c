@@ -1,102 +1,94 @@
-/*
- * recent.c — Recent Files persistence.
- * Algorithm from notetux-plus-plus/linux/src/main.c (GPL-3, Andrea Coi).
+/* recent.c — Recent Files list.
+ *
+ * A small MRU list persisted as one absolute path per line in the
+ * machine-local recentfiles.txt (never cloud-redirected — the paths
+ * only mean something on this computer). Matches the macOS port's
+ * behaviour: RECENT_MAX entries, most recent first, re-opening a file
+ * moves it to the top.
  */
 #include "recent.h"
 #include "paths.h"
-#include "gtk_compat.h"
-#include "branding.h"
 
 #include <glib.h>
-#include <glib/gstdio.h>
 #include <string.h>
 
-static GPtrArray *s_recent = NULL;
+static GPtrArray *s_list;   /* char* entries, owned, index 0 = newest */
 
-static char *recent_file_path(void)
+static GPtrArray *list(void)
 {
-    return npp_local_file(NULL, "recentfiles.txt");   /* machine paths: local */
+    if (!s_list) s_list = g_ptr_array_new_with_free_func(g_free);
+    return s_list;
 }
 
-static void ensure_init(void)
+static gint find_entry(const char *path)
 {
-    if (!s_recent) s_recent = g_ptr_array_new();
+    GPtrArray *l = list();
+    for (guint i = 0; i < l->len; i++)
+        if (strcmp(g_ptr_array_index(l, i), path) == 0)
+            return (gint)i;
+    return -1;
 }
 
 void recent_load(void)
 {
-    ensure_init();
-    char *path = recent_file_path();
-    char *contents = NULL;
-    if (g_file_get_contents(path, &contents, NULL, NULL)) {
-        char **lines = g_strsplit(contents, "\n", -1);
-        for (int i = 0; lines[i] && s_recent->len < RECENT_MAX; i++) {
-            if (lines[i][0] != '\0')
-                g_ptr_array_add(s_recent, g_strdup(lines[i]));
+    gchar *file = npp_local_file(NULL, "recentfiles.txt");
+    gchar *data = NULL;
+
+    if (g_file_get_contents(file, &data, NULL, NULL)) {
+        for (char *line = strtok(data, "\n");
+             line && list()->len < RECENT_MAX;
+             line = strtok(NULL, "\n")) {
+            if (*line)
+                g_ptr_array_add(list(), g_strdup(line));
         }
-        g_strfreev(lines);
-        g_free(contents);
+        g_free(data);
     }
-    g_free(path);
+    g_free(file);
 }
 
 void recent_save(void)
 {
-    ensure_init();
-    /* Create the config dir if needed. */
-    char *dir = npp_user_dir();
+    gchar *dir = npp_local_dir();
     g_mkdir_with_parents(dir, 0755);
     g_free(dir);
 
-    GString *buf = g_string_new(NULL);
-    for (guint i = 0; i < s_recent->len; i++)
-        g_string_append_printf(buf, "%s\n", (char *)s_recent->pdata[i]);
-    char *path = recent_file_path();
-    g_file_set_contents(path, buf->str, (gssize)buf->len, NULL);
-    g_free(path);
-    g_string_free(buf, TRUE);
+    GString *out = g_string_new(NULL);
+    for (guint i = 0; i < list()->len; i++) {
+        g_string_append(out, g_ptr_array_index(list(), i));
+        g_string_append_c(out, '\n');
+    }
+
+    gchar *file = npp_local_file(NULL, "recentfiles.txt");
+    g_file_set_contents(file, out->str, (gssize)out->len, NULL);
+    g_free(file);
+    g_string_free(out, TRUE);
 }
 
 void recent_files_add(const char *path)
 {
     if (!path || !*path) return;
-    ensure_init();
 
-    /* Remove any existing entry for this path. */
-    for (guint i = 0; i < s_recent->len; i++) {
-        if (strcmp((char *)s_recent->pdata[i], path) == 0) {
-            g_free(s_recent->pdata[i]);
-            g_ptr_array_remove_index(s_recent, i);
-            break;
-        }
-    }
-    /* Prepend. */
-    g_ptr_array_insert(s_recent, 0, g_strdup(path));
-    /* Trim. */
-    while (s_recent->len > RECENT_MAX) {
-        g_free(s_recent->pdata[s_recent->len - 1]);
-        g_ptr_array_remove_index(s_recent, s_recent->len - 1);
-    }
+    gint at = find_entry(path);
+    if (at >= 0)
+        g_ptr_array_remove_index(list(), (guint)at);
+
+    g_ptr_array_insert(list(), 0, g_strdup(path));
+    g_ptr_array_set_size(list(), MIN(list()->len, RECENT_MAX));
     recent_save();
 }
 
 void recent_files_clear(void)
 {
-    ensure_init();
-    for (guint i = 0; i < s_recent->len; i++)
-        g_free(s_recent->pdata[i]);
-    g_ptr_array_set_size(s_recent, 0);
+    g_ptr_array_set_size(list(), 0);
     recent_save();
 }
 
 GPtrArray *recent_files_get(void)
 {
-    ensure_init();
-    return s_recent;
+    return list();
 }
 
 guint recent_files_count(void)
 {
-    ensure_init();
-    return s_recent->len;
+    return list()->len;
 }

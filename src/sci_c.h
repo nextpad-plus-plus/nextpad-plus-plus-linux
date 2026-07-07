@@ -32,7 +32,7 @@
  * ──────────────────────────────────────────────────────────────────────── */
 
 /* `SCI_SETMARGINTYPE(N)` etc. — official Scintilla appends N to the per-margin
- * variants. notetux dropped the N. Alias both. */
+ * variants. The app sources dropped the N. Alias both. */
 #ifndef SCI_SETMARGINTYPE
 #define SCI_SETMARGINTYPE        SCI_SETMARGINTYPEN
 #endif
@@ -40,7 +40,7 @@
 #define SCI_SETMARGINSENSITIVE   SCI_SETMARGINSENSITIVEN
 #endif
 
-/* `SCWS_*` vs `SC_WS_*` — Scintilla uses SCWS_, notetux wrote SC_WS_. */
+/* `SCWS_*` vs `SC_WS_*` — Scintilla uses SCWS_, the app wrote SC_WS_. */
 #ifndef SC_WS_INVISIBLE
 #define SC_WS_INVISIBLE          SCWS_INVISIBLE
 #endif
@@ -51,14 +51,12 @@
 #define SC_WS_VISIBLEAFTERINDENT SCWS_VISIBLEAFTERINDENT
 #endif
 
-/* `SCI_MARKERPREV` is notetux's shorthand for `SCI_MARKERPREVIOUS`. */
+/* `SCI_MARKERPREV` — app shorthand for `SCI_MARKERPREVIOUS`. */
 #ifndef SCI_MARKERPREV
 #define SCI_MARKERPREV           SCI_MARKERPREVIOUS
 #endif
 
-/* notetux allocates marker slots 23/24 for bookmark + changehistory but
- * Scintilla.h doesn't reserve named constants for them. Provide the slot
- * numbers as notetux expects. */
+/* Bookmark marker slot. */
 #ifndef SC_MARKNUM_BOOKMARK
 /* 24 belongs to native change history (SC_MARKNUM_HISTORY_REVERTED_TO_
  * MODIFIED) since GAP-42 — bookmarks on 24 rendered as the history
@@ -67,7 +65,7 @@
 #endif
 
 /* `Sci_TextRangeFull` is declared as `struct Sci_TextRangeFull` in
- * sci_messages.h; provide the bare-name typedef notetux uses. */
+ * sci_messages.h; provide the bare-name typedef the app uses. */
 typedef struct Sci_TextRangeFull Sci_TextRangeFull;
 
 #endif /* SCI_C_H */

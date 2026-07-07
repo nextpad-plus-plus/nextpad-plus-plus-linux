@@ -35,7 +35,7 @@ void stylestore_init(const char *xml_path);
  * path may be absolute; NULL reloads from the original model. */
 void stylestore_load_theme(const char *path);
 
-/* Write current styles to $HOME/.config/notetux/stylers.xml. */
+/* Write current styles to the active style file (see save_active). */
 void stylestore_save_user(void);
 /* Save to the active style file: NULL/"Default" -> user stylers.xml,
  * else the user's themes/<name>.xml copy (macOS parity). */

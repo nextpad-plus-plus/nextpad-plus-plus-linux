@@ -1,7 +1,7 @@
 /*
  * branding.h — single source of truth for the user-facing app name and config
  * directory. Grafted files reference these macros instead of hardcoded
- * strings so a future fork (e.g. notetux-plus-plus upstream) can flip the
+ * strings so a future fork can flip the
  * brand with a one-line change.
  *
  * Current settings: Nextpad++.

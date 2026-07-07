@@ -1,11 +1,8 @@
 /*
- * recent.h — Recent Files persistence (G3.5).
+ * recent.h — Recent Files persistence.
  *
- * Algorithm grafted from notetux-plus-plus/linux/src/main.c (Andrea Coi,
- * GPL-3). UI binding rewritten for GMenuModel / GAction.
- *
- * Store: ~/<APP_CONFIG_DIR>/recentfiles.txt (one path per line).
- * Cap:   15 entries (matches macOS port; notetux upstream caps at 10).
+ * Store: recentfiles.txt in the machine-local data dir (one absolute
+ * path per line, newest first). Cap: 15 entries, matching macOS.
  */
 #ifndef RECENT_H
 #define RECENT_H
