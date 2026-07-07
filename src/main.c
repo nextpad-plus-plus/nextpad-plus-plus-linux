@@ -6691,6 +6691,27 @@ static gboolean on_files_dropped(GtkDropTarget *dt, const GValue *value,
  * its own; panel_frame mirrors that onto the frame; we mirror frame
  * visibility onto the host so an empty right column collapses to 0 width.
  * Counter stored on the host as a GINT-tagged data key. */
+/* GAP-49 — plugin panels dock into the same right-side host. Stored
+ * here so plugin.c can attach frames after build time. */
+static GtkWidget *g_side_panel_host;
+
+static void on_panel_frame_show(GtkWidget *frame, gpointer user_data);
+static void on_panel_frame_hide(GtkWidget *frame, gpointer user_data);
+
+GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
+                                    GtkWidget *content)
+{
+    if (!g_side_panel_host || !content) return NULL;
+    GtkWidget *frame = panel_frame_new(name, title, content, NULL, NULL);
+    npp_box_pack(GTK_BOX(g_side_panel_host), frame, TRUE, 0);
+    g_signal_connect(frame, "show",
+                     G_CALLBACK(on_panel_frame_show), g_side_panel_host);
+    g_signal_connect(frame, "hide",
+                     G_CALLBACK(on_panel_frame_hide), g_side_panel_host);
+    gtk_widget_set_visible(frame, FALSE);
+    return frame;
+}
+
 static void side_host_bump(GtkWidget *host, int delta) {
     int n = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(host),
                                               "npp-visible-count"));
@@ -6901,6 +6922,7 @@ static void build_main_window(GtkApplication *app)
     if (sresults_frame) gtk_paned_pack2(GTK_PANED(vpaned), sresults_frame, FALSE, FALSE);
 
     GtkWidget *side_panel_host = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    g_side_panel_host = side_panel_host;   /* GAP-49 — plugin panel dock */
     if (doclist_frame)   npp_box_pack(GTK_BOX(side_panel_host), doclist_frame, TRUE, 0);
     if (workspace_frame) npp_box_pack(GTK_BOX(side_panel_host), workspace_frame, TRUE, 0);
     if (funclist_frame)  npp_box_pack(GTK_BOX(side_panel_host), funclist_frame, TRUE, 0);

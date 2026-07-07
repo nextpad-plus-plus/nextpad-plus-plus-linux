@@ -269,7 +269,12 @@ void plugin_notify_before_shutdown(void)         { fire_notification(NPPN_BEFORE
 void plugin_notify_shutdown(void)                { fire_notification(NPPN_SHUTDOWN,        NULL); }
 
 /* Track plugin panel registrations — stub list for now; G21 hooks them in. */
-typedef struct { void *panel_widget; char title[128]; int visible; } PluginPanel;
+typedef struct {
+    void      *panel_widget;   /* plugin-owned GtkWidget */
+    char      *title;          /* owned copy (GAP-49) */
+    GtkWidget *frame;          /* our panel_frame once docked, or NULL */
+    int        visible;
+} PluginPanel;
 static PluginPanel s_plugin_panels[32];
 static int         s_plugin_panel_count = 0;
 
@@ -581,38 +586,61 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
 
     /* ── Dockable plugin panel API (G21 backbone) ────────────────────── */
     case NPPM_DMM_REGISTERPANEL: {
-        /* lParam → tTbData struct (NSView*/ /*hClient on macOS). On Linux this is
-         * a GtkWidget *. Stub: track it but don't show. G21 wires actual
-         * floating/docking.
-         * GAP-51 (macOS fa85edf): reject NULL / non-widget pointers at
-         * registration so a bogus handle can't crash later show/hide. */
+        /* Linux ABI: lParam = the plugin's GtkWidget*, wParam = optional
+         * panel title (const char *, may be 0 — older plugins). GAP-51:
+         * reject NULL / non-widget pointers so a bogus handle can't
+         * crash later show/hide. GAP-49: the widget is wrapped in a
+         * standard panel_frame and docked into the right-side host on
+         * first SHOWPANEL. */
         if (s_plugin_panel_count >= 32) return 0;
         void *w = (void *)(intptr_t)lParam;
         if (!w || !GTK_IS_WIDGET(w)) return 0;
         PluginPanel *p = &s_plugin_panels[s_plugin_panel_count++];
         p->panel_widget = w;
         p->visible = 0;
+        p->frame = NULL;
+        g_free(p->title);
+        p->title = wParam ? g_strdup((const char *)(intptr_t)wParam)
+                          : g_strdup("Plugin Panel");
         return (long)s_plugin_panel_count;  /* opaque handle */
     }
     case NPPM_DMM_SHOWPANEL: {
         int idx = (int)wParam - 1;
         if (idx < 0 || idx >= s_plugin_panel_count) return 0;
-        s_plugin_panels[idx].visible = 1;
-        if (s_plugin_panels[idx].panel_widget &&
-            GTK_IS_WIDGET(s_plugin_panels[idx].panel_widget))
-            gtk_widget_show(GTK_WIDGET(s_plugin_panels[idx].panel_widget));
+        PluginPanel *p = &s_plugin_panels[idx];
+        if (!p->panel_widget || !GTK_IS_WIDGET(p->panel_widget)) return 0;
+        if (!p->frame) {
+            extern GtkWidget *main_plugin_panel_attach(const char *,
+                                                       const char *,
+                                                       GtkWidget *);
+            char name[32];
+            g_snprintf(name, sizeof name, "plugin-panel-%d", idx + 1);
+            p->frame = main_plugin_panel_attach(name, p->title,
+                                                GTK_WIDGET(p->panel_widget));
+            if (!p->frame) return 0;
+        }
+        p->visible = 1;
+        gtk_widget_set_visible(GTK_WIDGET(p->panel_widget), TRUE);
+        gtk_widget_set_visible(p->frame, TRUE);
         return 1;
     }
     case NPPM_DMM_HIDEPANEL: {
         int idx = (int)wParam - 1;
         if (idx < 0 || idx >= s_plugin_panel_count) return 0;
-        s_plugin_panels[idx].visible = 0;
-        if (s_plugin_panels[idx].panel_widget)
-            gtk_widget_hide(GTK_WIDGET(s_plugin_panels[idx].panel_widget));
+        PluginPanel *p = &s_plugin_panels[idx];
+        p->visible = 0;
+        if (p->frame) gtk_widget_set_visible(p->frame, FALSE);
         return 1;
     }
     case NPPM_DMM_UNREGISTERPANEL: {
-        /* No actual deallocation — stub. */
+        /* Hide the frame and detach the plugin's widget so the plugin
+         * regains sole ownership; the frame husk stays (slots are not
+         * reused within a session — cheap and safe). */
+        int idx = (int)wParam - 1;
+        if (idx < 0 || idx >= s_plugin_panel_count) return 0;
+        PluginPanel *p = &s_plugin_panels[idx];
+        if (p->frame) gtk_widget_set_visible(p->frame, FALSE);
+        p->panel_widget = NULL;
         return 1;
     }
 
@@ -622,8 +650,16 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
          * back to NPPM_MENUCOMMAND if they relied on raw menu access. */
         return 0;
     case NPPM_ADDTOOLBARICON_FORDARKMODE:
-        /* Toolbar icon registration — stub. */
-        return 1;
+        /* Linux ABI (GAP-74): wParam = the plugin FuncItem cmdID, lParam
+         * = const char * path to a PNG icon (both light+dark sets are
+         * the plugin's concern on this platform). */
+        {
+            const char *icon = (const char *)(intptr_t)lParam;
+            extern void toolbar_add_plugin_button(const char *, int,
+                                                  const char *);
+            toolbar_add_plugin_button(icon, (int)wParam, NULL);
+            return 1;
+        }
     case NPPM_DARKMODESUBCLASSANDTHEME:
         return 0;
 
@@ -1063,7 +1099,9 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     }
     case NPPM_GETCURRENTNATIVELANGENCODING: return 65001;  /* UTF-8 */
     case NPPM_GETWINDOWSVERSION:            return 0;       /* not Windows */
-    case NPPM_ADDTOOLBARICON:               return 1;
+    case NPPM_ADDTOOLBARICON:
+        return plugin_host_message(NPPM_ADDTOOLBARICON_FORDARKMODE,
+                                   wParam, lParam);
     case NPPM_ENCODESCI:
     case NPPM_DECODESCI:                    return 1;
     case NPPM_CREATELEXER:                  return 0;       /* stub */

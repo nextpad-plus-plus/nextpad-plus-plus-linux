@@ -887,6 +887,64 @@ static void sync_toggle(GtkWidget *btn, GCallback cb, gboolean active)
     g_signal_handlers_unblock_matched(btn, G_SIGNAL_MATCH_FUNC, 0, 0, NULL, cb, NULL);
 }
 
+static void on_plugin_toolbar_clicked(GtkButton *b, gpointer u)
+{
+    (void)u;
+    extern gboolean plugin_run_command_by_id(int cmd_id);
+    plugin_run_command_by_id(GPOINTER_TO_INT(
+        g_object_get_data(G_OBJECT(b), "plugin-cmd-id")));
+}
+
+/* GAP-74 — plugin toolbar buttons: one trailing group after a divider
+ * (macOS default-mode plugin grouping). Icons are PNG paths supplied by
+ * the plugin; the colorization pref's "apply to plugin icons" toggle
+ * routes them through the same pipeline. */
+static GtkWidget *s_plugin_group;   /* box appended on first button */
+
+void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
+                               const char *tooltip)
+{
+    if (!s_toolbar) return;
+    if (!s_plugin_group) {
+        GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
+        gtk_widget_set_margin_start(sep, 4);
+        gtk_widget_set_margin_end(sep, 4);
+        gtk_box_append(GTK_BOX(s_toolbar), sep);
+        s_plugin_group = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+        gtk_widget_add_css_class(s_plugin_group, "npp-plugin-toolbar-group");
+        gtk_box_append(GTK_BOX(s_toolbar), s_plugin_group);
+    }
+
+    GtkWidget *btn = gtk_button_new();
+    GdkPixbuf *pb = icon_path ? gdk_pixbuf_new_from_file(icon_path, NULL)
+                              : NULL;
+    if (pb) {
+        if (!gdk_pixbuf_get_has_alpha(pb)) {
+            GdkPixbuf *a = gdk_pixbuf_add_alpha(pb, FALSE, 0, 0, 0);
+            g_object_unref(pb);
+            pb = a;
+        }
+        if (g_prefs.toolbar_color_plugins)
+            toolbar_colorize_pixbuf(pb);
+        GdkTexture *tex = gdk_texture_new_for_pixbuf(pb);
+        g_object_unref(pb);
+        GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
+        g_object_unref(tex);
+        gtk_image_set_pixel_size(GTK_IMAGE(img), icon_px());
+        gtk_button_set_child(GTK_BUTTON(btn), img);
+    } else {
+        gtk_button_set_icon_name(GTK_BUTTON(btn),
+                                 "application-x-addon-symbolic");
+    }
+    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
+    if (tooltip) gtk_widget_set_tooltip_text(btn, tooltip);
+    g_object_set_data(G_OBJECT(btn), "plugin-cmd-id",
+                      GINT_TO_POINTER(cmd_id));
+    g_signal_connect(btn, "clicked",
+                     G_CALLBACK(on_plugin_toolbar_clicked), NULL);
+    gtk_box_append(GTK_BOX(s_plugin_group), btn);
+}
+
 void toolbar_sync_panels(void)
 {
     sync_toggle(s_tgl_doclist,    G_CALLBACK(on_tgl_doclist),    doclist_is_visible());
