@@ -1133,7 +1133,7 @@ static void action_view_summary(GSimpleAction *a, GVariant *p, gpointer u) {
         "  Selection:    %lld characters\n"
         "  Encoding:     %s\n",
         doc && doc->filepath ? doc->filepath
-                              : (doc ? "Untitled" : "(no document)"),
+                              : (doc ? "an unsaved document" : "(no document)"),
         (long long)lines, (long long)bytes, (long long)words, (long long)sel_len,
         doc && doc->encoding ? doc->encoding : "UTF-8");
 
@@ -2651,7 +2651,7 @@ static void action_copy_all_names(GSimpleAction *a, GVariant *p, gpointer u) {
         NppDoc *d = editor_doc_at(i); if (!d) continue;
         if (d->filepath) { char *b = g_path_get_basename(d->filepath);
                            g_string_append_printf(out, "%s\n", b); g_free(b); }
-        else g_string_append_printf(out, "Untitled-%d\n", d->new_index);
+        else g_string_append_printf(out, "new %d\n", d->new_index);
     }
     copy_to_clipboard(out->str); g_string_free(out, TRUE);
 }
@@ -3868,8 +3868,9 @@ static void action_print_real(GSimpleAction *a, GVariant *p, gpointer u) {
     }
     pc->text[pc->text_len] = '\0';
     NppDoc *d = editor_current_doc();
-    pc->filename = d && d->filepath ? g_path_get_basename(d->filepath)
-                                    : g_strdup("Untitled");
+    pc->filename = d && d->filepath
+        ? g_path_get_basename(d->filepath)
+        : g_strdup_printf("new %d", d ? d->new_index : 1);
 
     GtkPrintOperation *op = gtk_print_operation_new();
     if (g_page_setup)

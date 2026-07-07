@@ -143,13 +143,13 @@ static GtkWidget *watermark_build(void)
     return box;
 }
 
-/* G3.3: pick the lowest unused Untitled-N index instead of monotonic counter.
- * Matches the macOS port's gap-filling behaviour: closing Untitled-2 makes
- * the next new tab reuse "Untitled-2" rather than incrementing to 3. */
+/* G3.3: pick the lowest unused "new N" index instead of a monotonic
+ * counter. Matches the macOS port's gap-filling behaviour: closing
+ * "new 2" makes the next new tab reuse "new 2", not increment to 3. */
 static int        s_new_count;  /* kept for source-of-truth at boot; not used after init */
 static int next_untitled_index(void)
 {
-    /* Build a bitmap of which Untitled-N values are currently live, then
+    /* Build a bitmap of which "new N" values are currently live, then
      * return the smallest positive integer not present. */
     int n = s_notebook ? gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) : 0;
     if (n <= 0) return 1;
@@ -1119,7 +1119,7 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     if (base)
         snprintf(buf, sizeof(buf), "%s", base);
     else
-        snprintf(buf, sizeof(buf), "Untitled-%d", doc->new_index);
+        snprintf(buf, sizeof(buf), "new %d", doc->new_index);
 
     /* G3.6: a click gesture on the tab box intercepts middle-click (close),
      * double-click (close) and right-click (context menu).
@@ -1320,7 +1320,7 @@ static void update_window_title(void)
         snprintf(buf, sizeof(buf), "%s%s — " APP_NAME "%s%s", mod, name,
                  extra ? " " : "", extra ? extra : "");
     } else {
-        snprintf(buf, sizeof(buf), "%sUntitled-%d — " APP_NAME "%s%s", mod,
+        snprintf(buf, sizeof(buf), "%snew %d — " APP_NAME "%s%s", mod,
                  doc->new_index, extra ? " " : "", extra ? extra : "");
     }
 
