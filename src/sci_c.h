@@ -60,7 +60,10 @@
  * Scintilla.h doesn't reserve named constants for them. Provide the slot
  * numbers as notetux expects. */
 #ifndef SC_MARKNUM_BOOKMARK
-#define SC_MARKNUM_BOOKMARK      24
+/* 24 belongs to native change history (SC_MARKNUM_HISTORY_REVERTED_TO_
+ * MODIFIED) since GAP-42 — bookmarks on 24 rendered as the history
+ * marker's dark-cyan FULLRECT. Modern N++ uses 20 for the same reason. */
+#define SC_MARKNUM_BOOKMARK      20
 #endif
 
 /* `Sci_TextRangeFull` is declared as `struct Sci_TextRangeFull` in

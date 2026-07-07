@@ -885,6 +885,23 @@ void prefs_save(void)
         g_free(sch);
     }
 
+    /* GAP-46/47 — toolbar colorization + standard icon set. */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"ToolbarColor\" mode=\"%d\" choice=\"%d\""
+        " custom=\"%s\" plugins=\"%s\" standard=\"%s\" />\n",
+        g_prefs.toolbar_color_mode, g_prefs.toolbar_color_choice,
+        g_prefs.toolbar_color_custom, b2yn(g_prefs.toolbar_color_plugins),
+        b2yn(g_prefs.toolbar_standard_icons));
+
+    /* GAP-43 — Global override force flags. */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"globalOverride\" fg=\"%s\" bg=\"%s\""
+        " font=\"%s\" fontSize=\"%s\" bold=\"%s\" italic=\"%s\""
+        " underline=\"%s\" />\n",
+        b2yn(g_prefs.gov_fg), b2yn(g_prefs.gov_bg), b2yn(g_prefs.gov_font),
+        b2yn(g_prefs.gov_font_size), b2yn(g_prefs.gov_bold),
+        b2yn(g_prefs.gov_italic), b2yn(g_prefs.gov_underline));
+
     /* GAP-70 — appearance style (Classic default / Modern opt-in). */
     g_string_append_printf(b,
         "        <GUIConfig name=\"AppearanceStyle\" style=\"%s\" />\n",
