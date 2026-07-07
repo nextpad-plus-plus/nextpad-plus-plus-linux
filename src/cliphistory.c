@@ -3,7 +3,8 @@
 #include "editor.h"
 #include <string.h>
 
-#define CLIP_MAX 20
+/* GAP-71 — 30 entries, matching macOS ClipboardHistoryPanel. */
+#define CLIP_MAX 30
 
 /* ------------------------------------------------------------------ */
 /* Module state                                                        */
@@ -99,6 +100,27 @@ static void on_clipboard_changed(GdkClipboard *cb, gpointer d)
     gdk_clipboard_read_text_async(cb, NULL, on_clip_text_ready, NULL);
 }
 
+static gboolean on_clip_key(GtkEventControllerKey *c, guint keyval,
+                            guint keycode, GdkModifierType state,
+                            gpointer d)
+{
+    (void)c; (void)keycode; (void)d;
+    if ((state & GDK_CONTROL_MASK) &&
+        (keyval == GDK_KEY_c || keyval == GDK_KEY_C)) {
+        GtkListBoxRow *row =
+            gtk_list_box_get_selected_row(GTK_LIST_BOX(s_listbox));
+        const char *text = row
+            ? (const char *)g_object_get_data(G_OBJECT(row), "clip-text")
+            : NULL;
+        if (text) {
+            gdk_clipboard_set_text(
+                gtk_widget_get_clipboard(s_listbox), text);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 /* ------------------------------------------------------------------ */
 /* Row activated → paste                                               */
 /* ------------------------------------------------------------------ */
@@ -164,6 +186,13 @@ GtkWidget *cliphistory_init(GtkWidget *window)
     s_listbox = GTK_LIST_BOX(gtk_list_box_new());
     gtk_list_box_set_selection_mode(s_listbox, GTK_SELECTION_SINGLE);
     g_signal_connect(s_listbox, "row-activated", G_CALLBACK(on_row_activated), NULL);
+    {
+        /* GAP-71 — Ctrl+C with a row selected re-copies that entry to
+         * the clipboard without pasting (macOS pasteboardWriterForRow). */
+        GtkEventController *kc = gtk_event_controller_key_new();
+        g_signal_connect(kc, "key-pressed", G_CALLBACK(on_clip_key), NULL);
+        gtk_widget_add_controller(s_listbox, kc);
+    }
 
     GtkWidget *scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),

@@ -28,6 +28,7 @@ typedef struct {
     gboolean    shrink;        /* GtkPaned pack shrink hint */
     GtkWidget  *float_window;  /* current floating window, or NULL */
     int         float_w, float_h; /* persisted geometry */
+    gboolean    pinned;        /* GAP-72 — floats above the main window */
 } FloatingEntry;
 
 #define MAX_FLOATS 16
@@ -76,6 +77,18 @@ void floating_register(const char *name, GtkWidget *widget) {
     /* Default geometry for popout. */
     e->float_w = 400;
     e->float_h = 600;
+    e->pinned  = TRUE;   /* panels float above the editor by default */
+}
+
+/* GAP-72 — pin toggle: transient-for-main on, free toplevel off. */
+static void on_pin_toggled(GtkToggleButton *b, gpointer win)
+{
+    FloatingEntry *e = g_object_get_data(G_OBJECT(b), "float-entry");
+    GtkRoot *main_root = g_object_get_data(G_OBJECT(b), "float-main");
+    gboolean pinned = npp_toggle_get_active(GTK_WIDGET(b));
+    if (e) e->pinned = pinned;
+    gtk_window_set_transient_for(GTK_WINDOW(win),
+        pinned && GTK_IS_WINDOW(main_root) ? GTK_WINDOW(main_root) : NULL);
 }
 
 static gboolean on_float_window_delete(GtkWindow *w, gpointer ud) {
@@ -109,6 +122,10 @@ void floating_popout(const char *name) {
     if (GTK_IS_BOX(e->parent) && !box_has_visible_child(e->parent))
         gtk_widget_set_visible(e->parent, FALSE);
 
+    /* Root of the docked parent = the main window; grab it BEFORE the
+     * removal below unparents everything. */
+    GtkRoot *main_root = gtk_widget_get_root(e->parent);
+
     GtkWidget *win = gtk_window_new();
     char title[128];
     g_snprintf(title, sizeof(title), "%s — Nextpad++ Panel", e->name);
@@ -116,6 +133,26 @@ void floating_popout(const char *name) {
     gtk_window_set_default_size(GTK_WINDOW(win), e->float_w, e->float_h);
     g_signal_connect(win, "close-request",
                      G_CALLBACK(on_float_window_delete), e);
+
+    /* GAP-72 — pin toggle in the header bar (macOS FloatingPanelWindow):
+     * pinned keeps the panel above the main window. GTK4 has no window
+     * levels, so pin = transient-for-main; unpin = free-floating. */
+    {
+        GtkWidget *hb  = gtk_header_bar_new();
+        GtkWidget *pin = gtk_toggle_button_new();
+        gtk_button_set_icon_name(GTK_BUTTON(pin), "view-pin-symbolic");
+        gtk_button_set_has_frame(GTK_BUTTON(pin), FALSE);
+        gtk_widget_set_tooltip_text(pin, "Keep above the main window");
+        npp_toggle_set_active(pin, e->pinned);
+        g_object_set_data(G_OBJECT(pin), "float-entry", e);
+        g_object_set_data(G_OBJECT(pin), "float-main",  main_root);
+        g_signal_connect(pin, "toggled", G_CALLBACK(on_pin_toggled), win);
+        gtk_header_bar_pack_end(GTK_HEADER_BAR(hb), pin);
+        gtk_window_set_titlebar(GTK_WINDOW(win), hb);
+    }
+    if (e->pinned && GTK_IS_WINDOW(main_root))
+        gtk_window_set_transient_for(GTK_WINDOW(win),
+                                     GTK_WINDOW(main_root));
 
     gtk_container_add(GTK_CONTAINER(win), e->widget);
     g_object_unref(e->widget);
