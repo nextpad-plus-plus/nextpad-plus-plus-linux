@@ -11,15 +11,16 @@
 #include "panelstate.h"
 #include "floating.h"
 #include "prefs.h"
+#include "plugin.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_PANELS 16
+#define MAX_PANELS 48   /* built-ins + plugin panels (32 slots) */
 
 typedef struct {
-    char       name[32];
+    char       name[64];   /* built-in id, or plugin panel TITLE */
     GtkWidget *frame;
     gboolean   restorable;
 } PanelEntry;
@@ -30,6 +31,12 @@ static int        s_n;
  * of hide signals) long before the saved state has been replayed. */
 static gboolean   s_suspended = TRUE;
 static gboolean   s_frozen;
+/* GAP-81 — plugin tokens loaded from config, held VERBATIM until the
+ * phase-2 restore has replayed them: plugin panels only register once
+ * their command runs, so any earlier save rebuilding from live state
+ * (the phase-1 normalize, a built-in toggle) would scrub the tokens
+ * before phase 2 could read them. NULL = live mode. */
+static char      *s_plugin_tokens_pending;
 
 static PanelEntry *entry_for_name(const char *name)
 {
@@ -183,6 +190,17 @@ static void save_open_state(void)
                                   popped ? ":popped" : "");
         if (off >= sizeof buf - 1) break;
     }
+    /* GAP-81 — declared plugin panels ride the same group as
+     * "plugin=…" tokens (built-in parsing skips them by name lookup).
+     * Until phase 2 has run, re-emit the LOADED tokens verbatim. */
+    char *pt = s_plugin_tokens_pending
+                   ? g_strdup(s_plugin_tokens_pending)
+                   : plugin_panels_save_tokens();
+    if (pt && *pt && strlen(buf) + strlen(pt) + 2 < sizeof buf) {
+        if (*buf) g_strlcat(buf, " ", sizeof buf);
+        g_strlcat(buf, pt, sizeof buf);
+    }
+    g_free(pt);
     g_strlcpy(g_prefs.open_side_panels, buf,
               sizeof g_prefs.open_side_panels);
     floats_capture_to_prefs();   /* pin toggles ride along */
@@ -218,6 +236,23 @@ void panelstate_register(const char *name, GtkWidget *frame,
 
 void panelstate_restore(void)
 {
+    /* Capture the plugin tokens BEFORE anything can rewrite the group
+     * (kept verbatim through every save until phase 2 consumes them;
+     * under a keep-state-off launch they are simply held forever, so
+     * the stored plugin layout survives just like the built-in one). */
+    {
+        GString *pend = g_string_new(NULL);
+        char *copy = g_strdup(g_prefs.open_side_panels);
+        for (char *tok = strtok(copy, " "); tok; tok = strtok(NULL, " "))
+            if (strncmp(tok, "plugin=", 7) == 0)
+                g_string_append_printf(pend, "%s%s",
+                                       pend->len ? " " : "", tok);
+        g_free(copy);
+        s_plugin_tokens_pending = pend->len
+                                      ? g_string_free(pend, FALSE)
+                                      : (g_string_free(pend, TRUE), NULL);
+    }
+
     /* Float sizes + pin states apply even when open-state restore is
      * off — they only take effect when the USER pops a panel out. */
     floats_seed_from_prefs();
@@ -294,4 +329,42 @@ void panelstate_freeze(void)
      * same reason. */
     s_frozen = TRUE;
     prefs_save();
+}
+
+/* ── GAP-81 — phase 2: plugin panels ────────────────────────────────── */
+
+/* Runs 500 ms after NPPN_READY (main.c timeout — macOS AppDelegate uses
+ * the same delay) so a plugin that restores its own panel in READY wins
+ * and the ladder no-ops on it. Parses the "plugin=…" tokens the built-in
+ * phase skipped. Same preference gate as phase 1. */
+void panelstate_restore_plugins(void)
+{
+    if (!g_prefs.panel_keep_state) return;
+    if (!s_plugin_tokens_pending) return;
+    char *copy = s_plugin_tokens_pending;   /* consume: live mode next */
+    s_plugin_tokens_pending = NULL;
+    for (char *tok = strtok(copy, " "); tok; tok = strtok(NULL, " ")) {
+        if (strncmp(tok, "plugin=", 7) != 0) continue;
+        /* plugin=<esc-module>,<cmdIndex>,<esc-cmdName>,<esc-title>,
+         *        <popped01>,<W>x<H>,<pin01> */
+        gchar **f = g_strsplit(tok + 7, ",", 8);
+        int nf = 0;
+        while (f[nf]) nf++;
+        if (nf >= 4) {
+            char *module = g_uri_unescape_string(f[0], NULL);
+            char *cname  = g_uri_unescape_string(f[2], NULL);
+            char *title  = g_uri_unescape_string(f[3], NULL);
+            gboolean popped = nf >= 5 && atoi(f[4]) == 1;
+            int fw = 0, fh = 0, fpin = 1;
+            if (nf >= 6) sscanf(f[5], "%dx%d", &fw, &fh);
+            if (nf >= 7) fpin = atoi(f[6]);
+            plugin_panel_restore(module, atoi(f[1]),
+                                 cname ? cname : "", title ? title : "",
+                                 popped, fw, fh, fpin != 0);
+            g_free(module); g_free(cname); g_free(title);
+        }
+        g_strfreev(f);
+    }
+    g_free(copy);
+    save_open_state();   /* normalize: live plugin state from here on */
 }

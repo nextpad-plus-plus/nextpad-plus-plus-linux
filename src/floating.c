@@ -31,7 +31,7 @@ typedef struct {
     gboolean    pinned;        /* GAP-72 — floats above the main window */
 } FloatingEntry;
 
-#define MAX_FLOATS 16
+#define MAX_FLOATS 48   /* built-ins + plugin panels (GAP-81) */
 static FloatingEntry s_entries[MAX_FLOATS];
 static int           s_n = 0;
 /* GAP-83 — panelstate.c re-saves open+popped state on every pop-out /

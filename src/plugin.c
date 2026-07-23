@@ -1,4 +1,6 @@
 #include "plugin.h"
+#include "floating.h"
+#include "panelstate.h"
 #include "paths.h"
 #include "statusbar.h"
 #include "gtk_compat.h"
@@ -274,6 +276,12 @@ typedef struct {
     char      *title;          /* owned copy (GAP-49) */
     GtkWidget *frame;          /* our panel_frame once docked, or NULL */
     int        visible;
+    /* GAP-81 — NPPM_DMM_SETPANELINFO restore metadata. module NULL =
+     * never declared = not restorable. cmd_name is resolved at declare
+     * time (names survive FuncItem reordering; index is the fallback). */
+    char      *module;
+    int        cmd_index;
+    char      *cmd_name;
 } PluginPanel;
 static PluginPanel s_plugin_panels[32];
 static int         s_plugin_panel_count = 0;
@@ -618,10 +626,20 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
             p->frame = main_plugin_panel_attach(name, p->title,
                                                 GTK_WIDGET(p->panel_widget));
             if (!p->frame) return 0;
+            /* GAP-81/83 — pop-out support (the frame's detach button
+             * dispatches floating_toggle on this name) + per-panel width
+             * memory and open-state save triggers via panelstate. The
+             * panelstate key is the TITLE (stable across sessions;
+             * plugin-panel-N is load-order-dependent). Not restorable
+             * through the built-in toggle replay — plugin restore is
+             * the SETPANELINFO phase-2 path. */
+            floating_register(name, p->frame);
+            panelstate_register(p->title, p->frame, FALSE);
         }
         p->visible = 1;
         gtk_widget_set_visible(GTK_WIDGET(p->panel_widget), TRUE);
         gtk_widget_set_visible(p->frame, TRUE);
+        panelstate_layout_changed();   /* GAP-81 — persist open set */
         return 1;
     }
     case NPPM_DMM_HIDEPANEL: {
@@ -630,6 +648,7 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         PluginPanel *p = &s_plugin_panels[idx];
         p->visible = 0;
         if (p->frame) gtk_widget_set_visible(p->frame, FALSE);
+        panelstate_layout_changed();   /* GAP-81 — persist open set */
         return 1;
     }
     case NPPM_DMM_UNREGISTERPANEL: {
@@ -641,6 +660,32 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         PluginPanel *p = &s_plugin_panels[idx];
         if (p->frame) gtk_widget_set_visible(p->frame, FALSE);
         p->panel_widget = NULL;
+        return 1;
+    }
+    case NPPM_DMM_SETPANELINFO: {
+        /* GAP-81 (macOS 7d74dcb): wParam = REGISTERPANEL handle, lParam =
+         * const NppPanelInfo *. May legitimately point at the caller's
+         * stack — same trust level as the title lParam in REGISTERPANEL.
+         * The command NAME is resolved NOW; runtime cmd ids are
+         * load-order-dependent and never persisted. */
+        int idx = (int)wParam - 1;
+        if (idx < 0 || idx >= s_plugin_panel_count) return 0;
+        const NppPanelInfo *info = (const NppPanelInfo *)(intptr_t)lParam;
+        if (!info || !info->moduleName || !*info->moduleName) return 0;
+        PluginPanel *p = &s_plugin_panels[idx];
+        g_free(p->module);
+        g_free(p->cmd_name);
+        p->module    = g_strdup(info->moduleName);
+        p->cmd_index = info->cmdIndex;
+        p->cmd_name  = NULL;
+        for (int i = 0; i < s_n_plugins; i++) {
+            if (g_ascii_strcasecmp(s_plugins[i].name, p->module) != 0)
+                continue;
+            if (p->cmd_index >= 0 && p->cmd_index < s_plugins[i].n_funcs)
+                p->cmd_name =
+                    g_strdup(s_plugins[i].funcs[p->cmd_index].itemName);
+            break;
+        }
         return 1;
     }
 
@@ -1113,5 +1158,120 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
 
     default:
         return 0L;
+    }
+}
+
+/* ── GAP-81 — plugin-panel persistence (panelstate.c glue) ─────────── */
+
+/* A panel is "open" when its frame is visible in the dock or the frame
+ * is popped out. p->visible is unreliable (the frame's × close hides
+ * the wrapper without informing us) — trust the widget tree. */
+static gboolean panel_is_open_idx(int idx)
+{
+    PluginPanel *p = &s_plugin_panels[idx];
+    if (!p->frame) return FALSE;
+    char name[32];
+    g_snprintf(name, sizeof name, "plugin-panel-%d", idx + 1);
+    if (floating_is_floating(name)) return TRUE;
+    return gtk_widget_get_visible(p->frame);
+}
+
+char *plugin_panels_save_tokens(void)
+{
+    GString *out = g_string_new(NULL);
+    for (int i = 0; i < s_plugin_panel_count; i++) {
+        PluginPanel *p = &s_plugin_panels[i];
+        if (!p->module || !panel_is_open_idx(i)) continue;   /* undeclared → not saved */
+        char name[32];
+        g_snprintf(name, sizeof name, "plugin-panel-%d", i + 1);
+        /* Float geometry+pin ride inside the token: the floating registry
+         * keys plugin panels by load-order-dependent plugin-panel-N, so
+         * the stable FloatingPanels group can't carry them. */
+        int fw = 0, fh = 0;
+        gboolean fpin = TRUE;
+        floating_get_state(name, &fw, &fh, &fpin);
+        char *em = g_uri_escape_string(p->module, NULL, FALSE);
+        char *ec = g_uri_escape_string(p->cmd_name ? p->cmd_name : "", NULL, FALSE);
+        char *et = g_uri_escape_string(p->title ? p->title : "", NULL, FALSE);
+        g_string_append_printf(out, "%splugin=%s,%d,%s,%s,%d,%dx%d,%d",
+                               out->len ? " " : "", em, p->cmd_index, ec, et,
+                               floating_is_floating(name) ? 1 : 0,
+                               fw, fh, fpin ? 1 : 0);
+        g_free(em); g_free(ec); g_free(et);
+    }
+    return g_string_free(out, FALSE);
+}
+
+/* Find the registered panel matching a saved token (title always;
+ * module too when the record declares one). */
+static int panel_find_by_identity(const char *module, const char *title)
+{
+    for (int i = 0; i < s_plugin_panel_count; i++) {
+        PluginPanel *p = &s_plugin_panels[i];
+        if (!p->title || !title || strcmp(p->title, title) != 0) continue;
+        if (p->module && module &&
+            g_ascii_strcasecmp(p->module, module) != 0) continue;
+        return i;
+    }
+    return -1;
+}
+
+void plugin_panel_restore(const char *module, int cmd_index,
+                          const char *cmd_name, const char *title,
+                          gboolean popped, int float_w, int float_h,
+                          gboolean float_pinned)
+{
+    if (!module || !*module || !title || !*title) return;
+
+    /* Tier 1 — already open (the plugin restored it itself, e.g. from
+     * its own config in NPPN_READY): no-op. */
+    int idx = panel_find_by_identity(module, title);
+    if (idx >= 0 && panel_is_open_idx(idx)) return;
+
+    /* Tier 2 (macOS 167d794) — invoke the plugin's DECLARED command,
+     * even when the panel is registered-but-hidden: opening through the
+     * plugin's own code path keeps its internal state consistent
+     * (visibility flags, lazy engine spin-up). Name match first, index
+     * fallback; runtime ids are never trusted. */
+    gboolean replayed = FALSE;
+    for (int i = 0; i < s_n_plugins && !replayed; i++) {
+        if (g_ascii_strcasecmp(s_plugins[i].name, module) != 0) continue;
+        int fi = -1;
+        if (cmd_name && *cmd_name) {
+            for (int j = 0; j < s_plugins[i].n_funcs; j++)
+                if (strcmp(s_plugins[i].funcs[j].itemName, cmd_name) == 0) {
+                    fi = j;
+                    break;
+                }
+        }
+        if (fi < 0 && cmd_index >= 0 && cmd_index < s_plugins[i].n_funcs)
+            fi = cmd_index;
+        if (fi >= 0 && s_plugins[i].funcs[fi].pFunc) {
+            s_plugins[i].funcs[fi].pFunc();
+            replayed = TRUE;
+        }
+        break;
+    }
+
+    /* Tier 3 — last resort when the declared command no longer
+     * resolves: a direct host-side show of the registered panel. */
+    if (!replayed) {
+        if (idx < 0) return;                 /* nothing to show */
+        plugin_host_message(NPPM_DMM_SHOWPANEL,
+                            (unsigned long)(idx + 1), 0);
+    }
+
+    /* Float geometry + popped state (GAP-83 shape): the frame exists
+     * after either path above (the command replay funnels through
+     * SHOWPANEL). Seed size/pin under THIS session's registry name
+     * before any pop, so both the restore pop and a later manual
+     * pop-out use the remembered geometry. */
+    idx = panel_find_by_identity(module, title);
+    if (idx >= 0 && s_plugin_panels[idx].frame) {
+        char name[32];
+        g_snprintf(name, sizeof name, "plugin-panel-%d", idx + 1);
+        if (float_w > 0 && float_h > 0)
+            floating_set_state(name, float_w, float_h, float_pinned);
+        if (popped && !floating_is_floating(name)) floating_popout(name);
     }
 }

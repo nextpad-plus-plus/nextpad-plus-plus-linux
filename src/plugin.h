@@ -155,6 +155,36 @@ typedef struct {
 #define NPPM_DMM_SHOWPANEL                    (NPPM_BASE + 502)
 #define NPPM_DMM_HIDEPANEL                    (NPPM_BASE + 503)
 #define NPPM_DMM_UNREGISTERPANEL              (NPPM_BASE + 504)
+/* GAP-81 (macOS 7d74dcb/167d794) — OPTIONAL restore metadata for a
+ * registered panel, the analogue of Windows tTbData's pszModuleName +
+ * dlgID. A panel that declares this and is open when Nextpad++ quits is
+ * re-opened at the next launch (subject to the "Remember panel
+ * visibility" preference). Never declared → never restored (pre-1.1.0
+ * behaviour).
+ *   wParam — handle returned from NPPM_DMM_REGISTERPANEL.
+ *   lParam — const NppPanelInfo * (read only for the duration of the
+ *            call; may live on the caller's stack).
+ * Restore ladder at the next launch (after NPPN_READY + 500 ms, so a
+ * plugin that restores its own panel in READY wins and the host no-ops):
+ *   1. panel already visible → nothing;
+ *   2. otherwise the host INVOKES YOUR MENU COMMAND at cmdIndex — even
+ *      when the panel is registered-but-hidden, so the open runs through
+ *      your code path and your internal state stays consistent. That
+ *      command must therefore be a plain open/toggle with no other side
+ *      effects (do NOT point it at a command that starts real work);
+ *   3. a direct host-side show is the last resort, only when the
+ *      declared command can no longer be resolved.
+ * The command is re-resolved by NAME first (captured at declare time —
+ * survives FuncItem reordering across plugin versions), index fallback.
+ * Returns 1 on success, 0 for an invalid handle — and 0 on hosts older
+ * than 1.1.0; ignore the result and the plugin stays compatible. */
+#define NPPM_DMM_SETPANELINFO                 (NPPM_BASE + 505)
+
+typedef struct NppPanelInfo {
+    const char *moduleName;   /* plugin folder / getName() name, e.g. "NotifySpy" */
+    int         cmdIndex;     /* index into your FuncItem array of the pure
+                               * open/toggle command for this panel (dlgID) */
+} NppPanelInfo;
 
 /* ── RUNCOMMAND_USER range (path / word / line queries) ──────────────── */
 #define NPPM_GETFULLCURRENTPATH               (NPPM_RUNCMD_BASE + 1)
@@ -259,6 +289,20 @@ void  plugin_load_all(void);
 void  plugin_refresh_handles(void);           /* update NppData.scintilla*Handle */
 void  plugin_notify_all(void *pNotify);       /* pass SCNotification * cast to void * */
 long  plugin_host_message(unsigned int msg, unsigned long wParam, long lParam);
+
+/* GAP-81 — plugin-panel persistence glue (used by panelstate.c).
+ * plugin_panels_save_tokens: allocated space-separated tokens
+ * ("plugin=<esc-module>,<cmdIndex>,<esc-cmdName>,<esc-title>,<popped01>,
+ * <W>x<H>,<pin01>" — float geometry rides the token because the floating
+ * registry keys plugin panels by load-order-dependent names) for every
+ * OPEN panel whose plugin declared NPPM_DMM_SETPANELINFO; "" when none.
+ * plugin_panel_restore: the tier ladder for one saved token (call after
+ * plugins are loaded). */
+char *plugin_panels_save_tokens(void);
+void  plugin_panel_restore(const char *module, int cmd_index,
+                           const char *cmd_name, const char *title,
+                           gboolean popped, int float_w, int float_h,
+                           gboolean float_pinned);
 int   plugin_count(void);
 
 /* FuncItem enumeration (dynamic Plugins menu) + dispatch by cmdID

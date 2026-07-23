@@ -7251,6 +7251,11 @@ static void build_main_window(GtkApplication *app)
         main_rebuild_menubar();
     /* G33 — fire NPPN_READY once plugins are loaded. */
     plugin_notify_ready();
+    /* GAP-81 — phase 2 of panel restore: PLUGIN panels, 500 ms after
+     * READY (macOS AppDelegate timing) so plugins that self-restore in
+     * READY win and the host ladder no-ops on them. */
+    g_timeout_add_once(500, (GSourceOnceFunc)panelstate_restore_plugins,
+                       NULL);
 
     /* G3.7: accept file drops from Nautilus / other apps. */
     {

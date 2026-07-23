@@ -50,6 +50,10 @@ void panelstate_note_width(int width);
  * tracking, and normalizes the saved state once. */
 void panelstate_restore(void);
 
+/* Phase 2 (GAP-81): re-open saved PLUGIN panels — call ~500 ms after
+ * NPPN_READY, once plugins are loaded. Same pref gate as phase 1. */
+void panelstate_restore_plugins(void);
+
 /* Pop-out / dock-back changed the layout without any show/hide signal
  * (macOS b98a360) — re-save the open+popped state. Wired as the
  * floating.c layout hook. */
