@@ -809,6 +809,10 @@ static gboolean save_udl(UDLEditor *ui, const char *name) {
     if (ok) {
         udl_reload();
         populate_picker(GTK_COMBO_BOX_TEXT(ui->lang_picker));
+        /* GAP-84 (macOS #247): the Language menu lists loaded UDLs — a
+         * save must refresh it live, not on next restart. */
+        extern void main_rebuild_menubar(void);
+        main_rebuild_menubar();
     }
     return ok;
 }
@@ -879,6 +883,9 @@ static void on_remove_clicked(GtkButton *b, gpointer ud) {
     udl_reload();
     populate_picker(GTK_COMBO_BOX_TEXT(ui->lang_picker));
     clear_all_fields(ui);
+    /* GAP-84 — drop the removed UDL from the Language menu immediately. */
+    extern void main_rebuild_menubar(void);
+    main_rebuild_menubar();
 }
 
 /* ────────────────────────────────────────────────────────────────────── */

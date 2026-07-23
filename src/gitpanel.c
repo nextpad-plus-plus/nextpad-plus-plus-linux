@@ -38,22 +38,39 @@ static char       s_repo_dir[1024] = "";
 /* Helpers                                                                */
 /* ────────────────────────────────────────────────────────────────────── */
 
-static char *run_git(const char *workdir, const char *const *argv) {
+/* Run `git …` (argv[0] = "git") in workdir and return its stdout (owned),
+ * or NULL on spawn failure. `ok_out`, if non-NULL, is set TRUE when git
+ * exited 0.
+ *
+ * Uses g_spawn_sync with an explicit working_directory + real argv — NOT
+ * g_spawn_command_line_sync, which parses with g_shell_parse_argv and
+ * execs directly (no shell). The previous "cd '%s' && git …" strings ran
+ * through that no-shell path and tried to exec a literal `cd` binary,
+ * which does not exist — so every git command silently failed and the
+ * whole panel showed nothing. argv also means paths with spaces or
+ * non-ASCII bytes are passed as single elements — no shell quoting. */
+static char *run_git_ex(const char *workdir, const char *const *argv,
+                        gboolean *ok_out) {
+    if (ok_out) *ok_out = FALSE;
     if (!workdir) return NULL;
-    gchar *stdout_buf = NULL;
+    gchar *stdout_buf = NULL, *stderr_buf = NULL;
+    gint   status = 0;
     GError *err = NULL;
-    /* Use g_spawn_sync with explicit cwd. */
-    gchar *cmd = g_strjoinv(" ", (gchar **)argv);
-    gchar *full_cmd = g_strdup_printf("cd '%s' && %s", workdir, cmd);
-    g_free(cmd);
-    g_spawn_command_line_sync(full_cmd, &stdout_buf, NULL, NULL, &err);
-    g_free(full_cmd);
-    if (err) {
-        g_error_free(err);
+    gboolean spawned = g_spawn_sync(workdir, (gchar **)argv, NULL,
+                                    G_SPAWN_SEARCH_PATH, NULL, NULL,
+                                    &stdout_buf, &stderr_buf, &status, &err);
+    g_free(stderr_buf);
+    if (!spawned) {
+        if (err) g_error_free(err);
         g_free(stdout_buf);
         return NULL;
     }
+    if (ok_out) *ok_out = g_spawn_check_wait_status(status, NULL);
     return stdout_buf;
+}
+
+static char *run_git(const char *workdir, const char *const *argv) {
+    return run_git_ex(workdir, argv, NULL);
 }
 
 /* Walk up from `start` looking for a .git dir. Returns owned string or NULL. */
@@ -88,15 +105,13 @@ static GtkWidget *s_branch_label = NULL;     /* "ƒ <branch>" — matches macOS 
 
 static void stage_all_cmd(void) {
     if (!s_repo_dir[0]) return;
-    gchar *cmd = g_strdup_printf("cd '%s' && git add -A", s_repo_dir);
-    g_spawn_command_line_sync(cmd, NULL, NULL, NULL, NULL);
-    g_free(cmd);
+    const char *argv[] = { "git", "add", "-A", NULL };
+    g_free(run_git(s_repo_dir, argv));
 }
 static void unstage_all_cmd(void) {
     if (!s_repo_dir[0]) return;
-    gchar *cmd = g_strdup_printf("cd '%s' && git reset HEAD --", s_repo_dir);
-    g_spawn_command_line_sync(cmd, NULL, NULL, NULL, NULL);
-    g_free(cmd);
+    const char *argv[] = { "git", "reset", "HEAD", "--", NULL };
+    g_free(run_git(s_repo_dir, argv));
 }
 static void on_stage_all_clicked(GtkButton *b, gpointer u) {
     (void)b;(void)u; stage_all_cmd();   void gitpanel_refresh(void); gitpanel_refresh();
@@ -114,11 +129,9 @@ static void update_branch_label(void) {
         gtk_label_set_text(GTK_LABEL(s_branch_label), "");
         return;
     }
-    gchar *cmd = g_strdup_printf(
-        "cd '%s' && git symbolic-ref --quiet --short HEAD", s_repo_dir);
-    gchar *out = NULL;
-    g_spawn_command_line_sync(cmd, &out, NULL, NULL, NULL);
-    g_free(cmd);
+    const char *argv[] = { "git", "symbolic-ref", "--quiet",
+                           "--short", "HEAD", NULL };
+    gchar *out = run_git(s_repo_dir, argv);
     if (out) {
         g_strstrip(out);
         gchar *txt = g_strdup_printf("\xC6\x92 %s", *out ? out : "(detached)");
@@ -135,7 +148,14 @@ static void refresh_status(void) {
     gtk_list_store_clear(s_status_store);
     if (!s_repo_dir[0]) return;
 
-    const char *argv[] = { "git", "status", "--porcelain", NULL };
+    /* GAP-85 (macOS d3a38eb): core.quotePath=false makes git emit
+     * non-ASCII paths as raw UTF-8 instead of C-quoting them
+     * (café.txt, not "caf\303\251.txt"). Without it the quoted string
+     * is shown in the panel AND fed back to `git add`/`restore`, where
+     * it no longer matches the real file — stage/discard silently fail
+     * on any accented or CJK filename. */
+    const char *argv[] = { "git", "-c", "core.quotePath=false",
+                           "status", "--porcelain", NULL };
     char *out = run_git(s_repo_dir, argv);
     if (!out) return;
 
@@ -159,12 +179,19 @@ static void refresh_status(void) {
 /* P11 — stage / unstage / discard helpers, run as g_spawn_command_line. */
 static void run_git_simple(const char *fmt, const char *path) {
     if (!s_repo_dir[0]) return;
-    gchar *qpath = g_shell_quote(path);
-    gchar *cmd   = g_strdup_printf("cd '%s' && git %s %s",
-                                   s_repo_dir, fmt, qpath);
-    g_spawn_command_line_sync(cmd, NULL, NULL, NULL, NULL);
-    g_free(cmd);
-    g_free(qpath);
+    /* fmt is a space-separated subcommand token list, e.g. "add --" or
+     * "restore --staged --"; build argv = git <tokens…> <path> so the
+     * path (which may hold spaces / non-ASCII) is one exact element. */
+    gchar **toks = g_strsplit(fmt, " ", -1);
+    guint nt = 0; while (toks[nt]) nt++;
+    const char **argv = g_new0(const char *, nt + 3);
+    argv[0] = "git";
+    for (guint i = 0; i < nt; i++) argv[i + 1] = toks[i];
+    argv[nt + 1] = path;
+    argv[nt + 2] = NULL;
+    g_free(run_git(s_repo_dir, argv));
+    g_free(argv);
+    g_strfreev(toks);
 }
 
 /* Get selected status row's path; caller frees. NULL if none selected. */
@@ -240,24 +267,19 @@ static void on_commit_clicked(GtkButton *btn, gpointer u) {
         gtk_widget_destroy(d);
         return;
     }
-    gchar *qmsg = g_shell_quote(msg);
-    gchar *cmd  = g_strdup_printf("cd '%s' && git commit -m %s",
-                                  s_repo_dir, qmsg);
-    gchar *out = NULL, *err = NULL;
-    gint   rc  = 0;
-    g_spawn_command_line_sync(cmd, &out, &err, &rc, NULL);
-    g_free(cmd); g_free(qmsg);
+    const char *argv[] = { "git", "commit", "-m", msg, NULL };
+    gboolean committed = FALSE;
+    gchar *out = run_git_ex(s_repo_dir, argv, &committed);
 
     GtkWidget *d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
-        rc == 0 ? GTK_MESSAGE_INFO : GTK_MESSAGE_ERROR,
-        GTK_BUTTONS_OK, "%s", rc == 0 ? "Commit succeeded." : "Commit failed.");
+        committed ? GTK_MESSAGE_INFO : GTK_MESSAGE_ERROR,
+        GTK_BUTTONS_OK, "%s", committed ? "Commit succeeded." : "Commit failed.");
     if (out && *out) gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d), "%s", out);
-    else if (err && *err) gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d), "%s", err);
     gtk_dialog_run(GTK_DIALOG(d));
     gtk_widget_destroy(d);
-    g_free(out); g_free(err);
+    g_free(out);
 
-    if (rc == 0) {
+    if (committed) {
         gtk_entry_set_text(GTK_ENTRY(s_commit_entry), "");
         refresh_status();
     }
@@ -398,13 +420,9 @@ static void refresh_blame_for(const char *file_path) {
 
     /* git blame --line-porcelain produces a verbose format; use the shorter
      * --porcelain plus -p flags for SHA + author at line start. */
-    gchar *quoted = g_shell_quote(file_path);
-    gchar *cmd = g_strdup_printf("cd '%s' && git blame --date=short %s",
-                                 s_repo_dir, quoted);
-    g_free(quoted);
-    gchar *out = NULL;
-    g_spawn_command_line_sync(cmd, &out, NULL, NULL, NULL);
-    g_free(cmd);
+    const char *argv[] = { "git", "blame", "--date=short",
+                           file_path, NULL };
+    gchar *out = run_git(s_repo_dir, argv);
     if (!out) return;
 
     gchar **lines = g_strsplit(out, "\n", -1);
