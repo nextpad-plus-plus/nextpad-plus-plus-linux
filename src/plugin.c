@@ -298,6 +298,18 @@ gboolean plugin_run_command_by_id(int cmd_id)
     return FALSE;
 }
 
+/* GAP-89 — the FuncItem name that owns a cmdID (toolbar tooltip + the
+ * Tahoe Plugins-capsule config key; macOS keys the split by command
+ * name). NULL when no plugin owns the id. */
+const char *plugin_cmd_name_by_id(int cmd_id)
+{
+    for (int i = 0; i < s_n_plugins; i++)
+        for (int j = 0; j < s_plugins[i].n_funcs; j++)
+            if (s_plugins[i].funcs[j].cmdID == cmd_id)
+                return s_plugins[i].funcs[j].itemName;
+    return NULL;
+}
+
 /* ------------------------------------------------------------------
  * NPPM host message router
  * ------------------------------------------------------------------ */
@@ -828,7 +840,7 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
                 }
             }
             toolbar_add_plugin_button(dark ? dark : icon, (int)wParam,
-                                      NULL);
+                                      plugin_cmd_name_by_id((int)wParam));
             g_free(dark);
             return 1;
         }

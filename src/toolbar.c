@@ -794,6 +794,23 @@ static void cap_macro(GtkWidget *tb, GtkWidget *parent_window)
 }
 
 typedef void (*CapsuleBuildFn)(GtkWidget *, GtkWidget *);
+/* GAP-89 — ordered slot for the Plugins capsule: an empty anchor box at
+ * the configured position; plugin icon registrations (which arrive
+ * after toolbar build, at NPPN_TBMODIFICATION) populate it via
+ * rebuild_plugins_capsule(). Tentative defs — the full machinery and
+ * these statics' home live after the plugin-button block below. */
+static GtkWidget *s_plugins_slot;
+static gboolean   s_plugins_cap_hidden;
+
+static void cap_plugins_slot(GtkWidget *tb, GtkWidget *parent_window)
+{
+    (void)parent_window;
+    if (!s_plugins_slot) {
+        s_plugins_slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_box_append(GTK_BOX(tb), s_plugins_slot);
+    }
+}
+
 static const struct { const char *id; CapsuleBuildFn build; } kCapsules[] = {
     { "File", cap_file },
     { "Edit", cap_edit },
@@ -803,7 +820,8 @@ static const struct { const char *id; CapsuleBuildFn build; } kCapsules[] = {
     { "Sync", cap_sync },
     { "Panels", cap_panels },
     { "Monitor", cap_monitor },
-    { "Macro", cap_macro }
+    { "Macro", cap_macro },
+    { "Plugins", cap_plugins_slot }
 };
 
 /* Load group order/visibility from toolbarButtonsTahoeConf.xml in the
@@ -843,7 +861,13 @@ static int tahoeconf_load(const char *out_ids[16])
         if (!q) continue;
         gboolean shown = !(vis && vis < close &&
                            g_str_has_prefix(vis + 9, "no"));
-        if (!shown) continue;
+        if (!shown) {
+            /* GAP-89 — remember a hidden Plugins group so the plugin-
+             * registration fallback doesn't resurrect the capsule. */
+            if ((size_t)(q - idp) == 7 && strncmp(idp, "Plugins", 7) == 0)
+                s_plugins_cap_hidden = TRUE;
+            continue;
+        }
         for (size_t i = 0; i < G_N_ELEMENTS(kCapsules) && n < 16; i++)
             if ((size_t)(q - idp) == strlen(kCapsules[i].id) &&
                 strncmp(idp, kCapsules[i].id, (size_t)(q - idp)) == 0)
@@ -1016,26 +1040,10 @@ static void on_plugin_toolbar_clicked(GtkButton *b, gpointer u)
  * routes them through the same pipeline. */
 static GtkWidget *s_plugin_group;   /* box appended on first button */
 
-void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
-                               const char *tooltip)
+/* One plugin icon button (shared by Classic group + Tahoe capsule). */
+static GtkWidget *make_plugin_icon_button(const char *icon_path, int cmd_id,
+                                          const char *tooltip)
 {
-    if (!s_toolbar) return;
-    if (!s_plugin_group) {
-        if (g_prefs.appearance_style == 1) {
-            /* GAP-70 — Tahoe: plugin buttons get their own capsule. */
-            s_plugin_group = capsule_begin(s_toolbar, "Plugins", NULL);
-        } else {
-            GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
-            gtk_widget_set_margin_start(sep, 4);
-            gtk_widget_set_margin_end(sep, 4);
-            gtk_box_append(GTK_BOX(s_toolbar), sep);
-            s_plugin_group = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
-            gtk_widget_add_css_class(s_plugin_group,
-                                     "npp-plugin-toolbar-group");
-            gtk_box_append(GTK_BOX(s_toolbar), s_plugin_group);
-        }
-    }
-
     GtkWidget *btn = gtk_button_new();
     GdkPixbuf *pb = icon_path ? gdk_pixbuf_new_from_file(icon_path, NULL)
                               : NULL;
@@ -1063,7 +1071,359 @@ void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
                       GINT_TO_POINTER(cmd_id));
     g_signal_connect(btn, "clicked",
                      G_CALLBACK(on_plugin_toolbar_clicked), NULL);
-    gtk_box_append(GTK_BOX(s_plugin_group), btn);
+    return btn;
+}
+
+/* ── GAP-89 — Tahoe "Plugins" capsule with config-driven split ──────── */
+/* macOS parity (MainWindowController.mm makeTahoePluginGroupToolbarItem
+ * + _reconcileTahoePluginsIfNeeded): every plugin-registered icon lives
+ * in ONE "Plugins" capsule; the primary/overflow/hidden split is keyed
+ * by COMMAND NAME in the Plugins group of toolbarButtonsTahoeConf.xml.
+ * While the group is un-customized, the curated default split is
+ * re-derived on every registration (plugins arrive one-by-one with no
+ * "all done" callback); once the user takes over (customized="yes"),
+ * their arrangement is preserved and new commands only APPEND to
+ * overflow. Overflow items ride the ▾ label menu through
+ * app.plugin-cmd(i) — same dispatch (and macro recording) as the menu. */
+
+typedef struct { char *name; char *icon_path; int cmd_id; } PluginTbItem;
+static GPtrArray *s_plugin_items;      /* PluginTbItem*, registration order */
+static GtkWidget *s_plugins_slot;      /* Modern: capsule anchor in tb */
+static GtkWidget *s_plugins_capsule;   /* current capsule card, or NULL */
+static gboolean   s_plugins_cap_hidden;/* conf: <Group id="Plugins" visible="no"> */
+
+/* Curated default primary commands (same list as macOS). */
+static const char *const kPluginPrimaryTips[] = {
+    "Compare", "Clear Active Compare",
+    "Spell Check Document Automatically",
+    "Show Beads panel", "Toggle Markdown Panel",
+};
+
+static gboolean strv_has(char **v, const char *s)
+{
+    for (int i = 0; v && v[i]; i++)
+        if (strcmp(v[i], s) == 0) return TRUE;
+    return FALSE;
+}
+
+/* Read the Plugins group block from toolbarButtonsTahoeConf.xml.
+ * Returns TRUE when a block exists; lists are newly-allocated GStrvs. */
+static gboolean tahoeconf_plugins_load(gboolean *customized,
+                                       char ***primary, char ***overflow,
+                                       char ***hidden)
+{
+    *customized = FALSE;
+    *primary = *overflow = *hidden = NULL;
+    gchar *path = npp_user_file(NULL, "toolbarButtonsTahoeConf.xml");
+    gchar *data = NULL;
+    gboolean ok = g_file_get_contents(path, &data, NULL, NULL);
+    g_free(path);
+    if (!ok) return FALSE;
+
+    char *g = strstr(data, "<Group id=\"Plugins\"");
+    if (!g) { g_free(data); return FALSE; }
+    char *end = strstr(g, "</Group>");
+    if (!end) end = data + strlen(data);
+    char *hdr_close = strchr(g, '>');
+    if (hdr_close && hdr_close < end) {
+        char save = *hdr_close; *hdr_close = '\0';
+        *customized = strstr(g, "customized=\"yes\"") != NULL;
+        *hdr_close = save;
+    }
+
+    static const char *const sect[] = { "Primary", "Overflow", "Hidden" };
+    char ***out[] = { primary, overflow, hidden };
+    for (int k = 0; k < 3; k++) {
+        char open_tag[24], close_tag[24];
+        g_snprintf(open_tag, sizeof open_tag, "<%s>", sect[k]);
+        g_snprintf(close_tag, sizeof close_tag, "</%s>", sect[k]);
+        char *sp = g_strstr_len(g, end - g, open_tag);
+        if (!sp) continue;
+        char *se = g_strstr_len(sp, end - sp, close_tag);
+        if (!se) continue;
+        GPtrArray *names = g_ptr_array_new();
+        for (char *it = sp; (it = g_strstr_len(it, se - it, "<Item")) != NULL; it++) {
+            char *np = g_strstr_len(it, se - it, "name=\"");
+            if (!np) break;
+            np += 6;
+            char *nq = strchr(np, '"');
+            if (!nq || nq > se) break;
+            char *dec = g_strndup(np, (gsize)(nq - np));
+            /* Un-escape the entities the writer produces. */
+            static const struct { const char *e; const char *c; } ents[] = {
+                { "&amp;", "&" }, { "&lt;", "<" }, { "&gt;", ">" },
+                { "&quot;", "\"" }, { "&apos;", "'" },
+            };
+            for (size_t ei = 0; ei < G_N_ELEMENTS(ents); ei++) {
+                char *hit;
+                while ((hit = strstr(dec, ents[ei].e)) != NULL) {
+                    size_t el = strlen(ents[ei].e);
+                    hit[0] = ents[ei].c[0];
+                    memmove(hit + 1, hit + el, strlen(hit + el) + 1);
+                }
+            }
+            g_ptr_array_add(names, dec);
+            it = nq;
+        }
+        g_ptr_array_add(names, NULL);
+        *out[k] = (char **)g_ptr_array_free(names, FALSE);
+    }
+    g_free(data);
+    return TRUE;
+}
+
+/* Write the Plugins block back (replace existing block or the
+ * self-closing "<Group id=\"Plugins\" .../>" row, else append before
+ * </TahoeToolbar>). Preserves the rest of the file byte-for-byte. */
+static void tahoeconf_plugins_save(gboolean customized,
+                                   char **primary, char **overflow,
+                                   char **hidden)
+{
+    gchar *path = npp_user_file(NULL, "toolbarButtonsTahoeConf.xml");
+    gchar *data = NULL;
+    if (!g_file_get_contents(path, &data, NULL, NULL))
+        data = g_strdup("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n"
+                        "<TahoeToolbar>\n</TahoeToolbar>\n");
+
+    GString *blk = g_string_new(NULL);
+    g_string_append_printf(blk,
+        "    <Group id=\"Plugins\" visible=\"%s\" customized=\"%s\">\n",
+        s_plugins_cap_hidden ? "no" : "yes", customized ? "yes" : "no");
+    static const char *const sect[] = { "Primary", "Overflow", "Hidden" };
+    char **lists[] = { primary, overflow, hidden };
+    for (int k = 0; k < 3; k++) {
+        g_string_append_printf(blk, "        <%s>\n", sect[k]);
+        for (int i = 0; lists[k] && lists[k][i]; i++) {
+            gchar *esc = g_markup_escape_text(lists[k][i], -1);
+            g_string_append_printf(blk,
+                "            <Item name=\"%s\" />\n", esc);
+            g_free(esc);
+        }
+        g_string_append_printf(blk, "        </%s>\n", sect[k]);
+    }
+    g_string_append(blk, "    </Group>\n");
+
+    GString *out = g_string_new(NULL);
+    char *g = strstr(data, "<Group id=\"Plugins\"");
+    if (g) {
+        char *tail;
+        char *blk_end = strstr(g, "</Group>");
+        char *self_close = strchr(g, '>');
+        if (blk_end && (!self_close || blk_end < self_close ||
+                        *(self_close - 1) != '/'))
+            tail = blk_end + strlen("</Group>");
+        else
+            tail = self_close ? self_close + 1 : g;
+        /* swallow one trailing newline so the block doesn't drift */
+        if (*tail == '\n') tail++;
+        g_string_append_len(out, data, g - data);
+        /* strip leading indentation we are about to re-add */
+        while (out->len && (out->str[out->len - 1] == ' ' ||
+                            out->str[out->len - 1] == '\t'))
+            g_string_truncate(out, out->len - 1);
+        g_string_append(out, blk->str);
+        g_string_append(out, tail);
+    } else {
+        char *close = strstr(data, "</TahoeToolbar>");
+        if (close) {
+            g_string_append_len(out, data, close - data);
+            g_string_append(out, blk->str);
+            g_string_append(out, close);
+        } else {
+            g_string_append(out, data);
+            g_string_append(out, blk->str);
+        }
+    }
+    g_file_set_contents(path, out->str, (gssize)out->len, NULL);
+    g_string_free(out, TRUE);
+    g_string_free(blk, TRUE);
+    g_free(data);
+    g_free(path);
+}
+
+/* Curated default split over the CURRENT item set (macOS
+ * _tahoeDefaultPluginsGroupDict): curated names go primary; if none
+ * match, first three registered go primary, the rest overflow. */
+static void plugins_default_split(char ***primary_out, char ***overflow_out)
+{
+    GPtrArray *prim = g_ptr_array_new();
+    GPtrArray *over = g_ptr_array_new();
+    for (guint i = 0; s_plugin_items && i < s_plugin_items->len; i++) {
+        PluginTbItem *it = g_ptr_array_index(s_plugin_items, i);
+        gboolean is_primary = FALSE;
+        for (size_t k = 0; k < G_N_ELEMENTS(kPluginPrimaryTips); k++)
+            if (g_ascii_strcasecmp(it->name, kPluginPrimaryTips[k]) == 0) {
+                is_primary = TRUE;
+                break;
+            }
+        g_ptr_array_add(is_primary ? prim : over, g_strdup(it->name));
+    }
+    if (prim->len == 0 && over->len > 0) {
+        guint n = MIN(3u, over->len);
+        for (guint i = 0; i < n; i++)
+            g_ptr_array_add(prim, g_ptr_array_index(over, i));
+        g_ptr_array_remove_range(over, 0, n);
+    }
+    g_ptr_array_add(prim, NULL);
+    g_ptr_array_add(over, NULL);
+    *primary_out  = (char **)g_ptr_array_free(prim, FALSE);
+    *overflow_out = (char **)g_ptr_array_free(over, FALSE);
+}
+
+static PluginTbItem *plugin_item_by_name(const char *name)
+{
+    for (guint i = 0; s_plugin_items && i < s_plugin_items->len; i++) {
+        PluginTbItem *it = g_ptr_array_index(s_plugin_items, i);
+        if (strcmp(it->name, name) == 0) return it;
+    }
+    return NULL;
+}
+
+/* Rebuild the Plugins capsule inside its slot from the (reconciled)
+ * config split. Called on every plugin icon registration, like macOS
+ * _rebuildTahoePluginsGroup. */
+static void rebuild_plugins_capsule(void)
+{
+    if (!s_plugins_slot) return;
+    if (s_plugins_capsule) {
+        gtk_box_remove(GTK_BOX(s_plugins_slot), s_plugins_capsule);
+        s_plugins_capsule = NULL;
+    }
+    if (!s_plugin_items || s_plugin_items->len == 0) return;
+
+    /* Reconcile the config split with the live item set. */
+    gboolean customized = FALSE;
+    char **primary = NULL, **overflow = NULL, **hidden = NULL;
+    gboolean have = tahoeconf_plugins_load(&customized, &primary,
+                                           &overflow, &hidden);
+    gboolean changed = !have;
+    if (!customized) {
+        /* Un-customized: re-derive the curated default over the current
+         * set (registration is one-by-one; freezing an early partial
+         * split would be wrong). */
+        char **np = NULL, **no = NULL;
+        plugins_default_split(&np, &no);
+        if (!have ||
+            g_strv_length(primary  ? primary  : (char *[]){NULL}) !=
+                g_strv_length(np) ||
+            g_strv_length(overflow ? overflow : (char *[]){NULL}) !=
+                g_strv_length(no)) changed = TRUE;
+        else {
+            for (int i = 0; np[i] && !changed; i++)
+                if (!primary[i] || strcmp(np[i], primary[i]) != 0)
+                    changed = TRUE;
+            for (int i = 0; no[i] && !changed; i++)
+                if (!overflow[i] || strcmp(no[i], overflow[i]) != 0)
+                    changed = TRUE;
+        }
+        g_strfreev(primary);
+        g_strfreev(overflow);
+        primary = np;
+        overflow = no;
+    } else {
+        /* Customized: append genuinely new commands to overflow only. */
+        GPtrArray *over = g_ptr_array_new();
+        for (int i = 0; overflow && overflow[i]; i++)
+            g_ptr_array_add(over, g_strdup(overflow[i]));
+        for (guint i = 0; i < s_plugin_items->len; i++) {
+            PluginTbItem *it = g_ptr_array_index(s_plugin_items, i);
+            if (strv_has(primary, it->name) || strv_has(overflow, it->name) ||
+                strv_has(hidden, it->name)) continue;
+            g_ptr_array_add(over, g_strdup(it->name));
+            changed = TRUE;
+        }
+        g_ptr_array_add(over, NULL);
+        g_strfreev(overflow);
+        overflow = (char **)g_ptr_array_free(over, FALSE);
+    }
+    if (changed)
+        tahoeconf_plugins_save(customized, primary, overflow, hidden);
+
+    /* Build the capsule: primary buttons + ▾ overflow via the label. */
+    int n_prim = 0, n_over = 0;
+    GMenu *menu = NULL;
+    for (int i = 0; overflow && overflow[i]; i++) {
+        PluginTbItem *it = plugin_item_by_name(overflow[i]);
+        if (!it) continue;
+        if (!menu) menu = g_menu_new();
+        GMenuItem *mi = g_menu_item_new(it->name, NULL);
+        g_menu_item_set_action_and_target(mi, "app.plugin-cmd", "i",
+                                          it->cmd_id);
+        g_menu_append_item(menu, mi);
+        g_object_unref(mi);
+        n_over++;
+    }
+    GtkWidget *row = capsule_begin(s_plugins_slot, "Plugins", menu);
+    for (int i = 0; primary && primary[i]; i++) {
+        PluginTbItem *it = plugin_item_by_name(primary[i]);
+        if (!it) continue;
+        gtk_box_append(GTK_BOX(row),
+                       make_plugin_icon_button(it->icon_path, it->cmd_id,
+                                               it->name));
+        n_prim++;
+    }
+    s_plugins_capsule = gtk_widget_get_last_child(s_plugins_slot);
+    if (n_prim == 0 && n_over == 0) {
+        gtk_box_remove(GTK_BOX(s_plugins_slot), s_plugins_capsule);
+        s_plugins_capsule = NULL;
+    }
+    if (g_getenv("NPP_TB_DUMP"))
+        g_message("plugins-capsule: primary=%d overflow=%d hidden=%d",
+                  n_prim, n_over,
+                  hidden ? (int)g_strv_length(hidden) : 0);
+    g_strfreev(primary);
+    g_strfreev(overflow);
+    g_strfreev(hidden);
+}
+
+void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
+                               const char *tooltip)
+{
+    if (!s_toolbar) return;
+
+    if (g_prefs.appearance_style == 1) {
+        /* GAP-89 — Tahoe: record the item, then rebuild the Plugins
+         * capsule from the config split (macOS behaviour). */
+        if (s_plugins_cap_hidden) return;   /* <Group visible="no"> */
+        if (!s_plugins_slot) {
+            /* Conf predates the Plugins group entry — trail the bar. */
+            s_plugins_slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+            gtk_box_append(GTK_BOX(s_toolbar), s_plugins_slot);
+        }
+        if (!s_plugin_items)
+            s_plugin_items = g_ptr_array_new();
+        char fallback[32];
+        if (!tooltip || !*tooltip) {
+            g_snprintf(fallback, sizeof fallback, "Plugin command %d",
+                       cmd_id);
+            tooltip = fallback;
+        }
+        for (guint i = 0; i < s_plugin_items->len; i++) {
+            PluginTbItem *e = g_ptr_array_index(s_plugin_items, i);
+            if (e->cmd_id == cmd_id) return;      /* duplicate */
+        }
+        PluginTbItem *it = g_new0(PluginTbItem, 1);
+        it->name      = g_strdup(tooltip);
+        it->icon_path = g_strdup(icon_path ? icon_path : "");
+        it->cmd_id    = cmd_id;
+        g_ptr_array_add(s_plugin_items, it);
+        rebuild_plugins_capsule();
+        return;
+    }
+
+    /* Classic: one trailing group after a divider (unchanged). */
+    if (!s_plugin_group) {
+        GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
+        gtk_widget_set_margin_start(sep, 4);
+        gtk_widget_set_margin_end(sep, 4);
+        gtk_box_append(GTK_BOX(s_toolbar), sep);
+        s_plugin_group = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+        gtk_widget_add_css_class(s_plugin_group,
+                                 "npp-plugin-toolbar-group");
+        gtk_box_append(GTK_BOX(s_toolbar), s_plugin_group);
+    }
+    gtk_box_append(GTK_BOX(s_plugin_group),
+                   make_plugin_icon_button(icon_path, cmd_id, tooltip));
 }
 
 void toolbar_sync_panels(void)

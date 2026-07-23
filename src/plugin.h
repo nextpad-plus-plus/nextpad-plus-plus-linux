@@ -333,5 +333,6 @@ const char *plugin_name_at(int i);
 int         plugin_func_count(int i);
 const char *plugin_func_name(int i, int j);   /* "-" = separator */
 int         plugin_func_cmd_id(int i, int j);
+const char *plugin_cmd_name_by_id(int cmd_id);   /* GAP-89 */
 int         plugin_func_init2check(int i, int j);   /* GAP-88b seed */
 gboolean    plugin_run_command_by_id(int cmd_id);
