@@ -148,6 +148,7 @@ set(APP_SRCS
     "${SRC}/gitpanel.c"
     # G21 — floating side panels
     "${SRC}/floating.c"
+    "${SRC}/panelstate.c"
     # G34 — uniform side-panel chrome wrapper
     "${SRC}/panel_frame.c"
     # G29 — Markdown preview panel

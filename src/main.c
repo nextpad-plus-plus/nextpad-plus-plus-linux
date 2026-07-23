@@ -57,6 +57,7 @@
 #include "changehistory.h"
 #include "gitpanel.h"
 #include "floating.h"
+#include "panelstate.h"
 #include "mdpreview.h"
 #include "split.h"
 #include "paths.h"
@@ -515,6 +516,9 @@ static void action_quit(GSimpleAction *a, GVariant *p, gpointer ud) {
     /* P3 — only persist the session when the pref allows it. */
     if (g_prefs.remember_session && !g_cli_nosession)
         session_save();
+    /* GAP-82/83 — final width/float capture + freeze, so teardown
+     * hide-signals can't clobber the saved panel state. */
+    panelstate_freeze();
     if (g_app) editor_close_all_quit(G_APPLICATION(g_app));
 }
 
@@ -6724,7 +6728,56 @@ GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
     return frame;
 }
 
-static void side_host_bump(GtkWidget *host, int delta) {
+/* GAP-82 — TRUE while WE move the divider, so the notify::position
+ * width-save handler only reacts to user drags. */
+static gboolean s_paned_programmatic;
+/* TRUE while the pointer is pressed ON the divider handle. GTK fires
+ * notify::position during plain allocation too (window mapping, host
+ * show) — saving those would record garbage widths (the macOS fix
+ * gates on NSApp.currentEvent being a mouse drag; this is the GTK
+ * equivalent). */
+static gboolean s_paned_user_drag;
+
+static void on_hpaned_press(GtkGestureClick *g, int n_press,
+                            double x, double y, gpointer paned) {
+    (void)g; (void)n_press; (void)y;
+    int pos = gtk_paned_get_position(GTK_PANED(paned));
+    if (x >= pos - 10 && x <= pos + 14)   /* on/near the handle */
+        s_paned_user_drag = TRUE;
+}
+
+static void on_hpaned_release(GtkGestureClick *g, int n_press,
+                              double x, double y, gpointer paned) {
+    (void)g; (void)n_press; (void)x; (void)y; (void)paned;
+    s_paned_user_drag = FALSE;
+}
+
+/* GAP-82 — a panel opened before the paned had an allocation (startup
+ * restore runs during build_main_window, before the window maps): the
+ * width target can't be computed yet, so apply it once the paned is
+ * laid out. 50 ms poll, ~5 s give-up. */
+typedef struct { GtkWidget *paned; int width; int tries; } PendingPanedPos;
+
+static gboolean apply_pending_paned_pos(gpointer data) {
+    PendingPanedPos *pp = data;
+    GtkAllocation a;
+    gtk_widget_get_allocation(pp->paned, &a);
+    if (a.width <= 1) {
+        if (++pp->tries < 100) return G_SOURCE_CONTINUE;
+        g_object_set_data(G_OBJECT(pp->paned), "npp-pending-pos", NULL);
+        g_free(pp);
+        return G_SOURCE_REMOVE;   /* never mapped — give up */
+    }
+    int target = a.width - pp->width >= 200 ? a.width - pp->width : a.width / 2;
+    s_paned_programmatic = TRUE;
+    gtk_paned_set_position(GTK_PANED(pp->paned), target);
+    s_paned_programmatic = FALSE;
+    g_object_set_data(G_OBJECT(pp->paned), "npp-pending-pos", NULL);
+    g_free(pp);
+    return G_SOURCE_REMOVE;
+}
+
+static void side_host_bump(GtkWidget *host, int delta, GtkWidget *frame) {
     int n = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(host),
                                               "npp-visible-count"));
     n += delta;
@@ -6735,16 +6788,39 @@ static void side_host_bump(GtkWidget *host, int delta) {
     GtkWidget *paned = GTK_WIDGET(g_object_get_data(G_OBJECT(host),
                                                     "npp-hpaned"));
     if (n > 0) {
+        /* GAP-82 (macOS 619750a): position the divider only when the
+         * pane was COLLAPSED — stacking a second panel into an open
+         * pane must never jump the width the user chose. */
+        gboolean was_hidden = !gtk_widget_get_visible(host);
         gtk_widget_show(host);
-        if (paned) {
+        if (paned && was_hidden) {
             GtkAllocation a;
             gtk_widget_get_allocation(paned, &a);
-            /* Right-attached panels get a 300 px default width (~50% wider
-             * than the macOS NPPSidePanel default) so the panel-frame
-             * pop-out / close buttons aren't clipped on first open.
-             * Falls back to half the width when the window is narrow. */
-            int target = a.width > 340 ? a.width - 300 : a.width / 2;
-            if (target > 0) gtk_paned_set_position(GTK_PANED(paned), target);
+            /* The OPENING panel's remembered width (fallback: the classic
+             * 300 px so the frame buttons aren't clipped on first open);
+             * half the window when too narrow. Width convention: width =
+             * paned.width - position, same formula the save side uses, so
+             * the handle bias cancels out. */
+            int w = panelstate_saved_width(frame);
+            if (a.width <= 1) {
+                /* Paned not laid out yet (startup restore) — defer. */
+                PendingPanedPos *pp = g_object_get_data(G_OBJECT(paned),
+                                                        "npp-pending-pos");
+                if (pp) {
+                    pp->width = w;   /* newer open wins */
+                } else {
+                    pp = g_new0(PendingPanedPos, 1);
+                    pp->paned = paned;
+                    pp->width = w;
+                    g_object_set_data(G_OBJECT(paned), "npp-pending-pos", pp);
+                    g_timeout_add(50, apply_pending_paned_pos, pp);
+                }
+            } else {
+                int target = a.width - w >= 200 ? a.width - w : a.width / 2;
+                s_paned_programmatic = TRUE;
+                gtk_paned_set_position(GTK_PANED(paned), target);
+                s_paned_programmatic = FALSE;
+            }
         }
     } else {
         gtk_widget_hide(host);
@@ -6752,11 +6828,26 @@ static void side_host_bump(GtkWidget *host, int delta) {
 }
 
 static void on_panel_frame_show(GtkWidget *frame, gpointer user_data) {
-    (void)frame; side_host_bump(GTK_WIDGET(user_data), +1);
+    side_host_bump(GTK_WIDGET(user_data), +1, frame);
 }
 
 static void on_panel_frame_hide(GtkWidget *frame, gpointer user_data) {
-    (void)frame; side_host_bump(GTK_WIDGET(user_data), -1);
+    side_host_bump(GTK_WIDGET(user_data), -1, frame);
+}
+
+/* GAP-82 — a user drag of the hpaned divider resized the side pane:
+ * remember the new width for every panel docked in it. Programmatic
+ * moves (side_host_bump) and window resizes with the host hidden are
+ * filtered; panelstate ignores widths < 150 (collapse drags). */
+static void on_hpaned_position(GObject *paned, GParamSpec *pspec,
+                               gpointer host) {
+    (void)pspec;
+    if (s_paned_programmatic || !s_paned_user_drag) return;
+    if (!gtk_widget_get_visible(GTK_WIDGET(host))) return;
+    GtkAllocation a;
+    gtk_widget_get_allocation(GTK_WIDGET(paned), &a);
+    int w = a.width - gtk_paned_get_position(GTK_PANED(paned));
+    panelstate_note_width(w);
 }
 
 /* ------------------------------------------------------------------ */
@@ -6780,6 +6871,9 @@ static gboolean on_window_delete(GtkWindow *w, gpointer ud)
      * are still readable. session_save() silently skips Untitled docs. */
     if (!g_cli_nosession)
         session_save();
+    /* GAP-82/83 — final width/float capture + freeze (this quit route
+     * never ran prefs_save at all before; the freeze writes config). */
+    panelstate_freeze();
     /* BEFORESHUTDOWN/SHUTDOWN fire inside editor_close_all_quit at the
      * committed point (GAP-80) — a cancelled quit fires neither. */
     editor_close_all_quit(G_APPLICATION(app));
@@ -6957,6 +7051,20 @@ static void build_main_window(GtkApplication *app)
     gtk_paned_pack1(GTK_PANED(hpaned1), vpaned,          TRUE,  FALSE);
     gtk_paned_pack2(GTK_PANED(hpaned1), side_panel_host, FALSE, TRUE);
     g_object_set_data(G_OBJECT(side_panel_host), "npp-hpaned", hpaned1);
+    /* GAP-82 — track user divider drags for per-panel width memory.
+     * The capture-phase gesture flags presses that land on the handle;
+     * only position changes during such a press are real drags. */
+    {
+        GtkGesture *g = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(g), GDK_BUTTON_PRIMARY);
+        gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(g),
+                                                   GTK_PHASE_CAPTURE);
+        g_signal_connect(g, "pressed",  G_CALLBACK(on_hpaned_press),   hpaned1);
+        g_signal_connect(g, "released", G_CALLBACK(on_hpaned_release), hpaned1);
+        gtk_widget_add_controller(hpaned1, GTK_EVENT_CONTROLLER(g));
+    }
+    g_signal_connect(hpaned1, "notify::position",
+                     G_CALLBACK(on_hpaned_position), side_panel_host);
 
     /* Q14 — wire each frame's show/hide to the host visibility counter. */
     GtkWidget *side_frames[] = {
@@ -7072,7 +7180,11 @@ static void build_main_window(GtkApplication *app)
         const char *const *roots = prefs_workspace_roots(&n);
         for (int i = 0; i < n; i++)
             workspace_add_folder(roots[i]);
-        if (n > 0 && workspace)
+        /* With panel-state restore active (GAP-82) the remembered
+         * layout owns visibility — auto-showing here would resurrect a
+         * panel the user deliberately closed and pollute the saved
+         * state at the restore-end normalize. */
+        if (n > 0 && workspace && !g_prefs.panel_keep_state)
             gtk_widget_show(workspace);
     }
 
@@ -7089,6 +7201,32 @@ static void build_main_window(GtkApplication *app)
     /* searchresults: not registered — no detach button (see above). */
     if (gitpanel_frame)  floating_register("gitpanel",      gitpanel_frame);
     if (mdpanel_frame)   floating_register("mdpreview",     mdpanel_frame);
+    /* These three were never registered — their pop-out buttons silently
+     * no-opped (floating_toggle on an unknown name). Fixed with GAP-83. */
+    if (project_frame)     floating_register("project",     project_frame);
+    if (charpanel_frame)   floating_register("charpanel",   charpanel_frame);
+    if (cliphistory_frame) floating_register("cliphistory", cliphistory_frame);
+
+    /* GAP-82/83 — panel persistence registry. Restorable = macOS
+     * _restorableSidePanels whitelist (+ mdpreview, a Linux-ahead panel:
+     * same principle, nothing spawned on restore). gitpanel is width-only
+     * — restoring it would spawn git at launch (macOS rule). Search
+     * Results is a bottom panel and stays out entirely. */
+    panelstate_register("doclist",     doclist_frame,     TRUE);
+    panelstate_register("workspace",   workspace_frame,   TRUE);
+    panelstate_register("funclist",    funclist_frame,    TRUE);
+    panelstate_register("docmap",      docmap_frame,      TRUE);
+    panelstate_register("project",     project_frame,     TRUE);
+    panelstate_register("charpanel",   charpanel_frame,   TRUE);
+    panelstate_register("cliphistory", cliphistory_frame, TRUE);
+    panelstate_register("mdpreview",   mdpanel_frame,     TRUE);
+    panelstate_register("gitpanel",    gitpanel_frame,    FALSE);
+    floating_set_layout_hook(panelstate_layout_changed);
+    /* Replay the saved open/popped panel layout (gated on the
+     * "Remember panel visibility" pref inside). Panels are built,
+     * hidden and registered by now; this also un-suspends state
+     * tracking. */
+    panelstate_restore();
 
     /* G20 — install tab-colour CSS for the lifetime of the window. */
     install_tab_color_css();

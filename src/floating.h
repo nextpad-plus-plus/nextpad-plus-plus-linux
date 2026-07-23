@@ -33,4 +33,19 @@ void floating_toggle(const char *name);
 /* Query state. */
 gboolean floating_is_floating(const char *name);
 
+/* ── GAP-83 — persistence support (used by panelstate.c) ─────────────── */
+
+/* Seed / read a panel's remembered float geometry + pin state. */
+void     floating_set_state(const char *name, int w, int h, gboolean pinned);
+gboolean floating_get_state(const char *name, int *w, int *h,
+                            gboolean *pinned);
+
+/* Read the live size of every currently-open float window into its
+ * entry (quit backstop — close-time capture doesn't run at quit). */
+void floating_capture_geometry(void);
+
+/* Called after every pop-out / dock-back (no show/hide fires for
+ * these transitions — the hook lets panelstate re-save popped flags). */
+void floating_set_layout_hook(void (*hook)(void));
+
 #endif /* FLOATING_H */

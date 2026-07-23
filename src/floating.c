@@ -34,6 +34,9 @@ typedef struct {
 #define MAX_FLOATS 16
 static FloatingEntry s_entries[MAX_FLOATS];
 static int           s_n = 0;
+/* GAP-83 — panelstate.c re-saves open+popped state on every pop-out /
+ * dock-back (these transitions emit no show/hide; macOS b98a360). */
+static void (*s_layout_hook)(void);
 
 static FloatingEntry *find_entry(const char *name) {
     for (int i = 0; i < s_n; i++)
@@ -159,6 +162,7 @@ void floating_popout(const char *name) {
 
     gtk_widget_show_all(win);
     e->float_window = win;
+    if (s_layout_hook) s_layout_hook();
 }
 
 void floating_dockback(const char *name) {
@@ -195,6 +199,7 @@ void floating_dockback(const char *name) {
     gtk_widget_destroy(e->float_window);
     e->float_window = NULL;
     gtk_widget_show(e->widget);
+    if (s_layout_hook) s_layout_hook();
 }
 
 void floating_toggle(const char *name) {
@@ -206,4 +211,34 @@ void floating_toggle(const char *name) {
 gboolean floating_is_floating(const char *name) {
     FloatingEntry *e = find_entry(name);
     return e && e->float_window != NULL;
+}
+
+/* ── GAP-83 — persistence support (panelstate.c) ─────────────────────── */
+
+void floating_set_state(const char *name, int w, int h, gboolean pinned) {
+    FloatingEntry *e = find_entry(name); if (!e) return;
+    if (w >= 100 && h >= 100) { e->float_w = w; e->float_h = h; }
+    e->pinned = pinned;
+}
+
+gboolean floating_get_state(const char *name, int *w, int *h,
+                            gboolean *pinned) {
+    FloatingEntry *e = find_entry(name); if (!e) return FALSE;
+    if (w)      *w      = e->float_w;
+    if (h)      *h      = e->float_h;
+    if (pinned) *pinned = e->pinned;
+    return TRUE;
+}
+
+void floating_capture_geometry(void) {
+    for (int i = 0; i < s_n; i++) {
+        FloatingEntry *e = &s_entries[i];
+        if (e->float_window)
+            gtk_window_get_size(GTK_WINDOW(e->float_window),
+                                &e->float_w, &e->float_h);
+    }
+}
+
+void floating_set_layout_hook(void (*hook)(void)) {
+    s_layout_hook = hook;
 }

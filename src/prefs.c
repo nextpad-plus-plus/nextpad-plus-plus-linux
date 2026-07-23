@@ -487,6 +487,18 @@ static void apply_text(const char *group, const char *text) {
     else if (!strcmp(group, "KeepSessionAbsentFileEntries")) g_prefs.keep_absent_session= is_yes(t);
     else if (!strcmp(group, "SaveAllConfirm"))               g_prefs.save_all_confirm   = is_yes(t);
     else if (!strcmp(group, "SmartHighLight"))               g_prefs.smart_highlight    = is_yes(t);
+    else if (!strcmp(group, "OpenSidePanels")) {
+        g_strlcpy(g_prefs.open_side_panels, t,
+                  sizeof(g_prefs.open_side_panels));
+    }
+    else if (!strcmp(group, "SidePanelWidths")) {
+        g_strlcpy(g_prefs.side_panel_widths, t,
+                  sizeof(g_prefs.side_panel_widths));
+    }
+    else if (!strcmp(group, "FloatingPanels")) {
+        g_strlcpy(g_prefs.floating_panels, t,
+                  sizeof(g_prefs.floating_panels));
+    }
     else if (!strcmp(group, "NewDocDefaultLanguage")) {
         strncpy(g_prefs.default_language, t, sizeof(g_prefs.default_language) - 1);
         g_prefs.default_language[sizeof(g_prefs.default_language) - 1] = '\0';
@@ -799,6 +811,18 @@ g_prefs.tab_max_label_width,
         b2yn(g_prefs.mute_sounds), b2yn(g_prefs.disable_text_drag_drop),
         b2yn(g_prefs.spell_check), b2yn(g_prefs.panel_keep_state),
         b2yn(g_prefs.file_auto_detect), b2yn(g_prefs.file_update_silently));
+
+    /* GAP-82/83 — panel persistence (panelstate.c formats; plain
+     * [a-z0-9=x: ] tokens, no XML escaping needed). */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"OpenSidePanels\">%s</GUIConfig>\n",
+        g_prefs.open_side_panels);
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"SidePanelWidths\">%s</GUIConfig>\n",
+        g_prefs.side_panel_widths);
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"FloatingPanels\">%s</GUIConfig>\n",
+        g_prefs.floating_panels);
 
     /* ScintillaPrimaryView */
     char edgeCol[32], edgeModeAttr[32];

@@ -112,6 +112,11 @@ typedef struct {
     gboolean remember_session;        /* default TRUE */
     gboolean keep_absent_session;     /* default FALSE */
     gboolean panel_keep_state;        /* default TRUE */
+    /* GAP-82/83 — side-panel persistence (panelstate.c owns the
+     * formats; prefs.c only loads/stores the raw strings). */
+    char     open_side_panels[256];   /* "doclist funclist:popped" */
+    char     side_panel_widths[512];  /* "doclist=320 funclist=280" */
+    char     floating_panels[512];    /* "funclist=420x600:pinned" */
     int      appearance;              /* APPEAR_* */
     char     theme_preset[64];        /* "Default" / "DarkModeDefault" / ... */
     char     ui_language[64];         /* localization XML stem; "" = auto-detect */
