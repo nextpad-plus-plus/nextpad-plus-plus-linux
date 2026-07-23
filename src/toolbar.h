@@ -22,4 +22,19 @@ void toolbar_update_macro_buttons(void);
  * icon set — called when the appearance changes at runtime. */
 void toolbar_apply_theme(void);
 
+/* ── GAP-90 — Preferences ▸ Tahoe toolbar-group editor ──────────────── */
+enum { NPP_TB_PLACE_PRIMARY = 0, NPP_TB_PLACE_OVERFLOW = 1,
+       NPP_TB_PLACE_HIDDEN = 2 };
+/* Snapshot the editable rows (built-ins + plugin commands); returns the
+ * count, rows readable until the next count call. */
+int  toolbar_tahoe_item_count(void);
+void toolbar_tahoe_item_get(int i, const char **group, const char **name,
+                            int *placement);
+/* Persist one placement change (built-ins apply at restart; the Plugins
+ * capsule re-splits live). */
+void toolbar_tahoe_set_placement(const char *group, const char *name,
+                                 int placement);
+/* Drop every per-group customization back to defaults. */
+void toolbar_tahoe_reset(void);
+
 #endif /* TOOLBAR_H */

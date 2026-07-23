@@ -2102,6 +2102,133 @@ static void on_prefs_response(GtkDialog *dlg, gint r, gpointer d)
 /* Tab label for the vertical (left-side) prefs notebook strip. The label
  * fills the tab width and right-aligns its text, so the titles sit flush
  * against the page content rather than ragged on the left. */
+/* ── GAP-90 — Preferences ▸ Tahoe: Toolbar Groups editor ────────────── */
+/* macOS PreferencesWindowController _buildTahoePage: per-button
+ * Placement (capsule / overflow ▾ / hidden) for the Tahoe toolbar.
+ * The sidebar row exists ONLY under the Modern appearance — Classic
+ * Preferences is unchanged (macOS gates identically). */
+
+static GPtrArray *s_tahoe_combos;   /* GtkComboBoxText*, for Reset refresh */
+
+static void on_tahoe_place_changed(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    const char *group = g_object_get_data(G_OBJECT(c), "tb-group");
+    const char *name  = g_object_get_data(G_OBJECT(c), "tb-name");
+    int place = gtk_combo_box_get_active(c);
+    if (group && name && place >= 0)
+        toolbar_tahoe_set_placement(group, name, place);
+}
+
+static void tahoe_page_refresh_combos(void)
+{
+    if (!s_tahoe_combos) return;
+    int n = toolbar_tahoe_item_count();
+    for (guint i = 0; i < s_tahoe_combos->len; i++) {
+        GtkWidget *c = g_ptr_array_index(s_tahoe_combos, i);
+        const char *cg = g_object_get_data(G_OBJECT(c), "tb-group");
+        const char *cn = g_object_get_data(G_OBJECT(c), "tb-name");
+        for (int j = 0; j < n; j++) {
+            const char *gname, *iname; int place;
+            toolbar_tahoe_item_get(j, &gname, &iname, &place);
+            if (strcmp(gname, cg) == 0 && strcmp(iname, cn) == 0) {
+                g_signal_handlers_block_by_func(c,
+                    G_CALLBACK(on_tahoe_place_changed), NULL);
+                gtk_combo_box_set_active(GTK_COMBO_BOX(c), place);
+                g_signal_handlers_unblock_by_func(c,
+                    G_CALLBACK(on_tahoe_place_changed), NULL);
+                break;
+            }
+        }
+    }
+}
+
+static void on_tahoe_reset(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    toolbar_tahoe_reset();
+    tahoe_page_refresh_combos();
+}
+
+static GtkWidget *page_tahoe(void)
+{
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(v), 12);
+
+    GtkWidget *title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title), "<b>Toolbar Groups</b>");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0f);
+    gtk_container_add(GTK_CONTAINER(v), title);
+
+    GtkWidget *help = gtk_label_new(
+        "Choose where each button appears in the Tahoe-inspired toolbar: "
+        "on the group capsule (Toolbar), in the group's \xE2\x96\xBE "
+        "overflow menu, or Hidden.");
+    gtk_label_set_xalign(GTK_LABEL(help), 0.0f);
+    gtk_label_set_wrap(GTK_LABEL(help), TRUE);
+    gtk_widget_add_css_class(help, "dim-label");
+    gtk_container_add(GTK_CONTAINER(v), help);
+
+    if (s_tahoe_combos) g_ptr_array_free(s_tahoe_combos, TRUE);
+    s_tahoe_combos = g_ptr_array_new();
+
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 4);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 24);
+    int row = 0, n = toolbar_tahoe_item_count();
+    const char *cur_group = NULL;
+    for (int i = 0; i < n; i++) {
+        const char *gname, *iname; int place;
+        toolbar_tahoe_item_get(i, &gname, &iname, &place);
+        if (!cur_group || strcmp(cur_group, gname) != 0) {
+            GtkWidget *gh = gtk_label_new(NULL);
+            gchar *esc = g_markup_escape_text(gname, -1);
+            gchar *mk = g_strdup_printf("<b>%s</b>", esc);
+            gtk_label_set_markup(GTK_LABEL(gh), mk);
+            g_free(mk); g_free(esc);
+            gtk_label_set_xalign(GTK_LABEL(gh), 0.0f);
+            gtk_widget_set_margin_top(gh, row ? 10 : 0);
+            gtk_grid_attach(GTK_GRID(grid), gh, 0, row++, 2, 1);
+            cur_group = gname;
+        }
+        GtkWidget *lbl = gtk_label_new(iname);
+        gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+        gtk_widget_set_margin_start(lbl, 16);
+        gtk_widget_set_hexpand(lbl, TRUE);
+        GtkWidget *combo = gtk_combo_box_text_new();
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), "Toolbar");
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo),
+                                       "Overflow menu");
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), "Hidden");
+        gtk_combo_box_set_active(GTK_COMBO_BOX(combo), place);
+        /* The snapshot strings die on the next item_count() — copy. */
+        g_object_set_data_full(G_OBJECT(combo), "tb-group",
+                               g_strdup(gname), g_free);
+        g_object_set_data_full(G_OBJECT(combo), "tb-name",
+                               g_strdup(iname), g_free);
+        g_signal_connect(combo, "changed",
+                         G_CALLBACK(on_tahoe_place_changed), NULL);
+        gtk_grid_attach(GTK_GRID(grid), lbl,   0, row,   1, 1);
+        gtk_grid_attach(GTK_GRID(grid), combo, 1, row++, 1, 1);
+        g_ptr_array_add(s_tahoe_combos, combo);
+    }
+    gtk_container_add(GTK_CONTAINER(v), grid);
+
+    GtkWidget *reset = gtk_button_new_with_label("Reset to Defaults");
+    gtk_widget_set_halign(reset, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(reset, 8);
+    g_signal_connect(reset, "clicked", G_CALLBACK(on_tahoe_reset), NULL);
+    gtk_container_add(GTK_CONTAINER(v), reset);
+
+    GtkWidget *note = gtk_label_new(
+        "Capsule changes apply after restart; the Plugins group updates "
+        "immediately.");
+    gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
+    gtk_widget_add_css_class(note, "dim-label");
+    gtk_container_add(GTK_CONTAINER(v), note);
+    return v;
+}
+
 static GtkWidget *prefs_tab_label(const char *text)
 {
     GtkWidget *lbl = gtk_label_new(text);
@@ -2143,6 +2270,23 @@ void prefs_dialog_show(GtkWidget *parent)
      * overflow a horizontal strip; a left-side list matches the macOS
      * Preferences sidebar too. */
     gtk_notebook_set_tab_pos(GTK_NOTEBOOK(nb), GTK_POS_LEFT);
+    /* Sidebar rows ~30% tighter vertically (user request) — the theme
+     * default padding makes the page list sprawl. */
+    gtk_widget_add_css_class(nb, "npp-prefs-nb");
+    {
+        static GtkCssProvider *prov = NULL;
+        if (!prov) {
+            prov = gtk_css_provider_new();
+            gtk_css_provider_load_from_data(prov,
+                "notebook.npp-prefs-nb > header tab {"
+                "  padding-top: 7px; padding-bottom: 7px; min-height: 0;"
+                "}", -1);
+            gtk_style_context_add_provider_for_display(
+                gdk_display_get_default(),
+                GTK_STYLE_PROVIDER(prov),
+                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 5);
+        }
+    }
     /* Page order matches macOS PreferencesWindowController.mm:310-324
      * (the sidebar layout) so users moving between platforms find the
      * same tab in the same slot. */
@@ -2151,6 +2295,10 @@ void prefs_dialog_show(GtkWidget *parent)
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_indentation()),     prefs_tab_label("Indentation"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_tab_bar()),         prefs_tab_label("Tab Bar"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_dark_mode()),       prefs_tab_label("Dark Mode"));
+    /* GAP-90 — Tahoe toolbar-group editor: Modern appearance only
+     * (macOS gates its Tahoe pane identically; Classic unchanged). */
+    if (g_prefs.appearance_style == 1)
+        gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_tahoe()),       prefs_tab_label("Tahoe"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_toolbar()),          prefs_tab_label("Toolbar"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_margins()),         prefs_tab_label("Margins"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_new_document()),    prefs_tab_label("New Document"));

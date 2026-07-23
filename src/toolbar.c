@@ -666,132 +666,178 @@ static GtkWidget *capsule_begin(GtkWidget *tb, const char *label,
  * Groups + primary/overflow split mirror macOS tahoeToolbarGroups(). */
 /* GAP-70 — Tahoe capsule groups, table-driven so
  * toolbarButtonsTahoeConf.xml can hide/reorder them. */
-static void cap_file(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
+/* ── GAP-90 — button-level Tahoe registry ──────────────────────────── */
+/* Every capsule button in one table: `name` is the stable English id
+ * used by the Preferences ▸ Tahoe editor and the conf file; `action`
+ * powers overflow-menu placement (and promoted default-overflow items);
+ * `cb` non-NULL marks a native primary builder (exact pre-GAP-90
+ * widget: same callback, same static capture). Placement comes from
+ * toolbarButtonsTahoeConf.xml; absent block = these defaults. */
+typedef struct {
+    const char *group;
+    const char *name;       /* conf/UI key + overflow label            */
+    const char *icon;       /* toolbar icon id (load_icon)             */
+    const char *tooltip;    /* primary-placement tooltip               */
+    const char *action;     /* app.<action> for overflow / promoted    */
+    GCallback   cb;         /* native primary builder callback         */
+    gboolean    toggle;
+    gboolean    def_overflow;
+    gboolean    needs_win;  /* cb user-data = parent window (Find)     */
+    GtkWidget **capture;    /* static slot to assign, or NULL          */
+} TahoeItem;
 
-    /* File: primary New Open Save Print · overflow SaveAll Close CloseAll */
-    m = g_menu_new();
-    g_menu_append(m, "Save All",  "app.save-all");
-    g_menu_append(m, "Close",     "app.close");
-    g_menu_append(m, "Close All", "app.close-all");
-    row = capsule_begin(tb, "File", m);
-    gtk_box_append(GTK_BOX(row), make_btn("new",  "New (Ctrl+N)",    G_CALLBACK(on_new),  NULL));
-    gtk_box_append(GTK_BOX(row), make_btn("open", "Open… (Ctrl+O)",  G_CALLBACK(on_open), NULL));
-    s_btn_save = make_btn("save", "Save (Ctrl+S)", G_CALLBACK(on_save), NULL);
-    gtk_box_append(GTK_BOX(row), s_btn_save);
-    gtk_box_append(GTK_BOX(row), make_btn("print", "Print… (Ctrl+P)", G_CALLBACK(on_print), NULL));
+static const TahoeItem kTahoeItems[] = {
+    { "File", "New",       "new",     "New (Ctrl+N)",     "new",       G_CALLBACK(on_new),   0,0,0, NULL },
+    { "File", "Open…",     "open",    "Open… (Ctrl+O)",   "open",      G_CALLBACK(on_open),  0,0,0, NULL },
+    { "File", "Save",      "save",    "Save (Ctrl+S)",    "save",      G_CALLBACK(on_save),  0,0,0, &s_btn_save },
+    { "File", "Print…",    "print",   "Print… (Ctrl+P)",  "print",     G_CALLBACK(on_print), 0,0,0, NULL },
+    { "File", "Save All",  "saveall", "Save All",         "save-all",  NULL, 0,1,0, NULL },
+    { "File", "Close",     "close",   "Close",            "close",     NULL, 0,1,0, NULL },
+    { "File", "Close All", "closeall","Close All",        "close-all", NULL, 0,1,0, NULL },
+
+    { "Edit", "Copy",  "copy",  "Copy (Ctrl+C)",        "copy",  G_CALLBACK(on_copy),  0,0,0, NULL },
+    { "Edit", "Paste", "paste", "Paste (Ctrl+V)",       "paste", G_CALLBACK(on_paste), 0,0,0, NULL },
+    { "Edit", "Undo",  "undo",  "Undo (Ctrl+Z)",        "undo",  G_CALLBACK(on_undo),  0,0,0, &s_btn_undo },
+    { "Edit", "Redo",  "redo",  "Redo (Ctrl+Shift+Z)",  "redo",  G_CALLBACK(on_redo),  0,0,0, &s_btn_redo },
+    { "Edit", "Cut",   "cut",   "Cut",                  "cut",   NULL, 0,1,0, NULL },
+
+    { "Find", "Find…",    "find",    "Find… (Ctrl+F)", "find",    G_CALLBACK(on_find), 0,0,1, NULL },
+    { "Find", "Replace…", "findrep", "Replace…",       "replace", NULL, 0,1,0, NULL },
+
+    { "Zoom", "Zoom In",  "zoomIn",  "Zoom In",  "zoom-in",  G_CALLBACK(on_zoom_in),  0,0,0, NULL },
+    { "Zoom", "Zoom Out", "zoomOut", "Zoom Out", "zoom-out", G_CALLBACK(on_zoom_out), 0,0,0, NULL },
+
+    { "View", "Word Wrap",           "wrap",        "Toggle Word Wrap",    "word-wrap",         G_CALLBACK(on_wrap),   1,0,0, &s_tgl_wrap },
+    { "View", "Indent Guide",        "indentGuide", "Toggle Indent Guide", "show-indent-guide", G_CALLBACK(on_indent), 1,0,0, &s_tgl_indent },
+    { "View", "Show All Characters", "allChars",    "Show All Characters", "show-all-chars",    NULL, 0,1,0, NULL },
+
+    { "Sync", "Synchronise Vertical Scrolling",   "syncV", "Synchronise Vertical Scrolling",   "sync-scroll-v", G_CALLBACK(on_syncv), 1,0,0, NULL },
+    { "Sync", "Synchronise Horizontal Scrolling", "syncH", "Synchronise Horizontal Scrolling", "sync-scroll-h", NULL, 0,1,0, NULL },
+
+    { "Panels", "Document List",         "docList",     "Document List",       "toggle-doclist",     G_CALLBACK(on_tgl_doclist),   1,0,0, &s_tgl_doclist },
+    { "Panels", "Folder as Workspace",   "fileBrowser", "Folder as Workspace", "toggle-workspace",   G_CALLBACK(on_tgl_workspace), 1,0,0, &s_tgl_workspace },
+    { "Panels", "Function List",         "funcList",    "Function List",       "toggle-funclist",    G_CALLBACK(on_tgl_funclist),  1,0,0, &s_tgl_funclist },
+    { "Panels", "Define Your Language…", "udl",         "Define Your Language…","udl-define",        NULL, 0,1,0, NULL },
+    { "Panels", "Document Map",          "docMap",      "Document Map",        "toggle-docmap",      NULL, 0,1,0, NULL },
+    { "Panels", "Character Panel",       "charpanel",   "Character Panel",     "toggle-charpanel",   NULL, 0,1,0, NULL },
+    { "Panels", "Clipboard History",     "cliphistory", "Clipboard History",   "toggle-cliphistory", NULL, 0,1,0, NULL },
+    { "Panels", "Project Panels",        "project",     "Project Panels",      "toggle-project",     NULL, 0,1,0, NULL },
+
+    { "Monitor", "File Monitoring", "monitoring", "File Monitoring (tail -f)", "toggle-monitoring", G_CALLBACK(on_tgl_monitoring), 1,0,0, &s_tgl_monitoring },
+
+    { "Macro", "Start Recording", "startrecord", "Start Recording (Ctrl+Shift+R)", "macro-start",   G_CALLBACK(on_macro_start), 0,0,0, &s_btn_startrecord },
+    { "Macro", "Stop Recording",  "stoprecord",  "Stop Recording",                 "macro-stop",    G_CALLBACK(on_macro_stop),  0,0,0, &s_btn_stoprecord },
+    { "Macro", "Playback",        "playrecord",  "Playback",                       "macro-play",    NULL, 0,1,0, NULL },
+    { "Macro", "Run a Macro Multiple Times…", "playrecord", "Run a Macro Multiple Times…", "macro-play-n", NULL, 0,1,0, NULL },
+    { "Macro", "Save Current Recorded Macro…", "saverecord", "Save Current Recorded Macro…", "macro-save-as", NULL, 0,1,0, NULL },
+};
+
+static const TahoeItem *tahoe_item_find(const char *group, const char *name)
+{
+    for (size_t i = 0; i < G_N_ELEMENTS(kTahoeItems); i++)
+        if (strcmp(kTahoeItems[i].group, group) == 0 &&
+            strcmp(kTahoeItems[i].name, name) == 0)
+            return &kTahoeItems[i];
+    return NULL;
 }
 
-static void cap_edit(GtkWidget *tb, GtkWidget *parent_window)
+/* Promoted default-overflow items become plain buttons that activate
+ * the app action — same dispatch as their menu item. */
+static void on_tahoe_promoted(GtkWidget *b, gpointer action_name)
 {
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
-
-    /* Edit: primary Copy Paste Undo Redo · overflow Cut */
-    m = g_menu_new();
-    g_menu_append(m, "Cut", "app.cut");
-    row = capsule_begin(tb, "Edit", m);
-    gtk_box_append(GTK_BOX(row), make_btn("copy",  "Copy (Ctrl+C)",  G_CALLBACK(on_copy),  NULL));
-    gtk_box_append(GTK_BOX(row), make_btn("paste", "Paste (Ctrl+V)", G_CALLBACK(on_paste), NULL));
-    s_btn_undo = make_btn("undo", "Undo (Ctrl+Z)",       G_CALLBACK(on_undo), NULL);
-    s_btn_redo = make_btn("redo", "Redo (Ctrl+Shift+Z)", G_CALLBACK(on_redo), NULL);
-    gtk_box_append(GTK_BOX(row), s_btn_undo);
-    gtk_box_append(GTK_BOX(row), s_btn_redo);
+    (void)b;
+    GApplication *app = g_application_get_default();
+    if (app)
+        g_action_group_activate_action(G_ACTION_GROUP(app),
+                                       (const char *)action_name, NULL);
 }
 
-static void cap_find(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
+/* Forward decls — the conf block I/O lives with the plugins machinery
+ * further down (shared implementation, GAP-89). */
+static gboolean tahoeconf_group_load(const char *group, gboolean *customized,
+                                     char ***primary, char ***overflow,
+                                     char ***hidden);
 
-    /* Find: primary Find · overflow Replace */
-    m = g_menu_new();
-    g_menu_append(m, "Replace…", "app.replace");
-    row = capsule_begin(tb, "Find", m);
-    gtk_box_append(GTK_BOX(row), make_btn("find", "Find… (Ctrl+F)", G_CALLBACK(on_find), parent_window));
+/* Build one built-in capsule from its conf split (defaults when no
+ * block exists). Exact pre-GAP-90 widgets for native entries: same
+ * make_btn/make_toggle call, same callback, same static capture. */
+static void cap_build_group(GtkWidget *tb, GtkWidget *parent_window,
+                            const char *group)
+{
+    gboolean customized = FALSE;
+    char **primary = NULL, **overflow = NULL, **hidden = NULL;
+    if (!tahoeconf_group_load(group, &customized, &primary, &overflow,
+                              &hidden)) {
+        /* Defaults from the registry. */
+        GPtrArray *prim = g_ptr_array_new();
+        GPtrArray *over = g_ptr_array_new();
+        for (size_t i = 0; i < G_N_ELEMENTS(kTahoeItems); i++) {
+            if (strcmp(kTahoeItems[i].group, group) != 0) continue;
+            g_ptr_array_add(kTahoeItems[i].def_overflow ? over : prim,
+                            g_strdup(kTahoeItems[i].name));
+        }
+        g_ptr_array_add(prim, NULL);
+        g_ptr_array_add(over, NULL);
+        primary  = (char **)g_ptr_array_free(prim, FALSE);
+        overflow = (char **)g_ptr_array_free(over, FALSE);
+    }
+
+    GMenu *menu = NULL;
+    int n_over = 0;
+    for (int i = 0; overflow && overflow[i]; i++) {
+        const TahoeItem *it = tahoe_item_find(group, overflow[i]);
+        if (!it) continue;
+        if (!menu) menu = g_menu_new();
+        char det[64];
+        g_snprintf(det, sizeof det, "app.%s", it->action);
+        g_menu_append(menu, it->name, det);
+        n_over++;
+    }
+
+    int n_prim = 0;
+    GtkWidget *row = NULL;
+    for (int i = 0; primary && primary[i]; i++) {
+        const TahoeItem *it = tahoe_item_find(group, primary[i]);
+        if (!it) continue;
+        if (!row) row = capsule_begin(tb, group, menu);
+        GtkWidget *w;
+        if (it->cb) {
+            w = (it->toggle ? make_toggle : make_btn)(
+                    it->icon, it->tooltip, it->cb,
+                    it->needs_win ? parent_window : NULL);
+        } else {
+            w = make_btn(it->icon, it->name, G_CALLBACK(on_tahoe_promoted),
+                         (gpointer)it->action);
+        }
+        if (it->capture) *it->capture = w;
+        gtk_box_append(GTK_BOX(row), w);
+        n_prim++;
+    }
+    /* Overflow-only group: the capsule is just the ▾ label. */
+    if (!row && n_over > 0)
+        row = capsule_begin(tb, group, menu);
+    else if (!row && menu)
+        g_object_unref(menu);
+    if (g_getenv("NPP_TB_DUMP"))
+        g_message("capsule %s: primary=%d overflow=%d", group, n_prim,
+                  n_over);
+    g_strfreev(primary);
+    g_strfreev(overflow);
+    g_strfreev(hidden);
 }
 
-static void cap_zoom(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
-
-    /* Zoom: primary In Out · no overflow */
-    row = capsule_begin(tb, "Zoom", NULL);
-    gtk_box_append(GTK_BOX(row), make_btn("zoomIn",  "Zoom In",  G_CALLBACK(on_zoom_in),  NULL));
-    gtk_box_append(GTK_BOX(row), make_btn("zoomOut", "Zoom Out", G_CALLBACK(on_zoom_out), NULL));
-}
-
-static void cap_view(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
-
-    /* View: primary Wrap IndentGuide · overflow AllChars */
-    m = g_menu_new();
-    g_menu_append(m, "Show All Characters", "app.show-all-chars");
-    row = capsule_begin(tb, "View", m);
-    s_tgl_wrap   = make_toggle("wrap",        "Toggle Word Wrap",    G_CALLBACK(on_wrap),   NULL);
-    s_tgl_indent = make_toggle("indentGuide", "Toggle Indent Guide", G_CALLBACK(on_indent), NULL);
-    gtk_box_append(GTK_BOX(row), s_tgl_wrap);
-    gtk_box_append(GTK_BOX(row), s_tgl_indent);
-}
-
-static void cap_sync(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
-
-    /* Sync: primary SyncV · overflow SyncH */
-    m = g_menu_new();
-    g_menu_append(m, "Synchronise Horizontal Scrolling", "app.sync-scroll-h");
-    row = capsule_begin(tb, "Sync", m);
-    gtk_box_append(GTK_BOX(row), make_toggle("syncV",
-        "Synchronise Vertical Scrolling", G_CALLBACK(on_syncv), NULL));
-}
-
-static void cap_panels(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
-
-    /* Panels: primary DocList FileBrowser FuncList · overflow the rest */
-    m = g_menu_new();
-    g_menu_append(m, "Define Your Language…", "app.udl-define");
-    g_menu_append(m, "Document Map",          "app.toggle-docmap");
-    g_menu_append(m, "Character Panel",       "app.toggle-charpanel");
-    g_menu_append(m, "Clipboard History",     "app.toggle-cliphistory");
-    g_menu_append(m, "Project Panels",        "app.toggle-project");
-    row = capsule_begin(tb, "Panels", m);
-    s_tgl_doclist   = make_toggle("docList",     "Document List",       G_CALLBACK(on_tgl_doclist),   NULL);
-    s_tgl_workspace = make_toggle("fileBrowser", "Folder as Workspace", G_CALLBACK(on_tgl_workspace), NULL);
-    s_tgl_funclist  = make_toggle("funcList",    "Function List",       G_CALLBACK(on_tgl_funclist),  NULL);
-    gtk_box_append(GTK_BOX(row), s_tgl_doclist);
-    gtk_box_append(GTK_BOX(row), s_tgl_workspace);
-    gtk_box_append(GTK_BOX(row), s_tgl_funclist);
-}
-
-static void cap_monitor(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
-
-    /* Monitor: standalone toggle · no overflow */
-    row = capsule_begin(tb, "Monitor", NULL);
-    s_tgl_monitoring = make_toggle("monitoring",
-        "File Monitoring (tail -f)", G_CALLBACK(on_tgl_monitoring), NULL);
-    gtk_box_append(GTK_BOX(row), s_tgl_monitoring);
-}
-
-static void cap_macro(GtkWidget *tb, GtkWidget *parent_window)
-{
-    GtkWidget *row; GMenu *m = NULL; (void)m; (void)row; (void)parent_window;
-
-    /* Macro: primary Start Stop · overflow Play/PlayMulti/Save */
-    m = g_menu_new();
-    g_menu_append(m, "Playback",                          "app.macro-play");
-    g_menu_append(m, "Run a Macro Multiple Times…",       "app.macro-play-n");
-    g_menu_append(m, "Save Current Recorded Macro…",      "app.macro-save-as");
-    row = capsule_begin(tb, "Macro", m);
-    s_btn_startrecord = make_btn("startrecord", "Start Recording (Ctrl+Shift+R)", G_CALLBACK(on_macro_start), NULL);
-    s_btn_stoprecord  = make_btn("stoprecord",  "Stop Recording",                 G_CALLBACK(on_macro_stop),  NULL);
-    gtk_box_append(GTK_BOX(row), s_btn_startrecord);
-    gtk_box_append(GTK_BOX(row), s_btn_stoprecord);
-}
+#define DEFINE_CAP(fn, id) \
+    static void fn(GtkWidget *tb, GtkWidget *parent_window) \
+    { cap_build_group(tb, parent_window, id); }
+DEFINE_CAP(cap_file,    "File")
+DEFINE_CAP(cap_edit,    "Edit")
+DEFINE_CAP(cap_find,    "Find")
+DEFINE_CAP(cap_zoom,    "Zoom")
+DEFINE_CAP(cap_view,    "View")
+DEFINE_CAP(cap_sync,    "Sync")
+DEFINE_CAP(cap_panels,  "Panels")
+DEFINE_CAP(cap_monitor, "Monitor")
+DEFINE_CAP(cap_macro,   "Macro")
 
 typedef void (*CapsuleBuildFn)(GtkWidget *, GtkWidget *);
 /* GAP-89 — ordered slot for the Plugins capsule: an empty anchor box at
@@ -1108,9 +1154,10 @@ static gboolean strv_has(char **v, const char *s)
 
 /* Read the Plugins group block from toolbarButtonsTahoeConf.xml.
  * Returns TRUE when a block exists; lists are newly-allocated GStrvs. */
-static gboolean tahoeconf_plugins_load(gboolean *customized,
-                                       char ***primary, char ***overflow,
-                                       char ***hidden)
+static gboolean tahoeconf_group_load(const char *group,
+                                     gboolean *customized,
+                                     char ***primary, char ***overflow,
+                                     char ***hidden)
 {
     *customized = FALSE;
     *primary = *overflow = *hidden = NULL;
@@ -1120,8 +1167,18 @@ static gboolean tahoeconf_plugins_load(gboolean *customized,
     g_free(path);
     if (!ok) return FALSE;
 
-    char *g = strstr(data, "<Group id=\"Plugins\"");
+    char needle[64];
+    g_snprintf(needle, sizeof needle, "<Group id=\"%s\"", group);
+    char *g = strstr(data, needle);
     if (!g) { g_free(data); return FALSE; }
+    /* A self-closing row ("<Group id=... />") has no nested block. */
+    {
+        char *close = strchr(g, '>');
+        if (close && close > g && *(close - 1) == '/') {
+            g_free(data);
+            return FALSE;
+        }
+    }
     char *end = strstr(g, "</Group>");
     if (!end) end = data + strlen(data);
     char *hdr_close = strchr(g, '>');
@@ -1175,9 +1232,9 @@ static gboolean tahoeconf_plugins_load(gboolean *customized,
 /* Write the Plugins block back (replace existing block or the
  * self-closing "<Group id=\"Plugins\" .../>" row, else append before
  * </TahoeToolbar>). Preserves the rest of the file byte-for-byte. */
-static void tahoeconf_plugins_save(gboolean customized,
-                                   char **primary, char **overflow,
-                                   char **hidden)
+static void tahoeconf_group_save(const char *group, gboolean customized,
+                                 char **primary, char **overflow,
+                                 char **hidden)
 {
     gchar *path = npp_user_file(NULL, "toolbarButtonsTahoeConf.xml");
     gchar *data = NULL;
@@ -1185,10 +1242,27 @@ static void tahoeconf_plugins_save(gboolean customized,
         data = g_strdup("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n"
                         "<TahoeToolbar>\n</TahoeToolbar>\n");
 
+    /* Preserve the row's existing visible attribute (default yes;
+     * the Plugins group also honours its hidden flag). */
+    gboolean visible = TRUE;
+    if (strcmp(group, "Plugins") == 0 && s_plugins_cap_hidden)
+        visible = FALSE;
+    {
+        char needle[64];
+        g_snprintf(needle, sizeof needle, "<Group id=\"%s\"", group);
+        char *g0 = strstr(data, needle);
+        char *close = g0 ? strchr(g0, '>') : NULL;
+        if (g0 && close) {
+            char save = *close; *close = '\0';
+            if (strstr(g0, "visible=\"no\"")) visible = FALSE;
+            *close = save;
+        }
+    }
+
     GString *blk = g_string_new(NULL);
     g_string_append_printf(blk,
-        "    <Group id=\"Plugins\" visible=\"%s\" customized=\"%s\">\n",
-        s_plugins_cap_hidden ? "no" : "yes", customized ? "yes" : "no");
+        "    <Group id=\"%s\" visible=\"%s\" customized=\"%s\">\n",
+        group, visible ? "yes" : "no", customized ? "yes" : "no");
     static const char *const sect[] = { "Primary", "Overflow", "Hidden" };
     char **lists[] = { primary, overflow, hidden };
     for (int k = 0; k < 3; k++) {
@@ -1204,7 +1278,9 @@ static void tahoeconf_plugins_save(gboolean customized,
     g_string_append(blk, "    </Group>\n");
 
     GString *out = g_string_new(NULL);
-    char *g = strstr(data, "<Group id=\"Plugins\"");
+    char needle2[64];
+    g_snprintf(needle2, sizeof needle2, "<Group id=\"%s\"", group);
+    char *g = strstr(data, needle2);
     if (g) {
         char *tail;
         char *blk_end = strstr(g, "</Group>");
@@ -1294,8 +1370,8 @@ static void rebuild_plugins_capsule(void)
     /* Reconcile the config split with the live item set. */
     gboolean customized = FALSE;
     char **primary = NULL, **overflow = NULL, **hidden = NULL;
-    gboolean have = tahoeconf_plugins_load(&customized, &primary,
-                                           &overflow, &hidden);
+    gboolean have = tahoeconf_group_load("Plugins", &customized, &primary,
+                                         &overflow, &hidden);
     gboolean changed = !have;
     if (!customized) {
         /* Un-customized: re-derive the curated default over the current
@@ -1337,7 +1413,8 @@ static void rebuild_plugins_capsule(void)
         overflow = (char **)g_ptr_array_free(over, FALSE);
     }
     if (changed)
-        tahoeconf_plugins_save(customized, primary, overflow, hidden);
+        tahoeconf_group_save("Plugins", customized, primary, overflow,
+                             hidden);
 
     /* Build the capsule: primary buttons + ▾ overflow via the label. */
     int n_prim = 0, n_over = 0;
@@ -1481,4 +1558,195 @@ void toolbar_apply_icon_scale(int idx) {
     static const double pickScales[] = { 0.50, 0.75, 0.90, 1.00, 1.25, 1.50 };
     if (idx < 0 || idx > 5) idx = 3;
     s_icon_scale = pickScales[idx];
+}
+
+/* ── GAP-90 — Preferences ▸ Tahoe: toolbar-group editor API ─────────── */
+
+typedef struct { char *group; char *name; int place; } TbEditRow;
+static GPtrArray *s_tb_edit;   /* TbEditRow*, snapshot for the dialog */
+
+static int placement_in_lists(const char *name, char **prim, char **over,
+                              char **hid, int fallback)
+{
+    if (strv_has(prim, name)) return NPP_TB_PLACE_PRIMARY;
+    if (strv_has(over, name)) return NPP_TB_PLACE_OVERFLOW;
+    if (strv_has(hid,  name)) return NPP_TB_PLACE_HIDDEN;
+    return fallback;
+}
+
+int toolbar_tahoe_item_count(void)
+{
+    if (s_tb_edit) {
+        for (guint i = 0; i < s_tb_edit->len; i++) {
+            TbEditRow *r = g_ptr_array_index(s_tb_edit, i);
+            g_free(r->group); g_free(r->name); g_free(r);
+        }
+        g_ptr_array_free(s_tb_edit, TRUE);
+    }
+    s_tb_edit = g_ptr_array_new();
+
+    /* Built-ins: registry order, conf block (if any) decides placement. */
+    const char *cur_group = NULL;
+    gboolean customized = FALSE;
+    char **prim = NULL, **over = NULL, **hid = NULL;
+    gboolean have = FALSE;
+    for (size_t i = 0; i < G_N_ELEMENTS(kTahoeItems); i++) {
+        const TahoeItem *it = &kTahoeItems[i];
+        if (!cur_group || strcmp(cur_group, it->group) != 0) {
+            g_strfreev(prim); g_strfreev(over); g_strfreev(hid);
+            prim = over = hid = NULL;
+            have = tahoeconf_group_load(it->group, &customized, &prim,
+                                        &over, &hid);
+            cur_group = it->group;
+        }
+        int def = it->def_overflow ? NPP_TB_PLACE_OVERFLOW
+                                   : NPP_TB_PLACE_PRIMARY;
+        TbEditRow *r = g_new0(TbEditRow, 1);
+        r->group = g_strdup(it->group);
+        r->name  = g_strdup(it->name);
+        r->place = have ? placement_in_lists(it->name, prim, over, hid, def)
+                        : def;
+        g_ptr_array_add(s_tb_edit, r);
+    }
+    g_strfreev(prim); g_strfreev(over); g_strfreev(hid);
+    prim = over = hid = NULL;
+
+    /* Plugins: live registrations ∪ conf lists. */
+    gboolean phave = tahoeconf_group_load("Plugins", &customized, &prim,
+                                          &over, &hid);
+    for (guint i = 0; s_plugin_items && i < s_plugin_items->len; i++) {
+        PluginTbItem *it = g_ptr_array_index(s_plugin_items, i);
+        TbEditRow *r = g_new0(TbEditRow, 1);
+        r->group = g_strdup("Plugins");
+        r->name  = g_strdup(it->name);
+        r->place = phave ? placement_in_lists(it->name, prim, over, hid,
+                                              NPP_TB_PLACE_OVERFLOW)
+                         : NPP_TB_PLACE_OVERFLOW;
+        g_ptr_array_add(s_tb_edit, r);
+    }
+    char **lists[3] = { prim, over, hid };
+    for (int k = 0; k < 3; k++)
+        for (int i = 0; lists[k] && lists[k][i]; i++) {
+            gboolean seen = FALSE;
+            for (guint j = 0; j < s_tb_edit->len && !seen; j++) {
+                TbEditRow *r = g_ptr_array_index(s_tb_edit, j);
+                if (strcmp(r->group, "Plugins") == 0 &&
+                    strcmp(r->name, lists[k][i]) == 0) seen = TRUE;
+            }
+            if (seen) continue;
+            TbEditRow *r = g_new0(TbEditRow, 1);
+            r->group = g_strdup("Plugins");
+            r->name  = g_strdup(lists[k][i]);
+            r->place = k;
+            g_ptr_array_add(s_tb_edit, r);
+        }
+    g_strfreev(prim); g_strfreev(over); g_strfreev(hid);
+    return (int)s_tb_edit->len;
+}
+
+void toolbar_tahoe_item_get(int i, const char **group, const char **name,
+                            int *placement)
+{
+    if (group) *group = NULL;
+    if (name)  *name  = NULL;
+    if (placement) *placement = 0;
+    if (!s_tb_edit || i < 0 || (guint)i >= s_tb_edit->len) return;
+    TbEditRow *r = g_ptr_array_index(s_tb_edit, i);
+    if (group) *group = r->group;
+    if (name)  *name  = r->name;
+    if (placement) *placement = r->place;
+}
+
+void toolbar_tahoe_set_placement(const char *group, const char *name,
+                                 int placement)
+{
+    if (!group || !name) return;
+    gboolean customized = FALSE;
+    char **prim = NULL, **over = NULL, **hid = NULL;
+    if (!tahoeconf_group_load(group, &customized, &prim, &over, &hid)) {
+        /* Materialize the group's current effective split first. */
+        GPtrArray *p0 = g_ptr_array_new(), *o0 = g_ptr_array_new();
+        if (strcmp(group, "Plugins") == 0) {
+            for (guint i = 0; s_plugin_items && i < s_plugin_items->len; i++) {
+                PluginTbItem *it = g_ptr_array_index(s_plugin_items, i);
+                g_ptr_array_add(o0, g_strdup(it->name));
+            }
+        } else {
+            for (size_t i = 0; i < G_N_ELEMENTS(kTahoeItems); i++) {
+                if (strcmp(kTahoeItems[i].group, group) != 0) continue;
+                g_ptr_array_add(kTahoeItems[i].def_overflow ? o0 : p0,
+                                g_strdup(kTahoeItems[i].name));
+            }
+        }
+        g_ptr_array_add(p0, NULL);
+        g_ptr_array_add(o0, NULL);
+        prim = (char **)g_ptr_array_free(p0, FALSE);
+        over = (char **)g_ptr_array_free(o0, FALSE);
+        hid  = NULL;
+    }
+
+    /* Remove from all three, append to the target list. */
+    char **lists[3] = { prim, over, hid };
+    GPtrArray *nl[3];
+    for (int k = 0; k < 3; k++) {
+        nl[k] = g_ptr_array_new();
+        for (int i = 0; lists[k] && lists[k][i]; i++)
+            if (strcmp(lists[k][i], name) != 0)
+                g_ptr_array_add(nl[k], g_strdup(lists[k][i]));
+    }
+    if (placement >= 0 && placement <= 2)
+        g_ptr_array_add(nl[placement], g_strdup(name));
+    char *fin[3];
+    for (int k = 0; k < 3; k++) {
+        g_ptr_array_add(nl[k], NULL);
+        fin[k] = (char *)g_ptr_array_free(nl[k], FALSE);
+    }
+    tahoeconf_group_save(group, TRUE, (char **)fin[0], (char **)fin[1],
+                         (char **)fin[2]);
+    g_strfreev((char **)fin[0]);
+    g_strfreev((char **)fin[1]);
+    g_strfreev((char **)fin[2]);
+    g_strfreev(prim); g_strfreev(over); g_strfreev(hid);
+
+    /* The Plugins capsule can re-split live; built-ins on restart. */
+    if (strcmp(group, "Plugins") == 0 && g_prefs.appearance_style == 1)
+        rebuild_plugins_capsule();
+}
+
+void toolbar_tahoe_reset(void)
+{
+    gchar *path = npp_user_file(NULL, "toolbarButtonsTahoeConf.xml");
+    gchar *data = NULL;
+    if (!g_file_get_contents(path, &data, NULL, NULL)) {
+        g_free(path);
+        return;
+    }
+    /* Replace every nested Group block with a flat visible row. */
+    GString *out = g_string_new(NULL);
+    char *p = data;
+    while (*p) {
+        char *g = strstr(p, "<Group id=\"");
+        if (!g) { g_string_append(out, p); break; }
+        char *idp = g + 11;
+        char *idq = strchr(idp, '"');
+        char *close = strchr(g, '>');
+        if (!idq || !close) { g_string_append(out, p); break; }
+        g_string_append_len(out, p, g - p);
+        gchar *id = g_strndup(idp, (gsize)(idq - idp));
+        g_string_append_printf(out, "<Group id=\"%s\" visible=\"yes\" />",
+                               id);
+        g_free(id);
+        if (*(close - 1) == '/') {
+            p = close + 1;
+        } else {
+            char *be = strstr(close, "</Group>");
+            p = be ? be + strlen("</Group>") : close + 1;
+        }
+    }
+    g_file_set_contents(path, out->str, (gssize)out->len, NULL);
+    g_string_free(out, TRUE);
+    g_free(data);
+    g_free(path);
+    if (g_prefs.appearance_style == 1)
+        rebuild_plugins_capsule();
 }
