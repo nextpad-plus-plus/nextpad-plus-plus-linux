@@ -802,8 +802,18 @@ GMenuModel *i18n_translate_menu(GMenuModel *src)
                     g_menu_item_set_attribute(item, "label", "s", t);
                     g_free(t);
                 } else {
+                    /* GAP-86 (macOS #237): 1-char titles are structural —
+                     * the Language menu's A–Z letter headers. english.xml
+                     * has 1-char catalog strings ("F"/"S" = the Blink-rate
+                     * slider's Fast/Slow ends), so the lookup would rename
+                     * the F/S letter groups (快/慢 under zh-CN). Guard the
+                     * MENU path only; dialogs still translate via
+                     * i18n_translate. */
+                    char *norm = xl_normalize(eng);
+                    gboolean bare = g_utf8_strlen(norm, -1) <= 1;
+                    g_free(norm);
                     g_menu_item_set_attribute(item, "label", "s",
-                                              i18n_translate(eng));
+                                              bare ? eng : i18n_translate(eng));
                 }
             } else {
                 g_menu_item_set_attribute_value(item, aname, aval);

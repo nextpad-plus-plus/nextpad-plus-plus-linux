@@ -5545,10 +5545,16 @@ static GtkWidget  *g_menubar_widget;
 
 /* Rebuild the menu bar in the current UI language (called after the
  * language is switched in Preferences). */
+static void menu_dump(GMenuModel *m, int depth);
+
 void main_retranslate_menu(void)
 {
     if (!g_menu_english) return;
     GMenuModel *t = i18n_translate_menu(g_menu_english);
+    if (g_getenv("NPP_MENU_DUMP")) {
+        fputs("== translated ==\n", stderr);
+        menu_dump(t, 0);
+    }
     if (g_menubar_widget && GTK_IS_POPOVER_MENU_BAR(g_menubar_widget))
         gtk_popover_menu_bar_set_menu_model(
             GTK_POPOVER_MENU_BAR(g_menubar_widget), t);
@@ -7312,6 +7318,10 @@ static void on_startup(GtkApplication *app, gpointer ud)
     g_menu_english = build_menu_model();
     if (g_getenv("NPP_MENU_DUMP")) menu_dump(g_menu_english, 0);
     GMenuModel *translated = i18n_translate_menu(g_menu_english);
+    if (g_getenv("NPP_MENU_DUMP")) {
+        fputs("== translated ==\n", stderr);
+        menu_dump(translated, 0);
+    }
     gtk_application_set_menubar(app, translated);
 
     /* P5 — build the (entry+item → action-name) lookup table for the

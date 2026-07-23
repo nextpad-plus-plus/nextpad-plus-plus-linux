@@ -13,7 +13,7 @@
 /* Release version — single source for the About dialog and the
  * Help > Check for Updates comparison. */
 /* Tracks the macOS reference the port has parity with (GAP-78). */
-#define APP_VERSION       "1.0.9"
+#define APP_VERSION       "1.1.0"
 /* User data dir name under $XDG_DATA_HOME (default ~/.local/share) —
  * mirrors macOS issue #67, which moved user data from ~/.nextpad++ to
  * ~/Library/Application Support/Nextpad++. NEVER build paths from this
