@@ -16,7 +16,7 @@
  *
  * Catalogs (tried in order; first hit wins):
  *   - https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/
- *       main/pl.linux-arm64.json                (Linux-native; not shipped yet)
+ *       main/pl.linux-arm64.json | pl.linux-x64.json  (per build arch)
  *   - https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/
  *       main/pl.macos-arm64.json                (fallback — mac dylibs)
  * Windows catalog (separate, populates the Incompatible tab):
@@ -49,9 +49,17 @@
  * Constants
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* Per-arch catalog FILES with the standard `repository`/`id` fields —
+ * the Windows-upstream pattern (pl.x64/pl.arm64/pl.x86.json). One entry
+ * cannot serve two arches: the installer hash-verifies the zip against
+ * `id`, and an arm64 zip and an x64 zip are different bytes. */
 static const char *const CATALOG_LINUX =
     "https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/"
+#if defined(__aarch64__)
     "main/pl.linux-arm64.json";
+#else
+    "main/pl.linux-x64.json";
+#endif
 static const char *const CATALOG_MAC =
     "https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/"
     "main/pl.macos-arm64.json";
@@ -579,10 +587,18 @@ static void load_catalogs(AdminUI *ui) {
     g_ptr_array_set_size(ui->catalog, 0);
     g_ptr_array_set_size(ui->win_only, 0);
 
-    /* Native catalog: try Linux first, then fall back to macOS. */
+    /* Native catalog: try Linux first, then fall back to macOS.
+     * NPP_PLUGIN_CATALOG overrides the Linux URL — test/debug hook
+     * (file:// works; same pattern as UDL admin's NPP_UDL_RAW_BASE). */
     gsize  n_len = 0;
-    char  *nbody = fetch_catalog_to_string(CATALOG_LINUX, &n_len);
+    const char *cat_url = g_getenv("NPP_PLUGIN_CATALOG");
+    if (!cat_url || !*cat_url) cat_url = CATALOG_LINUX;
+    char  *nbody = fetch_catalog_to_string(cat_url, &n_len);
+#if defined(__aarch64__)
     const char *origin = "linux-arm64";
+#else
+    const char *origin = "linux-x64";
+#endif
     if (!nbody) {
         nbody  = fetch_catalog_to_string(CATALOG_MAC, &n_len);
         origin = "macos-arm64 (fallback)";
