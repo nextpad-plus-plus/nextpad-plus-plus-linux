@@ -410,10 +410,15 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         return 1L;
     }
     case NPPM_GETPLUGINSCONFIGDIR: {
+        /* macOS parity (NppPluginManager.mm:1438): the answer is
+         * <plugins>/Config, created lazily HERE on every query — the
+         * plugins/ base dir itself is made earlier at scan stage
+         * (plugin_load_all). Plugins append only their filename. */
         char *buf = (char *)(intptr_t)lParam;
         if (!buf) return 0L;
         {
-            gchar *p = npp_local_file("plugins", NULL);
+            gchar *p = npp_local_file("plugins", "Config");
+            g_mkdir_with_parents(p, 0755);
             g_strlcpy(buf, p, 2048);
             g_free(p);
         }
