@@ -12,8 +12,9 @@ build-*/
 *.a
 *.so
 *.dylib
-nextpad-plus-plus
-Nextpad++
+/nextpad-plus-plus
+/Nextpad++
+*.deb
 
 # Tooling / IDE
 compile_commands.json

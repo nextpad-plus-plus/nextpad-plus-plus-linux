@@ -1,0 +1,22 @@
+# AppArmor profile for Nextpad++ — grants unprivileged user namespaces.
+#
+# Ubuntu 24.04+ restricts unprivileged user-namespace creation to binaries
+# with an AppArmor profile that allows it
+# (kernel.apparmor_restrict_unprivileged_userns=1). WebKitGTK-based plugins
+# (e.g. NppMarkdownPanel) launch bubblewrap for the web-process sandbox,
+# which needs exactly that; without this profile bwrap aborts and the plugin
+# must disable the WebKit sandbox instead (see nppPluginsLinux/
+# PORTING_NOTES.md, "WebKitGTK plugins").
+#
+# flags=(unconfined): the profile imposes NO confinement — it exists solely
+# to grant the userns permission. Same pattern Ubuntu ships for third-party
+# browsers (e.g. /etc/apparmor.d/chrome).
+abi <abi/4.0>,
+include <tunables/global>
+
+profile nextpad-plus-plus /usr/bin/Nextpad++ flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/nextpad-plus-plus>
+}

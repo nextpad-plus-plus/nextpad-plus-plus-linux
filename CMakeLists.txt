@@ -226,6 +226,15 @@ install(FILES packaging/org.nextpad.NextpadPP.metainfo.xml
 install(FILES packaging/nextpad-plus-plus.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
+# AppArmor userns grant (Ubuntu 24.04+) — required for WebKitGTK-based
+# plugins to run their sandbox. Absolute path on purpose: AppArmor only
+# reads /etc/apparmor.d, regardless of CMAKE_INSTALL_PREFIX. DESTDIR
+# staging (deb builds) prefixes it as usual. Loading is the package
+# postinst's job (tools/make-deb.sh); a plain `cmake --install` needs a
+# manual `apparmor_parser -r /etc/apparmor.d/nextpad-plus-plus`.
+install(FILES packaging/apparmor/nextpad-plus-plus
+        DESTINATION /etc/apparmor.d)
+
 # Application icon — the freedesktop hicolor tree under
 # resources/icons/hicolor/<size>/apps/nextpad-plus-plus.png is shipped as
 # the system icon theme entry. The .desktop file references the bare
