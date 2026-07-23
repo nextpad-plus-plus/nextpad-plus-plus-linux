@@ -626,11 +626,78 @@ void toolbar_apply_theme(void)
 /* label is a ▾ menu button exposing them. No separators (by design).  */
 /* ================================================================== */
 
+/* GAP-91 — capsule overflow menus carry real ICONS (macOS parity:
+ * each NSMenuItem gets a 16 px copy of the button's toolbar icon).
+ * GTK4's GtkPopoverMenu silently drops g_menu_item_set_icon on
+ * vertical rows (documented project gotcha), so the ▾ menu is a plain
+ * GtkPopover of icon+label rows instead of a menu MODEL. A flat
+ * MenuButton-owned popover is grab-safe — the Wayland xdg-popup trap
+ * only bites hand-parented nested popovers. */
+
+static void on_overflow_row_action(GtkButton *b, gpointer action_name)
+{
+    GApplication *app = g_application_get_default();
+    if (app)
+        g_action_group_activate_action(G_ACTION_GROUP(app),
+                                       (const char *)action_name, NULL);
+    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(b),
+                                             GTK_TYPE_POPOVER);
+    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
+}
+
+static void on_overflow_row_plugin(GtkButton *b, gpointer cmd_id)
+{
+    GApplication *app = g_application_get_default();
+    if (app)
+        g_action_group_activate_action(G_ACTION_GROUP(app), "plugin-cmd",
+            g_variant_new_int32(GPOINTER_TO_INT(cmd_id)));
+    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(b),
+                                             GTK_TYPE_POPOVER);
+    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
+}
+
+/* An empty overflow popover (vertical row box inside). */
+static GtkWidget *overflow_popover_new(void)
+{
+    GtkWidget *pop = gtk_popover_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(box, "npp-overflow-menu");
+    gtk_popover_set_child(GTK_POPOVER(pop), box);
+    return pop;
+}
+
+/* One icon+label row. `icon` may be NULL (label indents consistently
+ * via a 16 px placeholder). Returns the row button. */
+static GtkWidget *overflow_popover_add(GtkWidget *pop, GtkWidget *icon,
+                                       const char *label, GCallback cb,
+                                       gpointer data)
+{
+    GtkWidget *box = gtk_popover_get_child(GTK_POPOVER(pop));
+    GtkWidget *btn = gtk_button_new();
+    gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
+    GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    if (!icon) {
+        icon = gtk_image_new();
+        gtk_image_set_pixel_size(GTK_IMAGE(icon), 16);
+    } else if (GTK_IS_IMAGE(icon)) {
+        gtk_image_set_pixel_size(GTK_IMAGE(icon), 16);
+    }
+    gtk_box_append(GTK_BOX(h), icon);
+    GtkWidget *l = gtk_label_new(label);
+    gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
+    gtk_widget_set_hexpand(l, TRUE);
+    gtk_box_append(GTK_BOX(h), l);
+    gtk_button_set_child(GTK_BUTTON(btn), h);
+    if (cb) g_signal_connect(btn, "clicked", cb, data);
+    gtk_box_append(GTK_BOX(box), btn);
+    return btn;
+}
+
 /* One capsule: appends it to `tb`, returns the icon row to fill. When
- * `overflow` is non-NULL the label becomes a ▾ menu button (takes
- * ownership of the menu). */
+ * `overflow` (a GtkPopover) is non-NULL the label becomes a ▾ menu
+ * button owning it. */
 static GtkWidget *capsule_begin(GtkWidget *tb, const char *label,
-                                GMenu *overflow)
+                                GtkWidget *overflow)
 {
     GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_add_css_class(v, "npp-capsule");
@@ -642,15 +709,13 @@ static GtkWidget *capsule_begin(GtkWidget *tb, const char *label,
 
     if (overflow) {
         GtkWidget *mb = gtk_menu_button_new();
-        gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(mb),
-                                       G_MENU_MODEL(overflow));
+        gtk_menu_button_set_popover(GTK_MENU_BUTTON(mb), overflow);
         gtk_menu_button_set_label(GTK_MENU_BUTTON(mb), label);
         gtk_menu_button_set_always_show_arrow(GTK_MENU_BUTTON(mb), TRUE);
         gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(mb), FALSE);
         gtk_widget_add_css_class(mb, "npp-capsule-label");
         gtk_widget_set_halign(mb, GTK_ALIGN_CENTER);
         gtk_box_append(GTK_BOX(v), mb);
-        g_object_unref(overflow);
     } else {
         GtkWidget *l = gtk_label_new(label);
         gtk_widget_add_css_class(l, "npp-capsule-label");
@@ -782,15 +847,16 @@ static void cap_build_group(GtkWidget *tb, GtkWidget *parent_window,
         overflow = (char **)g_ptr_array_free(over, FALSE);
     }
 
-    GMenu *menu = NULL;
+    GtkWidget *menu = NULL;
     int n_over = 0;
     for (int i = 0; overflow && overflow[i]; i++) {
         const TahoeItem *it = tahoe_item_find(group, overflow[i]);
         if (!it) continue;
-        if (!menu) menu = g_menu_new();
-        char det[64];
-        g_snprintf(det, sizeof det, "app.%s", it->action);
-        g_menu_append(menu, it->name, det);
+        if (!menu) menu = overflow_popover_new();
+        /* GAP-91 — the same toolbar icon at menu size (macOS 16 px). */
+        overflow_popover_add(menu, load_icon(it->icon), it->name,
+                             G_CALLBACK(on_overflow_row_action),
+                             (gpointer)it->action);
         n_over++;
     }
 
@@ -817,7 +883,7 @@ static void cap_build_group(GtkWidget *tb, GtkWidget *parent_window,
     if (!row && n_over > 0)
         row = capsule_begin(tb, group, menu);
     else if (!row && menu)
-        g_object_unref(menu);
+        g_object_ref_sink(menu), g_object_unref(menu);
     if (g_getenv("NPP_TB_DUMP"))
         g_message("capsule %s: primary=%d overflow=%d", group, n_prim,
                   n_over);
@@ -1418,16 +1484,26 @@ static void rebuild_plugins_capsule(void)
 
     /* Build the capsule: primary buttons + ▾ overflow via the label. */
     int n_prim = 0, n_over = 0;
-    GMenu *menu = NULL;
+    GtkWidget *menu = NULL;
     for (int i = 0; overflow && overflow[i]; i++) {
         PluginTbItem *it = plugin_item_by_name(overflow[i]);
         if (!it) continue;
-        if (!menu) menu = g_menu_new();
-        GMenuItem *mi = g_menu_item_new(it->name, NULL);
-        g_menu_item_set_action_and_target(mi, "app.plugin-cmd", "i",
-                                          it->cmd_id);
-        g_menu_append_item(menu, mi);
-        g_object_unref(mi);
+        if (!menu) menu = overflow_popover_new();
+        /* GAP-91 — the plugin's own PNG at menu size (macOS mi.image). */
+        GtkWidget *img = NULL;
+        GdkPixbuf *pb = it->icon_path[0]
+            ? gdk_pixbuf_new_from_file(it->icon_path, NULL) : NULL;
+        if (pb) {
+            if (g_prefs.toolbar_color_plugins)
+                toolbar_colorize_pixbuf(pb);
+            GdkTexture *tex = gdk_texture_new_for_pixbuf(pb);
+            g_object_unref(pb);
+            img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
+            g_object_unref(tex);
+        }
+        overflow_popover_add(menu, img, it->name,
+                             G_CALLBACK(on_overflow_row_plugin),
+                             GINT_TO_POINTER(it->cmd_id));
         n_over++;
     }
     GtkWidget *row = capsule_begin(s_plugins_slot, "Plugins", menu);
