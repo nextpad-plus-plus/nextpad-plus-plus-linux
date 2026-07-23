@@ -9,6 +9,7 @@
 #include "split.h"
 #include "prefs.h"
 #include "session.h"
+#include "theme.h"
 #include "findinfiles.h"
 #include "doclist.h"
 #include "udl.h"
@@ -39,6 +40,9 @@ typedef struct {
     int            n_funcs;
     BeNotified_t   be_notified;
     MessageProc_t  message_proc;
+    /* GAP-88c — NPPM_SETPLUGINSUBSCRIPTIONS opt-outs (default ON). */
+    gboolean       wants_updateui;
+    gboolean       wants_painted;
 } LoadedPlugin;
 
 #define MAX_PLUGINS   64
@@ -94,6 +98,8 @@ static void load_plugin(const char *sopath)
     if (set_info) set_info(s_npp_data);
 
     LoadedPlugin *p = &s_plugins[s_n_plugins];
+    p->wants_updateui = TRUE;    /* GAP-88c — subscriptions default ON */
+    p->wants_painted  = TRUE;
     p->dl_handle   = h;
     p->be_notified = be_notified;
     p->message_proc = msg_proc;
@@ -170,12 +176,70 @@ void plugin_load_all(void)
     scan_dir("/usr/local/lib/nextpad-plus-plus/plugins");
 }
 
+/* GAP-88c — SCN forwarding parity (macOS forwardScintillaNotification:).
+ * NPPN_* host notifications (codes 1000..1999) fan out unfiltered and
+ * unguarded, like macOS notifyPluginsWithCode:. SCN_* editor
+ * notifications (2000+) get the full macOS treatment:
+ *  - nothing is forwarded after NPPN_SHUTDOWN has been delivered;
+ *  - a reentrancy guard — a plugin mutating the document inside its
+ *    handler makes Scintilla fire another SCN_MODIFIED synchronously,
+ *    which would recurse forever;
+ *  - SCN_MODIFIED is dropped unless modificationType intersects the
+ *    Windows-canon mask (extendable via NPPM_ADDSCNMODIFIEDFLAGS);
+ *  - per-plugin NPPM_SETPLUGINSUBSCRIPTIONS opt-outs for
+ *    SCN_UPDATEUI / SCN_PAINTED;
+ *  - plugins receive a COPY, so none of them can corrupt the host's
+ *    live struct for the host's own consumers or the next plugin. */
+static gboolean s_shutdown_delivered;
+static gboolean s_forwarding_scn;
+static int      s_extra_mod_flags;   /* NPPM_ADDSCNMODIFIEDFLAGS additions */
+
 void plugin_notify_all(void *pNotify)
 {
-    for (int i = 0; i < s_n_plugins; i++) {
-        if (s_plugins[i].be_notified)
-            s_plugins[i].be_notified(pNotify);
+    SCNotification *n = (SCNotification *)pNotify;
+    if (!n || s_n_plugins == 0) return;
+    if (s_shutdown_delivered) return;          /* stops after SHUTDOWN */
+
+    unsigned int code = n->nmhdr.code;
+    gboolean is_scn = code >= 2000;
+
+    if (is_scn) {
+        if (s_forwarding_scn) return;          /* reentrancy guard */
+        if (code == SCN_MODIFIED) {
+            static const int kForwardedModFlags =
+                SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT |
+                SC_PERFORMED_UNDO | SC_PERFORMED_REDO |
+                SC_MOD_CHANGEFOLD | SC_MOD_CHANGEINDICATOR;
+            if (!(n->modificationType &
+                  (kForwardedModFlags | s_extra_mod_flags)))
+                return;
+        }
+        s_forwarding_scn = TRUE;
     }
+
+    SCNotification copy = *n;                  /* plugins can't corrupt it */
+    for (int i = 0; i < s_n_plugins; i++) {
+        LoadedPlugin *p = &s_plugins[i];
+        if (!p->be_notified) continue;
+        if (is_scn) {
+            if (code == SCN_UPDATEUI && !p->wants_updateui) continue;
+            if (code == SCN_PAINTED  && !p->wants_painted)  continue;
+        }
+        p->be_notified(&copy);
+    }
+
+    if (is_scn) s_forwarding_scn = FALSE;
+    else if (code == NPPN_SHUTDOWN) s_shutdown_delivered = TRUE;
+}
+
+void plugin_notify_tbmodification(void)
+{
+    /* GAP-88a — macOS NppPluginManager fireReady sends READY then
+     * TBMODIFICATION back-to-back; plugins register toolbar icons here. */
+    SCNotification n2;
+    memset(&n2, 0, sizeof(n2));
+    n2.nmhdr.code = NPPN_TBMODIFICATION;
+    plugin_notify_all(&n2);
 }
 
 int plugin_count(void)
@@ -211,6 +275,13 @@ int plugin_func_cmd_id(int i, int j)
     if (i < 0 || i >= s_n_plugins) return 0;
     if (j < 0 || j >= s_plugins[i].n_funcs) return 0;
     return s_plugins[i].funcs[j].cmdID;
+}
+
+int plugin_func_init2check(int i, int j)
+{
+    if (i < 0 || i >= s_n_plugins) return 0;
+    if (j < 0 || j >= s_plugins[i].n_funcs) return 0;
+    return s_plugins[i].funcs[j].init2Check;
 }
 
 gboolean plugin_run_command_by_id(int cmd_id)
@@ -293,6 +364,55 @@ static int         s_plugin_panel_count = 0;
 static int s_next_indicator = INDIC_CONTAINER + 1;  /* 9 onward */
 static int s_next_marker    = 25;
 static int s_next_alloc_cmd = 11000;                /* well above CMD_ID_BASE */
+
+/* Canonical Windows NPP LangType values, ported from macOS
+ * NppPluginManager.mm:700-797. A plugin built against
+ * Notepad_plus_msgs.h sees the same L_* IDs on every platform. */
+static const struct { const char *name; int id; } s_langtypes[] = {
+            { "c",            2  }, { "cpp",          3  }, { "cs",           4  },
+            { "objc",         5  }, { "java",         6  }, { "rc",           7  },
+            { "html",         8  }, { "xml",          9  }, { "makefile",     10 },
+            { "pascal",       11 }, { "batch",        12 }, { "ini",          13 },
+            { "asp",          16 }, { "sql",          17 }, { "vb",           18 },
+            { "css",          20 }, { "perl",         21 }, { "python",       22 },
+            { "lua",          23 }, { "tex",          24 }, { "fortran",      25 },
+            { "bash",         26 }, { "actionscript", 27 }, { "nsis",         28 },
+            { "tcl",          29 }, { "lisp",         30 }, { "scheme",       31 },
+            { "asm",          32 }, { "diff",         33 }, { "props",        34 },
+            { "postscript",   35 }, { "ruby",         36 }, { "smalltalk",    37 },
+            { "vhdl",         38 }, { "kix",          39 }, { "autoit",       40 },
+            { "caml",         41 }, { "ada",          42 }, { "verilog",      43 },
+            { "matlab",       44 }, { "haskell",      45 }, { "inno",         46 },
+            { "cmake",        48 }, { "yaml",         49 }, { "cobol",        50 },
+            { "d",            52 }, { "powershell",   53 }, { "r",            54 },
+            { "coffeescript", 56 }, { "json",         57 }, { "javascript",   58 },
+            { "javascript.js",58 }, { "fortran77",    59 }, { "baanc",        60 },
+            { "swift",        64 }, { "avs",          66 }, { "blitzbasic",   67 },
+            { "purebasic",    68 }, { "freebasic",    69 }, { "csound",       70 },
+            { "erlang",       71 }, { "escript",      72 }, { "forth",        73 },
+            { "latex",        74 }, { "nim",          76 }, { "nncrontab",    77 },
+            { "oscript",      78 }, { "registry",     80 }, { "rust",         81 },
+            { "spice",        82 }, { "visualprolog", 84 }, { "typescript",   85 },
+            { "mssql",        87 }, { "gdscript",     88 }, { "hollywood",    89 },
+            { "go",           90 }, { "raku",         91 }, { "toml",         92 },
+            { "sas",          93 },
+};
+
+static int langtype_from_key(const char *key)
+{
+    if (!key) return 0;
+    for (size_t i = 0; i < G_N_ELEMENTS(s_langtypes); i++)
+        if (g_ascii_strcasecmp(key, s_langtypes[i].name) == 0)
+            return s_langtypes[i].id;
+    return 0;
+}
+
+static const char *langtype_to_key(int id)
+{
+    for (size_t i = 0; i < G_N_ELEMENTS(s_langtypes); i++)
+        if (s_langtypes[i].id == id) return s_langtypes[i].name;
+    return NULL;
+}
 
 long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
 {
@@ -468,39 +588,7 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         if (!doc || !doc->sci) { if (out) *out = 0; return 0; }
         const char *lang = g_object_get_data(G_OBJECT(doc->sci), "npp-lang");
         if (!lang) lang = "";
-        static const struct { const char *name; int id; } lt[] = {
-            { "c",            2  }, { "cpp",          3  }, { "cs",           4  },
-            { "objc",         5  }, { "java",         6  }, { "rc",           7  },
-            { "html",         8  }, { "xml",          9  }, { "makefile",     10 },
-            { "pascal",       11 }, { "batch",        12 }, { "ini",          13 },
-            { "asp",          16 }, { "sql",          17 }, { "vb",           18 },
-            { "css",          20 }, { "perl",         21 }, { "python",       22 },
-            { "lua",          23 }, { "tex",          24 }, { "fortran",      25 },
-            { "bash",         26 }, { "actionscript", 27 }, { "nsis",         28 },
-            { "tcl",          29 }, { "lisp",         30 }, { "scheme",       31 },
-            { "asm",          32 }, { "diff",         33 }, { "props",        34 },
-            { "postscript",   35 }, { "ruby",         36 }, { "smalltalk",    37 },
-            { "vhdl",         38 }, { "kix",          39 }, { "autoit",       40 },
-            { "caml",         41 }, { "ada",          42 }, { "verilog",      43 },
-            { "matlab",       44 }, { "haskell",      45 }, { "inno",         46 },
-            { "cmake",        48 }, { "yaml",         49 }, { "cobol",        50 },
-            { "d",            52 }, { "powershell",   53 }, { "r",            54 },
-            { "coffeescript", 56 }, { "json",         57 }, { "javascript",   58 },
-            { "javascript.js",58 }, { "fortran77",    59 }, { "baanc",        60 },
-            { "swift",        64 }, { "avs",          66 }, { "blitzbasic",   67 },
-            { "purebasic",    68 }, { "freebasic",    69 }, { "csound",       70 },
-            { "erlang",       71 }, { "escript",      72 }, { "forth",        73 },
-            { "latex",        74 }, { "nim",          76 }, { "nncrontab",    77 },
-            { "oscript",      78 }, { "registry",     80 }, { "rust",         81 },
-            { "spice",        82 }, { "visualprolog", 84 }, { "typescript",   85 },
-            { "mssql",        87 }, { "gdscript",     88 }, { "hollywood",    89 },
-            { "go",           90 }, { "raku",         91 }, { "toml",         92 },
-            { "sas",          93 },
-        };
-        int found = 0;
-        for (size_t i = 0; i < G_N_ELEMENTS(lt); i++) {
-            if (g_ascii_strcasecmp(lang, lt[i].name) == 0) { found = lt[i].id; break; }
-        }
+        int found = langtype_from_key(lang);
         if (out) *out = found;
         return found;
     }
@@ -562,11 +650,17 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
 
     /* ── Version / mode ──────────────────────────────────────────────── */
     case NPPM_GETNPPVERSION:
-        /* high 16 = major, low 16 = minor — encode 1.0.6 as (1<<16) | 6 */
-        return (long)((1 << 16) | 6);
-    case NPPM_ISDARKMODEENABLED:
-        /* Read prefs (dark mode toggle is in G11 polish; default FALSE). */
-        return 0L;
+        /* GAP-88h — (major << 16) | minor. macOS parity: both ports
+         * report Notepad++ 8.7, NOT their own port version — ported
+         * Windows plugins gate features on N++ version thresholds and
+         * a literal 1.x would disable everything. */
+        return (long)((8 << 16) | 7);
+    case NPPM_ISDARKMODEENABLED: {
+        /* GAP-88g — truthful now: resolves the live appearance (dark /
+         * light / auto-follows-system) via theme_mode_from_prefs(). */
+        extern ThemeMode theme_mode_from_prefs(void);
+        return theme_mode_from_prefs() == THEME_DARK ? 1L : 0L;
+    }
 
     /* ── Resource allocators ─────────────────────────────────────────── */
     case NPPM_ALLOCATECMDID: {
@@ -606,15 +700,23 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
          * standard panel_frame and docked into the right-side host on
          * first SHOWPANEL. */
         if (s_plugin_panel_count >= 32) return 0;
+        /* GAP-88j EVALUATED AND REJECTED: auto-accepting the macOS
+         * param order via a GTK_IS_WIDGET sniff SEGFAULTS — type-
+         * checking an arbitrary pointer dereferences the title string's
+         * bytes as a GTypeClass pointer (reproduced live: "Sniff Panel"
+         * → non-canonical address → crash), and every deeper GType
+         * probe just moves the faulting read down one level. Strict
+         * Linux order stays: lParam = GtkWidget*, wParam = title
+         * (PORTING_NOTES trap #8 — ports swap two args once). */
         void *w = (void *)(intptr_t)lParam;
+        const char *title = (const char *)(intptr_t)wParam;
         if (!w || !GTK_IS_WIDGET(w)) return 0;
         PluginPanel *p = &s_plugin_panels[s_plugin_panel_count++];
         p->panel_widget = w;
         p->visible = 0;
         p->frame = NULL;
         g_free(p->title);
-        p->title = wParam ? g_strdup((const char *)(intptr_t)wParam)
-                          : g_strdup("Plugin Panel");
+        p->title = title ? g_strdup(title) : g_strdup("Plugin Panel");
         return (long)s_plugin_panel_count;  /* opaque handle */
     }
     case NPPM_DMM_SHOWPANEL: {
@@ -704,10 +806,30 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
          * = const char * path to a PNG icon (both light+dark sets are
          * the plugin's concern on this platform). */
         {
+            /* GAP-88g — when dark mode is active, prefer a sibling
+             * "<stem>_dark.png" if the plugin shipped one (macOS
+             * resolves toolbar_dark.png itself). Resolved at add time;
+             * theme switches don't live-swap plugin icons (documented
+             * host limitation). */
             const char *icon = (const char *)(intptr_t)lParam;
             extern void toolbar_add_plugin_button(const char *, int,
                                                   const char *);
-            toolbar_add_plugin_button(icon, (int)wParam, NULL);
+            extern ThemeMode theme_mode_from_prefs(void);
+            gchar *dark = NULL;
+            if (icon && theme_mode_from_prefs() == THEME_DARK) {
+                const char *dot = strrchr(icon, '.');
+                if (dot && dot > icon) {
+                    dark = g_strdup_printf("%.*s_dark%s",
+                                           (int)(dot - icon), icon, dot);
+                    if (!g_file_test(dark, G_FILE_TEST_IS_REGULAR)) {
+                        g_free(dark);
+                        dark = NULL;
+                    }
+                }
+            }
+            toolbar_add_plugin_button(dark ? dark : icon, (int)wParam,
+                                      NULL);
+            g_free(dark);
             return 1;
         }
     case NPPM_DARKMODESUBCLASSANDTHEME:
@@ -749,8 +871,24 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         return 0;
     }
     case NPPM_MENUCOMMAND: {
-        /* lParam = command ID. Map our plugin command IDs back to FuncItem
-         * and invoke. */
+        /* lParam = command ID. GAP-88d: the five Windows IDM_ ids macOS
+         * maps work here too (any other IDM never worked on macOS
+         * either); everything else is a plugin FuncItem cmdID. */
+        const char *idm_action = NULL;
+        switch ((int)lParam) {
+        case 41001: idm_action = "new";       break;   /* IDM_FILE_NEW      */
+        case 41002: idm_action = "open";      break;   /* IDM_FILE_OPEN     */
+        case 41003: idm_action = "close";     break;   /* IDM_FILE_CLOSE    */
+        case 41004: idm_action = "close-all"; break;   /* IDM_FILE_CLOSEALL */
+        case 41006: idm_action = "save";      break;   /* IDM_FILE_SAVE     */
+        }
+        if (idm_action) {
+            GApplication *app = g_application_get_default();
+            if (!app) return 0;
+            g_action_group_activate_action(G_ACTION_GROUP(app),
+                                           idm_action, NULL);
+            return 1;
+        }
         return plugin_run_command_by_id((int)lParam) ? 1 : 0;
     }
     case NPPM_GETCURRENTMACROSTATUS: {
@@ -833,9 +971,31 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
 
     case NPPM_GETBUFFERLANGTYPE:
         return plugin_host_message(NPPM_GETCURRENTLANGTYPE, wParam, lParam);
-    case NPPM_SETBUFFERLANGTYPE:
-        /* lParam = L_* enum value. Reverse-map and apply via lexer_apply. */
-        return 0;  /* stub */
+    case NPPM_SETBUFFERLANGTYPE: {
+        /* GAP-88f (Windows: BOOL(bufferID, langType); macOS parity):
+         * 0 = plain text; unmapped ids / L_USER refused like Windows
+         * refuses out-of-range values. Fires NPPN_LANGCHANGED — the
+         * macOS setLanguage: contract (explicit language change). */
+        NppDoc *d = wParam ? validate_buffer_id((void *)(intptr_t)wParam)
+                           : editor_current_doc();
+        int lang_type = (int)lParam;
+        if (!d || !d->sci || lang_type < 0) return 0;
+        const char *key = "";
+        if (lang_type != 0) {
+            key = langtype_to_key(lang_type);
+            if (!key) return 0;              /* unmapped / L_USER */
+        }
+        extern void lexer_apply(GtkWidget *, const char *);
+        lexer_apply(d->sci, key[0] ? key : NULL);
+        g_free(d->language);
+        d->language = g_strdup(key);
+        if (d == editor_current_doc()) {
+            extern void main_sync_language_menu(const char *);
+            main_sync_language_menu(key);
+        }
+        plugin_notify_lang_changed(d);
+        return 1;
+    }
     case NPPM_GETBUFFERENCODING: {
         NppDoc *d = (NppDoc *)(intptr_t)wParam;
         if (!d) d = editor_current_doc();
@@ -895,9 +1055,13 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         return 1;
     }
     case NPPM_MAKECURRENTBUFFERDIRTY: {
+        /* GAP-88i — was INVERTED: it sent SCI_SETSAVEPOINT, which marks
+         * the buffer CLEAN. Windows canon: flag the buffer dirty (host
+         * flag + tab/title/doclist refresh — Scintilla itself has no
+         * "make modified" message). */
         NppDoc *d = editor_current_doc();
-        if (d && d->sci)
-            scintilla_send_message(SCINTILLA(d->sci), SCI_SETSAVEPOINT, 0, 0);
+        if (!d) return 0;
+        editor_mark_dirty(d);
         return 1;
     }
     case NPPM_GETSETTINGSONCLOUDPATH: {
@@ -909,9 +1073,16 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_SETEDITORBORDEREDGE:
         return 1;  /* accept, no-op */
     case NPPM_MSGTOPLUGIN: {
-        /* lParam = communicationInfo*, wParam = target plugin name.
-         * Plugin-to-plugin messaging; we'd need a name → handle map.
-         * Stub returns 0 (not delivered). */
+        /* GAP-88e (macOS parity): wParam = dest module name (getName()),
+         * lParam = struct CommunicationInfo *. Delivered synchronously;
+         * the destination's messageProc return value is relayed. */
+        const char *dest = (const char *)(intptr_t)wParam;
+        if (!dest || !*dest || !lParam) return 0;
+        for (int i = 0; i < s_n_plugins; i++) {
+            if (strcmp(s_plugins[i].name, dest) != 0) continue;
+            if (!s_plugins[i].message_proc) return 0;
+            return s_plugins[i].message_proc(NPPM_MSGTOPLUGIN, 0, lParam);
+        }
         return 0;
     }
 
@@ -1094,7 +1265,16 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
      * walks the NSMenu tree). The loader still calls _pFunc callbacks
      * directly, so no menu item exists today — accept the request as a
      * no-op until the loader insertion lands (tracked separately). */
-    case NPPM_SETMENUITEMCHECK:        return 1;
+    case NPPM_SETMENUITEMCHECK: {
+        /* GAP-88b — wParam = FuncItem cmdID, lParam = checked. cmdID 0
+         * guard (macOS): separators keep the default-zero id — without
+         * it a buggy plugin would toggle an arbitrary item. Returns 0
+         * like macOS (Windows returns void). */
+        if ((int)wParam == 0) return 0;
+        extern void main_plugin_menu_set_check(int cmd_id, gboolean on);
+        main_plugin_menu_set_check((int)wParam, lParam != 0);
+        return 0;
+    }
     /* Open the Find-in-Files dialog. */
     case NPPM_LAUNCHFINDINFILESDLG: {
         (void)wParam;
@@ -1157,8 +1337,26 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_CREATELEXER:                  return 0;       /* stub */
     case NPPM_GETEXTERNALLEXERAUTOINDENTMODE: return 0;
     case NPPM_SETEXTERNALLEXERAUTOINDENTMODE: return 1;
-    case NPPM_ADDSCNMODIFIEDFLAGS:          return 1;
-    case NPPM_SETPLUGINSUBSCRIPTIONS:       return 1;
+    case NPPM_ADDSCNMODIFIEDFLAGS:
+        /* Windows canon: extend the SCN_MODIFIED forward mask — load-
+         * bearing since GAP-88c added the modificationType filter. */
+        s_extra_mod_flags |= (int)lParam;
+        return 1;
+    case NPPM_SETPLUGINSUBSCRIPTIONS: {
+        /* GAP-88c — wParam = NPPPLUGIN_WANTS_* mask, lParam = module
+         * name (getName()); macOS message shape. */
+        const char *mod = (const char *)(intptr_t)lParam;
+        if (!mod || !*mod) return 0;
+        for (int i = 0; i < s_n_plugins; i++) {
+            if (strcmp(s_plugins[i].name, mod) != 0) continue;
+            s_plugins[i].wants_updateui =
+                (wParam & NPPPLUGIN_WANTS_UPDATEUI) != 0;
+            s_plugins[i].wants_painted =
+                (wParam & NPPPLUGIN_WANTS_PAINTED) != 0;
+            return 1;
+        }
+        return 0;
+    }
     case NPPM_ALLOCATESUPPORTED:            return 1;
 
     default:

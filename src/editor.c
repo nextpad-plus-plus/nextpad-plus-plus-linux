@@ -2528,6 +2528,19 @@ static gboolean save_doc(NppDoc *doc)
     return save_doc_to_path(doc, doc->filepath);
 }
 
+/* GAP-88i — NPPM_MAKECURRENTBUFFERDIRTY: flag the buffer modified and
+ * refresh the same UI the SCN_SAVEPOINTLEFT handler refreshes.
+ * (Scintilla has no "make modified" message — the dirty state a plugin
+ * forces here lives in the host flag, exactly like Windows N++.) */
+void editor_mark_dirty(NppDoc *doc)
+{
+    if (!doc) return;
+    doc->modified = TRUE;
+    if (doc->sci) refresh_tab_label(sci_page_num(doc->sci));
+    update_window_title();
+    main_doclist_refresh();
+}
+
 gboolean editor_save(void)
 {
     return save_doc(editor_current_doc());

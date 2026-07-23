@@ -72,6 +72,7 @@ void       editor_move_current_tab(int dir);
 void       editor_set_show_all_chars(gboolean on);
 void       editor_set_show_whitespace(gboolean on);
 void       editor_set_show_eol(gboolean on);
+void       editor_mark_dirty(NppDoc *doc);        /* GAP-88i force-dirty    */
 gboolean   editor_save(void);                      /* save current doc       */
 gboolean   editor_save_at(int page);               /* save specific page     */
 gboolean   editor_save_all(void);                  /* save all modified docs  */

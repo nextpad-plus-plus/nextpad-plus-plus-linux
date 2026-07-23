@@ -678,6 +678,35 @@ static void action_udl_admin(GSimpleAction *a, GVariant *p, gpointer u) {
 /* GAP-20 — dispatch a loaded plugin's FuncItem from its menu entry.
  * Recorded into macros as the macOS/Windows-interoperable
  * "pluginMenuAction:" + cmdID type-2 form. */
+/* GAP-88b — activate handler for the per-cmdID plugin check actions.
+ * Runs the plugin command like action_plugin_cmd; deliberately does NOT
+ * toggle the boolean state — the checkmark is owned by the plugin via
+ * NPPM_SETMENUITEMCHECK (Windows/macOS semantics). */
+static void action_plugin_check_cmd(GSimpleAction *a, GVariant *p,
+                                    gpointer u) {
+    (void)a; (void)p;
+    int cmd_id = GPOINTER_TO_INT(u);
+    if (cmd_id <= 0) return;
+    if (macro_menu_wrap_begin()) {
+        plugin_run_command_by_id(cmd_id);
+        macro_menu_wrap_end(NULL, cmd_id);
+    } else {
+        plugin_run_command_by_id(cmd_id);
+    }
+}
+
+/* NPPM_SETMENUITEMCHECK (plugin.c) — drive the item's checkmark. */
+void main_plugin_menu_set_check(int cmd_id, gboolean on) {
+    GApplication *app = g_application_get_default();
+    if (!app || cmd_id <= 0) return;
+    char act[40];
+    g_snprintf(act, sizeof act, "plugin-check-%d", cmd_id);
+    GAction *a = g_action_map_lookup_action(G_ACTION_MAP(app), act);
+    if (a && G_IS_SIMPLE_ACTION(a))
+        g_simple_action_set_state(G_SIMPLE_ACTION(a),
+                                  g_variant_new_boolean(on));
+}
+
 static void action_plugin_cmd(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)u;
     int cmd_id = p ? g_variant_get_int32(p) : 0;
@@ -6627,8 +6656,35 @@ static GMenuModel *build_menu_model(void)
                 continue;
             }
             GMenuItem *mi = g_menu_item_new(fname, NULL);
-            g_menu_item_set_action_and_target(mi, "app.plugin-cmd", "i",
-                                              plugin_func_cmd_id(pi, fi));
+            /* GAP-88b — each plugin item gets its own boolean-stateful
+             * action ("plugin-check-<cmdID>") so GTK renders a real
+             * checkmark that NPPM_SETMENUITEMCHECK can drive. The
+             * activate handler runs the command exactly like the old
+             * app.plugin-cmd(i) route (macro wrap included); the STATE
+             * only ever changes through the plugin's message.
+             * init2Check seeds it. */
+            {
+                int cid = plugin_func_cmd_id(pi, fi);
+                GApplication *papp = g_application_get_default();
+                char act[40];
+                g_snprintf(act, sizeof act, "plugin-check-%d", cid);
+                if (papp && !g_action_map_lookup_action(G_ACTION_MAP(papp),
+                                                        act)) {
+                    GSimpleAction *sa = g_simple_action_new_stateful(
+                        act, NULL,
+                        g_variant_new_boolean(
+                            plugin_func_init2check(pi, fi)));
+                    g_signal_connect(sa, "activate",
+                                     G_CALLBACK(action_plugin_check_cmd),
+                                     GINT_TO_POINTER(cid));
+                    g_action_map_add_action(G_ACTION_MAP(papp),
+                                            G_ACTION(sa));
+                    g_object_unref(sa);
+                }
+                char det[48];
+                g_snprintf(det, sizeof det, "app.%s", act);
+                g_menu_item_set_detailed_action(mi, det);
+            }
             g_menu_append_item(sect, mi);
             g_object_unref(mi);
         }
@@ -7249,8 +7305,11 @@ static void build_main_window(GtkApplication *app)
      * they only exist after plugin_load_all, so rebuild the menubar. */
     if (plugin_count() > 0)
         main_rebuild_menubar();
-    /* G33 — fire NPPN_READY once plugins are loaded. */
+    /* G33 — fire NPPN_READY once plugins are loaded; GAP-88a — macOS
+     * fires NPPN_TBMODIFICATION immediately after (toolbar-icon
+     * registration window). */
     plugin_notify_ready();
+    plugin_notify_tbmodification();
     /* GAP-81 — phase 2 of panel restore: PLUGIN panels, 500 ms after
      * READY (macOS AppDelegate timing) so plugins that self-restore in
      * READY win and the host ladder no-ops on them. */

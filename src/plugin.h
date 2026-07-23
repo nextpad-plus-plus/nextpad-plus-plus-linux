@@ -186,6 +186,27 @@ typedef struct NppPanelInfo {
                                * open/toggle command for this panel (dlgID) */
 } NppPanelInfo;
 
+/* GAP-88e — NPPM_MSGTOPLUGIN inter-plugin messaging (Windows canon):
+ * wParam = const char * destination module name (getName()), lParam =
+ * CommunicationInfo *. Delivered synchronously to the destination's
+ * messageProc(NPPM_MSGTOPLUGIN, 0, (long)ci); its return value is
+ * relayed back. Returns 0 when the named plugin is not loaded. */
+struct CommunicationInfo {
+    long        internalMsg;
+    const char *srcModuleName;   /* UTF-8 */
+    void       *info;
+};
+
+/* GAP-88c — NPPM_SETPLUGINSUBSCRIPTIONS (macOS-parity message):
+ * wParam = bitmask of NPPPLUGIN_WANTS_* flags, lParam = const char *
+ * plugin module name (getName()). Both flags default ON; a plugin that
+ * doesn't need SCN_UPDATEUI / SCN_PAINTED opts out to skip the fan-out.
+ * Returns 1 on success, 0 if the named plugin is not loaded. */
+#define NPPPLUGIN_WANTS_UPDATEUI        (1u << 0)
+#define NPPPLUGIN_WANTS_PAINTED         (1u << 1)
+#define NPPPLUGIN_DEFAULT_SUBSCRIPTIONS (NPPPLUGIN_WANTS_UPDATEUI | \
+                                         NPPPLUGIN_WANTS_PAINTED)
+
 /* ── RUNCOMMAND_USER range (path / word / line queries) ──────────────── */
 #define NPPM_GETFULLCURRENTPATH               (NPPM_RUNCMD_BASE + 1)
 #define NPPM_GETCURRENTDIRECTORY              (NPPM_RUNCMD_BASE + 2)
@@ -288,6 +309,7 @@ void  plugin_init(GtkWidget *main_window);
 void  plugin_load_all(void);
 void  plugin_refresh_handles(void);           /* update NppData.scintilla*Handle */
 void  plugin_notify_all(void *pNotify);       /* pass SCNotification * cast to void * */
+void  plugin_notify_tbmodification(void);     /* GAP-88a — right after NPPN_READY */
 long  plugin_host_message(unsigned int msg, unsigned long wParam, long lParam);
 
 /* GAP-81 — plugin-panel persistence glue (used by panelstate.c).
@@ -311,4 +333,5 @@ const char *plugin_name_at(int i);
 int         plugin_func_count(int i);
 const char *plugin_func_name(int i, int j);   /* "-" = separator */
 int         plugin_func_cmd_id(int i, int j);
+int         plugin_func_init2check(int i, int j);   /* GAP-88b seed */
 gboolean    plugin_run_command_by_id(int cmd_id);
