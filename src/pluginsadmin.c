@@ -94,8 +94,8 @@ typedef struct {
     char    *homepage;
     char    *repository;      /* download URL of the binary zip          */
     char    *zip_sha256;      /* sha256 of the zip (catalog `id`)        */
-    char    *dylib_sha256;    /* sha256 of the .so/.dylib (catalog)      */
-    char    *dylib_built;     /* YYYY-MM-DD                              */
+    char    *so_sha256;    /* catalog so-id (dylib-id on the mac list)*/
+    char    *so_built;     /* YYYY-MM-DD                              */
     char    *npp_min_version;
 
     /* runtime-populated for installed plugins */
@@ -112,8 +112,8 @@ static void plugrow_free(PlugRow *p) {
     if (!p) return;
     g_free(p->folder); g_free(p->display); g_free(p->version);
     g_free(p->description); g_free(p->author); g_free(p->homepage);
-    g_free(p->repository); g_free(p->zip_sha256); g_free(p->dylib_sha256);
-    g_free(p->dylib_built); g_free(p->npp_min_version);
+    g_free(p->repository); g_free(p->zip_sha256); g_free(p->so_sha256);
+    g_free(p->so_built); g_free(p->npp_min_version);
     g_free(p->installed_so); g_free(p->installed_sha); g_free(p->installed_date);
     g_free(p);
 }
@@ -457,16 +457,19 @@ static gboolean rm_rf(const char *path) {
     return g_unlink(path) == 0;
 }
 
-/* Shell out to curl. Writes the response body to `dest_path`. Returns
- * TRUE on HTTP 200; false otherwise (including missing curl). */
-gboolean http_get_to_file(const char *url, const char *dest_path) {
-    const char *argv[] = {
-        "curl", "-L", "-fsS",
-        "--connect-timeout", "10",
-        "--max-time", "120",
-        "-o", dest_path,
-        url, NULL
-    };
+/* Shell out to curl with optional extra headers. Writes the response
+ * body to `dest_path`. Returns TRUE on HTTP 2xx. */
+static gboolean curl_to_file(const char *url, const char *dest_path,
+                             const char *hdr1, const char *hdr2) {
+    const char *argv[16];
+    int n = 0;
+    argv[n++] = "curl"; argv[n++] = "-L"; argv[n++] = "-fsS";
+    argv[n++] = "--connect-timeout"; argv[n++] = "10";
+    argv[n++] = "--max-time"; argv[n++] = "120";
+    if (hdr1) { argv[n++] = "-H"; argv[n++] = hdr1; }
+    if (hdr2) { argv[n++] = "-H"; argv[n++] = hdr2; }
+    argv[n++] = "-o"; argv[n++] = dest_path;
+    argv[n++] = url; argv[n] = NULL;
     gint exit_status = 0;
     GError *err = NULL;
     if (!g_spawn_sync(NULL, (gchar **)argv, NULL,
@@ -477,6 +480,84 @@ gboolean http_get_to_file(const char *url, const char *dest_path) {
         return FALSE;
     }
     return g_spawn_check_wait_status(exit_status, NULL);
+}
+
+/* TEST-ONLY private-repo support (never embed credentials in the
+ * binary: a token baked into source/binary can be extracted from any
+ * shipped .deb, lives in git history forever, and kills every old
+ * binary when rotated). When NPP_GITHUB_TOKEN is set:
+ *  - raw.githubusercontent.com fetches send the Authorization header;
+ *  - github.com/<o>/<r>/releases/download/<tag>/<asset> URLs are
+ *    resolved through the GitHub API — private release assets DO NOT
+ *    honour an Authorization header on the browser download URL; the
+ *    supported route is /releases/tags/<tag> -> asset id ->
+ *    /releases/assets/<id> with Accept: application/octet-stream. */
+static gboolean gh_private_asset_fetch(const char *url,
+                                       const char *dest_path,
+                                       const char *token) {
+    /* Parse github.com/<owner>/<repo>/releases/download/<tag>/<asset> */
+    const char *p = strstr(url, "github.com/");
+    if (!p) return FALSE;
+    gchar **seg = g_strsplit(p + strlen("github.com/"), "/", 6);
+    guint nseg = g_strv_length(seg);
+    gboolean shaped = nseg == 6 && strcmp(seg[2], "releases") == 0 &&
+                      strcmp(seg[3], "download") == 0;
+    if (!shaped) { g_strfreev(seg); return FALSE; }
+
+    gchar *auth = g_strdup_printf("Authorization: Bearer %s", token);
+    gchar *rel_url = g_strdup_printf(
+        "https://api.github.com/repos/%s/%s/releases/tags/%s",
+        seg[0], seg[1], seg[4]);
+    gchar *tmp = NULL;
+    gboolean ok = FALSE;
+    gint fd = g_file_open_tmp("npp-ghrel-XXXXXX.json", &tmp, NULL);
+    if (fd >= 0) {
+        close(fd);
+        if (curl_to_file(rel_url, tmp, auth,
+                         "Accept: application/vnd.github+json")) {
+            gchar *body = NULL;
+            gsize blen = 0;
+            if (g_file_get_contents(tmp, &body, &blen, NULL)) {
+                JNode *root = json_parse(body, blen);
+                JNode *assets = root ? jobj_get(root, "assets") : NULL;
+                if (assets && assets->kind == J_ARR) {
+                    for (guint ai = 0; ai < assets->u.arr->len && !ok;
+                         ai++) {
+                        JNode *a = g_ptr_array_index(assets->u.arr, ai);
+                        const char *an = jobj_str(a, "name");
+                        const char *aurl = jobj_str(a, "url");
+                        if (an && aurl && strcmp(an, seg[5]) == 0)
+                            ok = curl_to_file(aurl, dest_path, auth,
+                                    "Accept: application/octet-stream");
+                    }
+                }
+                if (root) jnode_free(root);
+                g_free(body);
+            }
+        }
+        g_unlink(tmp);
+        g_free(tmp);
+    }
+    g_free(rel_url);
+    g_free(auth);
+    g_strfreev(seg);
+    return ok;
+}
+
+gboolean http_get_to_file(const char *url, const char *dest_path) {
+    const char *token = g_getenv("NPP_GITHUB_TOKEN");
+    if (token && *token) {
+        if (strstr(url, "github.com/") && strstr(url, "/releases/download/"))
+            if (gh_private_asset_fetch(url, dest_path, token))
+                return TRUE;                    /* else fall through */
+        if (strstr(url, "raw.githubusercontent.com/")) {
+            gchar *auth = g_strdup_printf("Authorization: Bearer %s", token);
+            gboolean ok = curl_to_file(url, dest_path, auth, NULL);
+            g_free(auth);
+            return ok;
+        }
+    }
+    return curl_to_file(url, dest_path, NULL, NULL);
 }
 
 /* Best-effort `unzip -o -q SRC -d DEST`. */
@@ -549,8 +630,12 @@ static GPtrArray *parse_catalog_bytes(const char *data, gsize len,
         if (!repo) repo = jobj_str(e, "repository");
         r->repository      = g_strdup(repo ?: "");
         r->zip_sha256      = g_strdup(jobj_str(e, "id")             ?: "");
-        r->dylib_sha256    = g_strdup(jobj_str(e, "dylib-id")       ?: "");
-        r->dylib_built     = g_strdup(jobj_str(e, "dylib-built")    ?: "");
+        /* Linux catalogs: so-id/so-built; the macOS fallback catalog
+         * still says dylib-id/dylib-built — accept both. */
+        r->so_sha256    = g_strdup(jobj_str(e, "so-id")
+                                       ?: jobj_str(e, "dylib-id")    ?: "");
+        r->so_built     = g_strdup(jobj_str(e, "so-built")
+                                       ?: jobj_str(e, "dylib-built") ?: "");
         r->npp_min_version = g_strdup(jobj_str(e, "npp-min-version") ?: "");
         r->is_native       = is_native;
         r->from_win_only   = !is_native;
@@ -699,17 +784,17 @@ static void enrich_installed_from_catalog(AdminUI *ui) {
              * the catalog release. (ELF has no version stamp to fall back
              * on, unlike mach-o current_version.) */
             g_free(ip->version);
-            ip->version = (ip->installed_sha && c->dylib_sha256 &&
+            ip->version = (ip->installed_sha && c->so_sha256 &&
                            g_ascii_strcasecmp(ip->installed_sha,
-                                              c->dylib_sha256) == 0)
+                                              c->so_sha256) == 0)
                           ? g_strdup(c->version) : g_strdup("?");
             g_free(ip->description);   ip->description   = g_strdup(c->description);
             g_free(ip->author);        ip->author        = g_strdup(c->author);
             g_free(ip->homepage);      ip->homepage      = g_strdup(c->homepage);
             g_free(ip->repository);    ip->repository    = g_strdup(c->repository);
             g_free(ip->zip_sha256);    ip->zip_sha256    = g_strdup(c->zip_sha256);
-            g_free(ip->dylib_sha256);  ip->dylib_sha256  = g_strdup(c->dylib_sha256);
-            g_free(ip->dylib_built);   ip->dylib_built   = g_strdup(c->dylib_built);
+            g_free(ip->so_sha256);  ip->so_sha256  = g_strdup(c->so_sha256);
+            g_free(ip->so_built);   ip->so_built   = g_strdup(c->so_built);
             /* Stamp installed-flag onto the catalog twin so the Available
              * tab can show "(installed)" + a disabled check. */
             c->is_installed = TRUE;
@@ -722,23 +807,23 @@ static void enrich_installed_from_catalog(AdminUI *ui) {
  * Update-candidate filter — the rules the macOS port enforces, ported
  * to Linux. Plugin appears in the Updates tab when:
  *   1. It is installed AND present in the native catalog.
- *   2. Catalog `dylib-id` ≠ installed sha256 (not byte-identical).
- *   3. Catalog `dylib-built` strictly newer than installed mtime date.
+ *   2. Catalog `so-id` ≠ installed sha256 (not byte-identical).
+ *   3. Catalog `so-built` strictly newer than installed mtime date.
  * ═══════════════════════════════════════════════════════════════════════ */
 static gboolean is_update_candidate(PlugRow *catalog_row, PlugRow *installed) {
     if (!catalog_row || !installed) return FALSE;
-    if (!catalog_row->dylib_sha256 || strlen(catalog_row->dylib_sha256) != 64)
+    if (!catalog_row->so_sha256 || strlen(catalog_row->so_sha256) != 64)
         return FALSE;
-    if (!catalog_row->dylib_built || !*catalog_row->dylib_built)
+    if (!catalog_row->so_built || !*catalog_row->so_built)
         return FALSE;
     if (!installed->installed_sha || strlen(installed->installed_sha) != 64)
         return FALSE;
     if (g_ascii_strcasecmp(installed->installed_sha,
-                           catalog_row->dylib_sha256) == 0)
+                           catalog_row->so_sha256) == 0)
         return FALSE;
     /* YYYY-MM-DD strings compare correctly as lex strings. */
     if (!installed->installed_date) return TRUE;
-    return g_strcmp0(catalog_row->dylib_built, installed->installed_date) > 0;
+    return g_strcmp0(catalog_row->so_built, installed->installed_date) > 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -768,7 +853,7 @@ static void append_row(GtkListStore *ls, PlugRow *r,
         COL_CHECK,   FALSE,
         COL_NAME,    r->display ? r->display : r->folder,
         COL_VERSION, r->version ? r->version : "",
-        COL_BUILT,   r->dylib_built ? r->dylib_built : (r->installed_date ?: ""),
+        COL_BUILT,   r->so_built ? r->so_built : (r->installed_date ?: ""),
         COL_OS,      os_label,
         COL_FOLDER,  r->folder,
         COL_DIM,     dim,
@@ -1094,7 +1179,7 @@ static void do_update(AdminUI *ui) {
     for (guint i = 0; i < folders->len; i++) {
         PlugRow *c = find_row_by_folder(ui->catalog, folders->pdata[i]);
         if (c) g_string_append_printf(names, "  • %s → v%s (built %s)\n",
-            c->display, c->version, c->dylib_built);
+            c->display, c->version, c->so_built);
     }
     g_string_append(names,
         "\nThe current folder is backed up to the user data dir's\n"
