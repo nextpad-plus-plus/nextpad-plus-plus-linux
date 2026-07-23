@@ -1,0 +1,14 @@
+/* github_token.h — TEMPORARY embedded GitHub token for Plugins Admin
+ * to reach the PRIVATE .linux plugin repos during the bring-up phase.
+ *
+ * Setup:  cp src/github_token.h.example src/github_token.h
+ *         then paste a fine-grained PAT with read access to the
+ *         nextpad-plus-plus-plugins repos.
+ *
+ * src/github_token.h is GITIGNORED — the token is baked into every
+ * LOCAL build (Plugins Admin works with no env setup) but can never
+ * enter git history. NPP_GITHUB_TOKEN in the environment still
+ * overrides it. Delete the file once the repos go public — and do NOT
+ * distribute .debs built while it exists: the token is extractable
+ * from the binary. */
+#define NPP_EMBEDDED_GITHUB_TOKEN "ghp_paste_your_token_here"

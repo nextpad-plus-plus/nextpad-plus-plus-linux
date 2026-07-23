@@ -32,3 +32,4 @@ scintilla/bin/
 scintilla/gtk4/*.o
 scintilla/gtk4/ScintillaEnums.[ch]
 scintilla/gtk4/scintilla-marshal.[ch]
+src/github_token.h

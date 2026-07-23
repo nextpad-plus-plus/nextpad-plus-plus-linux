@@ -30,6 +30,14 @@
  */
 
 #include "pluginsadmin.h"
+/* TEMPORARY bring-up: an embedded token for the private .linux plugin
+ * repos, supplied via the GITIGNORED src/github_token.h (see the
+ * .example template). Env NPP_GITHUB_TOKEN overrides. */
+#if defined(__has_include)
+#  if __has_include("github_token.h")
+#    include "github_token.h"
+#  endif
+#endif
 #include "gtk_compat.h"
 #include "branding.h"
 #include "paths.h"
@@ -546,6 +554,9 @@ static gboolean gh_private_asset_fetch(const char *url,
 
 gboolean http_get_to_file(const char *url, const char *dest_path) {
     const char *token = g_getenv("NPP_GITHUB_TOKEN");
+#ifdef NPP_EMBEDDED_GITHUB_TOKEN
+    if (!token || !*token) token = NPP_EMBEDDED_GITHUB_TOKEN;
+#endif
     if (token && *token) {
         if (strstr(url, "github.com/") && strstr(url, "/releases/download/"))
             if (gh_private_asset_fetch(url, dest_path, token))
