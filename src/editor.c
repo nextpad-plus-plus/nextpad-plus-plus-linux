@@ -2385,6 +2385,13 @@ gboolean editor_open_path(const char *path)
      * isn't empty until the user makes the first edit. */
     if (funclist_is_visible())
         funclist_update(sci);
+    /* GAP-80 (macOS 09ce824 / Windows parity) — a new FILE-BACKED buffer
+     * exists. Deliberately NOT fired for: focusing an already-open file
+     * (early return at the top — only BUFFERACTIVATED re-fires), untitled
+     * buffers (editor_new_doc, like Windows), or split-view moves. This
+     * is the choke point every open path funnels through: menus,
+     * NPPM_DOOPEN, session restore, drag-drop, CLI args, batch runner. */
+    plugin_notify_file_opened(cur);
     return TRUE;
 }
 
@@ -2436,7 +2443,19 @@ static gboolean save_doc_to_path(NppDoc *doc, const char *path)
         return FALSE;
     }
     g_free(buf);
+    /* Save-As: adopt the new path BEFORE the save-point and FILESAVED so
+     * a plugin resolving the buffer id during the notification sees the
+     * NEW path (macOS EditorView writeToPath: sets _filePath first). No-op
+     * for plain Save, where path == doc->filepath. */
+    if (!doc->filepath || strcmp(doc->filepath, path) != 0) {
+        gchar *adopted = g_strdup(path);
+        g_free(doc->filepath);
+        doc->filepath = adopted;
+    }
     sci_msg(doc->sci, SCI_SETSAVEPOINT, 0, 0);
+    /* GAP-80 — the buffer reached disk (Save and Save-As both funnel
+     * through here; fires only on success). */
+    plugin_notify_file_saved(doc);
     gitgutter_update(doc->sci, path);
     return TRUE;
 }
@@ -2484,8 +2503,8 @@ static gboolean save_as_dialog_for(NppDoc *doc)
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char *path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
         if (save_doc_to_path(doc, path)) {
-            g_free(doc->filepath);
-            doc->filepath  = path;
+            /* doc->filepath was adopted inside save_doc_to_path (before
+             * NPPN_FILESAVED fires — macOS ordering). */
             doc->new_index = 0;
             filewatch_start(doc);
             refresh_tab_label(sci_page_num(doc->sci));
@@ -2493,9 +2512,8 @@ static gboolean save_as_dialog_for(NppDoc *doc)
             main_recent_file_add(path);
             main_doclist_refresh();
             saved = TRUE;
-        } else {
-            g_free(path);
         }
+        g_free(path);
     }
     gtk_widget_destroy(dlg);
     return saved;
@@ -2625,6 +2643,11 @@ static gboolean close_sci_full(GtkWidget *sci, gboolean *dont_save_all)
     if (doc && doc->pinned) return FALSE;
     if (!ask_save_full(doc, dont_save_all)) return FALSE;
 
+    /* GAP-80 — the close is now committed (Windows NPPN_FILEBEFORECLOSE;
+     * macOS does not fire this one yet — Windows semantics kept because
+     * plugins use it to flush state while the buffer is still whole). */
+    plugin_notify_file_before_close(doc);
+
     filewatch_stop(doc);
     backup_clean(doc);
     gtk_notebook_remove_page(nb, gtk_notebook_page_num(nb, sw));
@@ -2633,6 +2656,10 @@ static gboolean close_sci_full(GtkWidget *sci, gboolean *dont_save_all)
     g_free(doc->encoding);
     g_free(doc->language);
     g_free(doc->backup_filepath);
+    /* GAP-80 — buffer gone (fires for untitled too, like Windows/macOS).
+     * The pointer remains valid as an IDENTITY key for this one
+     * notification only; plugins must not dereference or retain it. */
+    plugin_notify_file_closed(doc);
     g_free(doc);
 
     /* Collapse a secondary view once its last tab is gone. */
@@ -3145,6 +3172,15 @@ void editor_close_all_quit(GApplication *app)
         }
     }
     g_ptr_array_free(docs, TRUE);
+
+    /* GAP-80 (macOS AppDelegate.applicationWillTerminate → PluginManager
+     * shutdown): BEFORESHUTDOWN+SHUTDOWN fire back-to-back only once the
+     * quit is COMMITTED — a cancelled quit above fires neither. Fired
+     * before tab teardown so plugins can still query open buffers; the
+     * teardown itself does not fire per-file FILECLOSED (macOS parity).
+     * Covers every quit route: menu Quit, Ctrl+Q, window close. */
+    plugin_notify_before_shutdown();
+    plugin_notify_shutdown();
 
     /* Tear down every notebook (primary + both splits). DO NOT call
      * backup_clean — with session ON the snapshots must survive for

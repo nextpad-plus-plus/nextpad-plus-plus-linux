@@ -1323,6 +1323,10 @@ static void action_set_language_change(GSimpleAction *a, GVariant *new_state,
     if (doc) {                       /* persist the per-document override */
         g_free(doc->language);
         doc->language = g_strdup(key ? key : "");
+        /* GAP-80 (macOS setLanguage: fires on every path) — the buffer's
+         * language just changed by explicit choice. Styling-only
+         * reapplies (theme toggles) intentionally do NOT fire. */
+        plugin_notify_lang_changed(doc);
     }
 }
 
@@ -3378,6 +3382,8 @@ static void action_toggle_readonly(GSimpleAction *a, GVariant *p, gpointer u) {
     /* Track on the doc so the flag survives across save/restore via
      * session.xml — matches macOS userReadOnly (EditorView.h:275). */
     doc->user_readonly = now;
+    /* GAP-80 — Windows NPPN_READONLYCHANGED parity. */
+    plugin_notify_readonly_changed(doc);
 }
 static void action_column_mode(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
@@ -6764,14 +6770,13 @@ static gboolean on_window_delete(GtkWindow *w, gpointer ud)
         gboolean maxim = gtk_window_is_maximized(GTK_WINDOW(g_window));
         session_stash_geometry(ww, wh, wx, wy, maxim);
     }
-    /* G33 — let plugins veto-or-react to shutdown. */
-    plugin_notify_before_shutdown();
     /* Capture session before tabs start closing so paths + caret positions
      * are still readable. session_save() silently skips Untitled docs. */
     if (!g_cli_nosession)
         session_save();
+    /* BEFORESHUTDOWN/SHUTDOWN fire inside editor_close_all_quit at the
+     * committed point (GAP-80) — a cancelled quit fires neither. */
     editor_close_all_quit(G_APPLICATION(app));
-    plugin_notify_shutdown();
     /* If editor_close_all_quit didn't dispatch g_application_quit (user
      * cancelled), suppress the delete. */
     return TRUE;
