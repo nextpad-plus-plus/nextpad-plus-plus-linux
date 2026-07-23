@@ -16,7 +16,7 @@
  *
  * Catalogs (tried in order; first hit wins):
  *   - https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/
- *       main/pl.linux-arm64.json | pl.linux-x64.json  (per build arch)
+ *       main/pl.linux-arm64.json | pl.linux-x86.json  (per build arch)
  *   - https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/
  *       main/pl.macos-arm64.json                (fallback — mac dylibs)
  * Windows catalog (separate, populates the Incompatible tab):
@@ -66,7 +66,7 @@ static const char *const CATALOG_LINUX =
 #if defined(__aarch64__)
     "main/pl.linux-arm64.json";
 #else
-    "main/pl.linux-x64.json";
+    "main/pl.linux-x86.json";     /* 64-bit Intel/AMD (user's naming) */
 #endif
 static const char *const CATALOG_MAC =
     "https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/"
@@ -693,7 +693,7 @@ static void load_catalogs(AdminUI *ui) {
 #if defined(__aarch64__)
     const char *origin = "linux-arm64";
 #else
-    const char *origin = "linux-x64";
+    const char *origin = "linux-x86";
 #endif
     if (!nbody) {
         nbody  = fetch_catalog_to_string(CATALOG_MAC, &n_len);
