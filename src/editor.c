@@ -2450,6 +2450,17 @@ static gboolean save_doc_to_path(NppDoc *doc, const char *path)
         return FALSE;
     }
     g_free(buf);
+    /* GAP-93 — capture the OLD extension before the path is adopted so
+     * an extension change can re-detect the language below (macOS
+     * EditorView writeToPath: oldExt/newExt compare). */
+    gchar *old_ext_lc = NULL;
+    {
+        const char *op = doc->filepath;
+        const char *ob = op ? (strrchr(op, '/') ? strrchr(op, '/') + 1 : op)
+                            : NULL;
+        const char *od = ob ? strrchr(ob, '.') : NULL;
+        old_ext_lc = g_ascii_strdown((od && od > ob) ? od + 1 : "", -1);
+    }
     /* Save-As: adopt the new path BEFORE the save-point and FILESAVED so
      * a plugin resolving the buffer id during the notification sees the
      * NEW path (macOS EditorView writeToPath: sets _filePath first). No-op
@@ -2460,6 +2471,35 @@ static gboolean save_doc_to_path(NppDoc *doc, const char *path)
         doc->filepath = adopted;
     }
     sci_msg(doc->sci, SCI_SETSAVEPOINT, 0, 0);
+    /* GAP-93 — re-detect the language when the extension changed (Save
+     * As with a new name; macOS EditorView.mm:984-994, same slot: after
+     * the save-point, before NPPN_FILESAVED). Runs the exact open-time
+     * resolution — built-in ext map, then the theme-aware UDL fallback,
+     * plain text when nothing claims the ext — and clears any explicit
+     * per-doc override back to auto so a session restore re-detects
+     * from the new extension too. macOS setLanguage: fires LANGCHANGED
+     * on this path; so do we. */
+    {
+        const char *nb = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
+        const char *nd = strrchr(nb, '.');
+        gchar *new_ext_lc = g_ascii_strdown((nd && nd > nb) ? nd + 1 : "",
+                                            -1);
+        if (g_strcmp0(old_ext_lc, new_ext_lc) != 0) {
+            g_free(doc->language);
+            doc->language = NULL;                     /* back to auto */
+            lexer_apply_from_path(doc->sci, path);
+            if (doc == editor_current_doc()) {
+                const char *nl = (const char *)
+                    g_object_get_data(G_OBJECT(doc->sci), "npp-lang");
+                statusbar_set_language(lexer_display_name(nl));
+                extern void main_sync_language_menu(const char *);
+                main_sync_language_menu(nl ? nl : "");
+            }
+            plugin_notify_lang_changed(doc);
+        }
+        g_free(new_ext_lc);
+    }
+    g_free(old_ext_lc);
     /* GAP-80 — the buffer reached disk (Save and Save-As both funnel
      * through here; fires only on success). */
     plugin_notify_file_saved(doc);
