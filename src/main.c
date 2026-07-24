@@ -2048,6 +2048,50 @@ static void action_view_in_chromium(GSimpleAction *a, GVariant *p, gpointer u) {
 static void action_view_in_default(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u; open_current_file_in("xdg-open");
 }
+/* GAP-94c — View ▸ open in a user-configured browser (macOS
+ * viewInCustomBrowser). The command is stored in
+ * g_prefs.custom_browser; prompt for it the first time (or when the
+ * user picks the item with none set), then launch it on the file. */
+static void action_view_in_custom(GSimpleAction *a, GVariant *p, gpointer u);
+
+static void on_custbrowser_response(GtkDialog *dlg, int resp, gpointer entry) {
+    if (resp == GTK_RESPONSE_ACCEPT) {
+        const char *t = gtk_editable_get_text(GTK_EDITABLE(entry));
+        g_strlcpy(g_prefs.custom_browser, t ? t : "",
+                  sizeof g_prefs.custom_browser);
+        prefs_save();
+        if (g_prefs.custom_browser[0])
+            open_current_file_in(g_prefs.custom_browser);
+    }
+    gtk_window_destroy(GTK_WINDOW(dlg));
+}
+static void action_view_in_custom(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    if (g_prefs.custom_browser[0]) {           /* configured — just launch */
+        open_current_file_in(g_prefs.custom_browser);
+        return;
+    }
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(
+        "Custom Browser", g_window ? GTK_WINDOW(g_window) : NULL,
+        GTK_DIALOG_DESTROY_WITH_PARENT,
+        "_Cancel", GTK_RESPONSE_CANCEL, "_OK", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+    GtkWidget *ca = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(ca), 12);
+    gtk_box_set_spacing(GTK_BOX(ca), 8);
+    GtkWidget *lbl = gtk_label_new(
+        "Browser command (e.g. \"brave\", \"epiphany\", or a full path):");
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+    GtkWidget *entry = gtk_entry_new();
+    gtk_entry_set_width_chars(GTK_ENTRY(entry), 40);
+    gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+    npp_box_pack(GTK_BOX(ca), lbl, FALSE, 0);
+    npp_box_pack(GTK_BOX(ca), entry, FALSE, 0);
+    g_signal_connect(dlg, "response",
+                     G_CALLBACK(on_custbrowser_response), entry);
+    gtk_widget_show_all(dlg);
+    gtk_window_present(GTK_WINDOW(dlg));
+}
 
 /* Q-fix View → Distraction Free Mode (matches macOS).
  * Toggles full-screen + hides menubar/toolbar/sidepanel/status for a clean
@@ -5068,14 +5112,121 @@ static void action_menu_stub(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
 }
 
-/* macOS items not yet wired on Linux — greyed so they mirror the macOS
- * menu layout without pretending to work. */
+/* ── GAP-95 — items that were menu stubs, now real (macOS parity) ─── */
+
+/* Edit ▸ Close All But Pinned (macOS closeAllButPinned). */
+static void action_close_all_but_pinned(GSimpleAction *a, GVariant *p,
+                                        gpointer u) {
+    (void)a;(void)p;(void)u;
+    editor_close_all_but_pinned();
+}
+
+/* Edit ▸ Clear Read-Only Flag — force Scintilla read-only OFF and clear
+ * the per-doc user flag (macOS EditorView clearReadOnlyFlag). */
+static void action_clear_readonly(GSimpleAction *a, GVariant *p,
+                                  gpointer u) {
+    (void)a;(void)p;(void)u;
+    NppDoc *doc = editor_current_doc();
+    if (!doc || !doc->sci) return;
+    sci_send(SCI_SETREADONLY, 0, 0);
+    if (doc->user_readonly) {
+        doc->user_readonly = FALSE;
+        plugin_notify_readonly_changed(doc);
+    }
+}
+
+/* Edit ▸ Change Search Engine — set the URL template used by "Search on
+ * Internet" (macOS changeSearchEngine; %s = query placeholder). */
+static void on_engine_response(GtkDialog *dlg, int resp, gpointer entry) {
+    if (resp == GTK_RESPONSE_ACCEPT) {
+        const char *t = gtk_editable_get_text(GTK_EDITABLE(entry));
+        g_strlcpy(g_prefs.search_engine_url, t ? t : "",
+                  sizeof g_prefs.search_engine_url);
+        prefs_save();
+    }
+    gtk_window_destroy(GTK_WINDOW(dlg));
+}
+static void action_change_search_engine(GSimpleAction *a, GVariant *p,
+                                        gpointer u) {
+    (void)a;(void)p;(void)u;
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(
+        "Change Search Engine",
+        g_window ? GTK_WINDOW(g_window) : NULL,
+        GTK_DIALOG_DESTROY_WITH_PARENT,
+        "_Cancel", GTK_RESPONSE_CANCEL, "_OK", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+    GtkWidget *ca = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(ca), 12);
+    gtk_box_set_spacing(GTK_BOX(ca), 8);
+    GtkWidget *lbl = gtk_label_new(
+        "Search URL — use %s as the query placeholder\n"
+        "(or omit it to append the query at the end):");
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+    GtkWidget *entry = gtk_entry_new();
+    gtk_entry_set_width_chars(GTK_ENTRY(entry), 48);
+    gtk_editable_set_text(GTK_EDITABLE(entry),
+        g_prefs.search_engine_url[0] ? g_prefs.search_engine_url
+                                     : "https://duckduckgo.com/?q=%s");
+    gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+    npp_box_pack(GTK_BOX(ca), lbl, FALSE, 0);
+    npp_box_pack(GTK_BOX(ca), entry, FALSE, 0);
+    g_signal_connect(dlg, "response", G_CALLBACK(on_engine_response), entry);
+    gtk_widget_show_all(dlg);
+    gtk_window_present(GTK_WINDOW(dlg));
+}
+
+/* Edit ▸ Auto-Completion ▸ Function Parameters Prev/Next Hint — scan to
+ * the neighbouring call's "(" and show its calltip (macOS
+ * showFunctionParametersPrevious/NextHint). */
+static void ac_hint_scan(gboolean forward) {
+    GtkWidget *sci = current_sci();
+    if (!sci) return;
+    ScintillaObject *s = SCINTILLA(sci);
+    if (scintilla_send_message(s, SCI_CALLTIPACTIVE, 0, 0))
+        scintilla_send_message(s, SCI_CALLTIPCANCEL, 0, 0);
+    sptr_t pos = scintilla_send_message(s, SCI_GETCURRENTPOS, 0, 0);
+    sptr_t len = scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
+    if (forward) {
+        for (sptr_t scan = pos; scan < len; scan++)
+            if ((char)scintilla_send_message(s, SCI_GETCHARAT,
+                                             (uptr_t)scan, 0) == '(') {
+                scintilla_send_message(s, SCI_GOTOPOS,
+                                       (uptr_t)(scan + 1), 0);
+                autocomplete_show_calltip(sci);
+                return;
+            }
+    } else {
+        int depth = 0;
+        for (sptr_t scan = pos - 1; scan > 0; scan--) {
+            char ch = (char)scintilla_send_message(s, SCI_GETCHARAT,
+                                                   (uptr_t)scan, 0);
+            if (ch == ')') { depth++; continue; }
+            if (ch == '(' && depth > 0) { depth--; continue; }
+            if (ch == '(') {
+                scintilla_send_message(s, SCI_GOTOPOS,
+                                       (uptr_t)(scan + 1), 0);
+                autocomplete_show_calltip(sci);
+                return;
+            }
+        }
+    }
+}
+static void action_ac_hint_prev(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u; ac_hint_scan(FALSE);
+}
+static void action_ac_hint_next(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u; ac_hint_scan(TRUE);
+}
+
+
+/* macOS items with no Linux equivalent — greyed so they mirror the
+ * macOS menu layout without pretending to work. GAP-94/95 wired the
+ * rest (close-all-but-pinned, change-search-engine, clear-readonly,
+ * ac-hint-prev/next) to real handlers; only the file immutable-attribute
+ * lock stays disabled — Ubuntu's chattr +i needs root, so there is no
+ * per-user equivalent (Linux uses read-only instead). */
 static const char *kStubActions[] = {
-    "close-all-but-pinned",     /* File ▸ Close Multiple Documents      */
-    "change-search-engine",     /* Edit ▸ On Selection                  */
-    "clear-readonly",           /* Edit ▸ Read-Only in Nextpad++        */
     "lock-file", "unlock-file", /* Edit ▸ Locked Attribute (macOS)      */
-    "ac-hint-prev", "ac-hint-next", /* Edit ▸ Auto-Completion           */
 };
 
 static const GActionEntry kAppActions[] = {
@@ -5263,6 +5414,7 @@ static const GActionEntry kAppActions[] = {
     { "view-in-chrome",      action_view_in_chrome,      NULL, NULL, NULL },
     { "view-in-chromium",    action_view_in_chromium,    NULL, NULL, NULL },
     { "view-in-default",     action_view_in_default,     NULL, NULL, NULL },
+    { "view-in-custom",      action_view_in_custom,      NULL, NULL, NULL },
     /* Q-fix UDL + Settings + Help (5 items). */
     { "udl-define",          action_udl_define,          NULL, NULL, NULL },
     { "udl-open-folder",     action_udl_open_folder,     NULL, NULL, NULL },
@@ -5468,13 +5620,13 @@ static const GActionEntry kAppActions[] = {
     { "panel-toggle-floating", action_panel_toggle,             "s",  NULL, NULL },
     /* macOS-parity menu sweep */
     { "delete",                action_delete,                   NULL, NULL, NULL },
-    { "close-all-but-pinned",  action_menu_stub,                NULL, NULL, NULL },
-    { "change-search-engine",  action_menu_stub,                NULL, NULL, NULL },
-    { "clear-readonly",        action_menu_stub,                NULL, NULL, NULL },
+    { "close-all-but-pinned",  action_close_all_but_pinned,     NULL, NULL, NULL },
+    { "change-search-engine",  action_change_search_engine,     NULL, NULL, NULL },
+    { "clear-readonly",        action_clear_readonly,           NULL, NULL, NULL },
     { "lock-file",             action_menu_stub,                NULL, NULL, NULL },
     { "unlock-file",           action_menu_stub,                NULL, NULL, NULL },
-    { "ac-hint-prev",          action_menu_stub,                NULL, NULL, NULL },
-    { "ac-hint-next",          action_menu_stub,                NULL, NULL, NULL },
+    { "ac-hint-prev",          action_ac_hint_prev,             NULL, NULL, NULL },
+    { "ac-hint-next",          action_ac_hint_next,             NULL, NULL, NULL },
     { "tab-move-start",        action_tab_move_start,           NULL, NULL, NULL },
     { "tab-move-end",          action_tab_move_end,             NULL, NULL, NULL },
     { "tab-move-forward",      action_tab_move_forward,         NULL, NULL, NULL },
@@ -6158,6 +6310,7 @@ static GMenuModel *build_menu_model(void)
         g_menu_append(vif, "Chrome",          "app.view-in-chrome");
         g_menu_append(vif, "Chromium",        "app.view-in-chromium");
         g_menu_append(vif, "Default Browser", "app.view-in-default");
+        g_menu_append(vif, "Custom Browser…",  "app.view-in-custom");
         g_menu_append_submenu(grp, "View Current File in", G_MENU_MODEL(vif));
         g_object_unref(vif);
         g_menu_append_section(view, NULL, G_MENU_MODEL(grp));
@@ -6233,6 +6386,22 @@ static GMenuModel *build_menu_model(void)
         g_menu_append(tmov, "Move Tab Backward", "app.tab-move-backward");
         g_menu_append_section(tabs, NULL, G_MENU_MODEL(tmov));
         g_object_unref(tmov);
+        /* GAP-94a — Sort tabs (macOS Window ▸ Sort By). The six actions
+         * existed (sort-tabs-*) but were wired into no menu. */
+        {
+            GMenu *tsort = g_menu_new();
+            GMenu *sb = g_menu_new();
+            g_menu_append(sb, "File Name A → Z", "app.sort-tabs-name-asc");
+            g_menu_append(sb, "File Name Z → A", "app.sort-tabs-name-desc");
+            g_menu_append(sb, "File Type A → Z", "app.sort-tabs-ext-asc");
+            g_menu_append(sb, "File Type Z → A", "app.sort-tabs-ext-desc");
+            g_menu_append(sb, "Full Path A → Z", "app.sort-tabs-path-asc");
+            g_menu_append(sb, "Full Path Z → A", "app.sort-tabs-path-desc");
+            g_menu_append_submenu(tsort, "Sort Tabs By", G_MENU_MODEL(sb));
+            g_object_unref(sb);
+            g_menu_append_section(tabs, NULL, G_MENU_MODEL(tsort));
+            g_object_unref(tsort);
+        }
         GMenu *tcol = g_menu_new();
         for (int i = 1; i <= 5; i++) {
             char raw[16];
@@ -6371,6 +6540,13 @@ static GMenuModel *build_menu_model(void)
                 "Windows-1250", "ISO-8859-2" }, 2 },
             { "Cyrillic", (const char *[]){
                 "Windows-1251", "KOI8-R" }, 2 },
+            /* GAP-94b — Greek/Turkish/Baltic to match macOS Character sets. */
+            { "Greek", (const char *[]){
+                "Windows-1253", "ISO-8859-7" }, 2 },
+            { "Turkish", (const char *[]){
+                "Windows-1254", "ISO-8859-9" }, 2 },
+            { "Baltic", (const char *[]){
+                "Windows-1257", "ISO-8859-13" }, 2 },
             { "East Asian", (const char *[]){
                 "Shift-JIS", "GB18030", "Big5", "EUC-KR" }, 4 },
         };

@@ -178,6 +178,7 @@ NppPrefs g_prefs = {
     .appearance_style        = 0,     /* Classic */
     .in_sel_threshold        = 1024,
     .search_engine_url       = "https://duckduckgo.com/?q=%s",
+    .custom_browser          = "",
     /* Delimiter */
     .delim_open              = "(",
     .delim_close             = ")",
@@ -469,6 +470,12 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         if      (!strcmp(attr, "url")) {
             strncpy(g_prefs.search_engine_url, val, sizeof(g_prefs.search_engine_url) - 1);
             g_prefs.search_engine_url[sizeof(g_prefs.search_engine_url) - 1] = '\0';
+        }
+    }
+    else if (!strcmp(group, "CustomBrowser")) {
+        if (!strcmp(attr, "command")) {
+            strncpy(g_prefs.custom_browser, val, sizeof(g_prefs.custom_browser) - 1);
+            g_prefs.custom_browser[sizeof(g_prefs.custom_browser) - 1] = '\0';
         }
     }
 }
@@ -891,6 +898,10 @@ g_prefs.tab_max_label_width,
     g_string_append_printf(b,
         "        <GUIConfig name=\"SearchEngine\" url=\"%s\" />\n", se_esc);
     g_free(se_esc);
+    gchar *cb_esc = g_markup_escape_text(g_prefs.custom_browser, -1);
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"CustomBrowser\" command=\"%s\" />\n", cb_esc);
+    g_free(cb_esc);
 
     /* GAP-53 — Find window transparency. */
     g_string_append_printf(b,

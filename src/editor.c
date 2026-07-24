@@ -3185,6 +3185,33 @@ gboolean editor_close_all_but_current(void)
     return TRUE;
 }
 
+/* GAP-95 — close every UNPINNED tab (macOS closeAllButPinned). Snapshot
+ * the doc set first: closing frees docs, so we can't walk the live
+ * notebook. Pinned tabs also block close in close_sci_full, so this is
+ * belt-and-braces, but skipping them keeps the ask-save prompts to the
+ * tabs that will actually close. */
+gboolean editor_close_all_but_pinned(void)
+{
+    GPtrArray *docs = editor_all_docs();
+    gboolean dont_save_all = FALSE;
+    gboolean ok = TRUE;
+    /* Copy the sci pointers — the array's docs get freed as we close. */
+    GPtrArray *scis = g_ptr_array_new();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (d && d->sci && !d->pinned) g_ptr_array_add(scis, d->sci);
+    }
+    g_ptr_array_free(docs, TRUE);
+    for (guint i = 0; i < scis->len; i++) {
+        if (!close_sci_full(g_ptr_array_index(scis, i), &dont_save_all)) {
+            ok = FALSE;
+            break;   /* user cancelled a save prompt */
+        }
+    }
+    g_ptr_array_free(scis, TRUE);
+    return ok;
+}
+
 void editor_close_all_quit(GApplication *app)
 {
     GPtrArray *docs = editor_all_docs();

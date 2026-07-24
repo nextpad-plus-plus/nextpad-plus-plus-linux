@@ -96,6 +96,7 @@ gboolean   editor_close_sci(GtkWidget *sci);        /* close one exact tab     *
  * (macOS issue #214 parity). */
 gboolean   editor_close_page_multi(int page, gboolean *dont_save_all);
 gboolean   editor_close_all_but_current(void);
+gboolean   editor_close_all_but_pinned(void);   /* GAP-95 */
 void       editor_close_all_quit(GApplication *app);
 
 /* Split views (#3) — move/clone the focused editor to the secondary
