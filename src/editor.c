@@ -16,6 +16,7 @@
 #include "autocomplete.h"
 #include "gitgutter.h"
 #include "gitpanel.h"
+#include "udl.h"
 #include "changehistory.h"
 #include "macro.h"
 #include "funclist.h"
@@ -3422,6 +3423,42 @@ void editor_reapply_styles(void)
         sci_msg(sci, SCI_STYLECLEARALL, 0, 0);
         stylestore_apply_global(sci);
         if (lang && strncmp(lang, "udl:", 4) == 0) {
+            /* GAP-97 — a theme toggle may want the OTHER variant of a
+             * multi-variant UDL (the markdown light/dark pair). Re-resolve
+             * by the file's extension, but ONLY when the currently applied
+             * UDL claims that extension — a manually picked unrelated UDL
+             * is an override to respect (macOS applyThemeColors,
+             * EditorView.mm:1775-1796; no LANGCHANGED — this is the
+             * low-level applyLanguage: path, a styling refresh). */
+            char extbuf[64] = "";
+            if (d->filepath) {
+                const char *b = strrchr(d->filepath, '/');
+                b = b ? b + 1 : d->filepath;
+                const char *dot = strrchr(b, '.');
+                if (dot && dot > b)
+                    g_strlcpy(extbuf, dot + 1, sizeof extbuf);
+            }
+            if (extbuf[0]) {
+                int cur = udl_find_by_name(lang + 4);
+                if (cur >= 0 && udl_claims_ext(cur, extbuf)) {
+                    int res = udl_find_by_ext(extbuf);   /* theme-aware */
+                    const char *nk = res >= 0 ? udl_key(res) : NULL;
+                    if (nk && res != cur) {
+                        if (d->language && strcmp(d->language, lang) == 0) {
+                            g_free(d->language);
+                            d->language = g_strdup(nk);
+                        }
+                        g_object_set_data_full(G_OBJECT(sci), "npp-lang",
+                                               g_strdup(nk), g_free);
+                        lang = g_object_get_data(G_OBJECT(sci), "npp-lang");
+                        if (d == editor_current_doc()) {
+                            statusbar_set_language(lexer_display_name(lang));
+                            extern void main_sync_language_menu(const char *);
+                            main_sync_language_menu(lang);
+                        }
+                    }
+                }
+            }
             /* GAP-44 — stylestore has no "udl:" block; without this the
              * UDL's colors were LOST on every theme toggle. lexer_apply
              * routes to udl_apply (full pipeline incl. dark blend). */

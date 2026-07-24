@@ -562,6 +562,22 @@ int udl_find_by_name(const char *name)
     return -1;
 }
 
+/* Does UDL `i` claim `ext` in its space-separated ext list? (GAP-97 —
+ * the theme-toggle variant swap only re-resolves when the CURRENT UDL
+ * claims the file's extension; manual overrides are respected.) */
+gboolean udl_claims_ext(int i, const char *ext)
+{
+    if (!s_defs || i < 0 || i >= (int)s_defs->len || !ext || !*ext)
+        return FALSE;
+    UdlDefInternal *def = g_ptr_array_index(s_defs, i);
+    gchar **parts = g_strsplit(def->ext, " ", -1);
+    gboolean hit = FALSE;
+    for (int j = 0; parts[j] && !hit; j++)
+        if (g_ascii_strcasecmp(parts[j], ext) == 0) hit = TRUE;
+    g_strfreev(parts);
+    return hit;
+}
+
 int udl_find_by_ext(const char *ext)
 {
     if (!s_defs || !ext || !ext[0]) return -1;

@@ -30,6 +30,7 @@ int udl_find_by_name(const char *name);
 
 /* Find by file extension (no dot), case-insensitive — return index or -1. */
 int udl_find_by_ext(const char *ext);
+gboolean udl_claims_ext(int i, const char *ext);   /* GAP-97 */
 
 /* Apply UDL at index i to the Scintilla widget.
  * Assumes stylestore_apply_default / SCI_STYLECLEARALL / stylestore_apply_global
