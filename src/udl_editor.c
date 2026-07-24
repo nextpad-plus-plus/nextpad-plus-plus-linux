@@ -1232,19 +1232,30 @@ static void on_export_clicked(GtkButton *btn, gpointer ud) {
  * macOS: re-present the existing window instead of stacking a second. */
 static GtkWidget *s_udl_editor;
 
-static gboolean udl_editor_destroy_idle(gpointer dlg) {
-    if (GTK_IS_WINDOW(dlg)) gtk_window_destroy(GTK_WINDOW(dlg));
+/* The idle holds a WEAK slot, not a raw widget pointer: if something
+ * else (GtkWindow's own close-request default, destroy-with-parent on
+ * quit) tore the dialog down first, the slot is NULLed and we skip —
+ * dereferencing a freed GObject to type-check it is undefined. */
+static gboolean udl_editor_destroy_idle(gpointer data) {
+    GtkWidget **slot = data;
+    if (*slot) {
+        g_object_remove_weak_pointer(G_OBJECT(*slot), (gpointer *)slot);
+        gtk_window_destroy(GTK_WINDOW(*slot));
+    }
+    g_free(slot);
     return G_SOURCE_REMOVE;
 }
 
 static void udl_editor_on_response(GtkDialog *dlg, int resp, gpointer u) {
     (void)resp; (void)u;
-    /* Destroying the window synchronously inside the "response" emission
-     * that a WM close-request raised trips a BadDrawable X error on X11
-     * (GDK aborts on it). Hide now, destroy on idle — outside the event.
+    /* Hide now, destroy on idle — destroying synchronously inside the
+     * "response" emission a close-request raised can re-enter teardown.
      * The "destroy" handler frees ui + clears the singleton. */
     gtk_widget_set_visible(GTK_WIDGET(dlg), FALSE);
-    g_idle_add(udl_editor_destroy_idle, dlg);
+    GtkWidget **slot = g_new0(GtkWidget *, 1);
+    *slot = GTK_WIDGET(dlg);
+    g_object_add_weak_pointer(G_OBJECT(dlg), (gpointer *)slot);
+    g_idle_add(udl_editor_destroy_idle, slot);
 }
 
 static void udl_editor_on_destroy(GtkWidget *w, gpointer u) {
@@ -1255,6 +1266,7 @@ static void udl_editor_on_destroy(GtkWidget *w, gpointer u) {
 
 void udl_editor_show(GtkWindow *parent) {
     if (s_udl_editor) {                    /* already open — bring forward */
+        gtk_widget_show_all(s_udl_editor);
         gtk_window_present(GTK_WINDOW(s_udl_editor));
         return;
     }
@@ -1336,6 +1348,14 @@ void udl_editor_show(GtkWindow *parent) {
     s_udl_editor = dlg;
     g_signal_connect(dlg, "response", G_CALLBACK(udl_editor_on_response), ui);
     g_signal_connect(dlg, "destroy",  G_CALLBACK(udl_editor_on_destroy),  ui);
+    /* Map, THEN raise. gtk_window_present() alone is what every other
+     * dialog here avoids for the first show: Style Configurator (known
+     * good on GNOME/Wayland) maps with show_all and only uses present()
+     * to re-raise an existing window. Presenting an unmapped window
+     * needs an activation token the compositor may withhold, so the
+     * window can end up never appearing. set_visible does the mapping
+     * unconditionally; present then raises/focuses it. */
+    gtk_widget_show_all(dlg);
     gtk_window_present(GTK_WINDOW(dlg));
 }
 
