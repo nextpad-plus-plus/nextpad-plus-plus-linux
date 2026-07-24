@@ -1224,11 +1224,44 @@ static void on_export_clicked(GtkButton *btn, gpointer ud) {
 /* Public entry point                                                     */
 /* ────────────────────────────────────────────────────────────────────── */
 
+/* GAP-91b — the editor is NON-MODAL (macOS UserDefineDialog is a plain
+ * showWindow: window controller, not runModal). The former Linux path
+ * ran gtk_dialog_run() = a nested g_main_loop_run — GTK4-removed and
+ * banned by CLAUDE.md — which hung the whole app when opened. Now it's
+ * presented async and torn down on "response"/close. Singleton like
+ * macOS: re-present the existing window instead of stacking a second. */
+static GtkWidget *s_udl_editor;
+
+static gboolean udl_editor_destroy_idle(gpointer dlg) {
+    if (GTK_IS_WINDOW(dlg)) gtk_window_destroy(GTK_WINDOW(dlg));
+    return G_SOURCE_REMOVE;
+}
+
+static void udl_editor_on_response(GtkDialog *dlg, int resp, gpointer u) {
+    (void)resp; (void)u;
+    /* Destroying the window synchronously inside the "response" emission
+     * that a WM close-request raised trips a BadDrawable X error on X11
+     * (GDK aborts on it). Hide now, destroy on idle — outside the event.
+     * The "destroy" handler frees ui + clears the singleton. */
+    gtk_widget_set_visible(GTK_WIDGET(dlg), FALSE);
+    g_idle_add(udl_editor_destroy_idle, dlg);
+}
+
+static void udl_editor_on_destroy(GtkWidget *w, gpointer u) {
+    (void)w;
+    s_udl_editor = NULL;
+    g_free(u);
+}
+
 void udl_editor_show(GtkWindow *parent) {
+    if (s_udl_editor) {                    /* already open — bring forward */
+        gtk_window_present(GTK_WINDOW(s_udl_editor));
+        return;
+    }
     UDLEditor *ui = g_new0(UDLEditor, 1);
     udlstyle_reset(ui->style);
     GtkWidget *dlg = gtk_dialog_new_with_buttons("User Defined Language v.2.1",
-        parent, GTK_DIALOG_MODAL,
+        parent, GTK_DIALOG_DESTROY_WITH_PARENT,
         "_Close", GTK_RESPONSE_CLOSE, NULL);
     gtk_window_set_default_size(GTK_WINDOW(dlg), 760, 600);
 
@@ -1300,9 +1333,9 @@ void udl_editor_show(GtkWindow *parent) {
                              gtk_label_new("Operators & Delimiters"));
     npp_box_pack(GTK_BOX(root), nb, TRUE, 0);
 
-    gtk_widget_show_all(dlg);
-    gtk_dialog_run(GTK_DIALOG(dlg));
-    gtk_widget_destroy(dlg);
-    g_free(ui);
+    s_udl_editor = dlg;
+    g_signal_connect(dlg, "response", G_CALLBACK(udl_editor_on_response), ui);
+    g_signal_connect(dlg, "destroy",  G_CALLBACK(udl_editor_on_destroy),  ui);
+    gtk_window_present(GTK_WINDOW(dlg));
 }
 

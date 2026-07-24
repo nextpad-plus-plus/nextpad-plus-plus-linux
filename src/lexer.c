@@ -57,7 +57,11 @@ static const ExtLang kExtLang[] = {
     {"go",  "go"},
     {"d",   "d"},
     /* Markup / Config */
-    {"md",  "markdown"}, {"markdown","markdown"},
+    /* GAP-91c (macOS 807d27d): NO md/markdown built-in alias — markdown
+     * is shipped only as the "Markdown (preinstalled)" UDL, and an
+     * alias here would shadow it (the built-in markdown lexer has no
+     * styler → unformatted text). .md now falls through to
+     * udl_find_by_ext (theme-aware). */
     {"tex", "latex"},  {"latex","latex"},
     {"yml", "yaml"},   {"yaml","yaml"},
     {"toml","toml"},
@@ -162,7 +166,7 @@ static const LangLexer kLangLexer[] = {
     {"rust",        "rust"},
     {"d",           "d"},
     /* Markup / Config */
-    {"markdown",    "markdown"},
+    /* markdown removed — UDL-only (see kExtLang note). */
     {"latex",       "latex"},
     {"tex",         "tex"},
     {"yaml",        "yaml"},

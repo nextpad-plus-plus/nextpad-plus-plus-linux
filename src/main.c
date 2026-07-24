@@ -1298,7 +1298,6 @@ static const LangEntry kLangs[] = {
     { "Lua",          "lua"        },
     /* M */
     { "Makefile",     "makefile"   },
-    { "Markdown",     "markdown"   },
     { "MATLAB",       "matlab"     },
     /* N */
     { "Nim",          "nim"        },

@@ -570,18 +570,25 @@ int udl_find_by_ext(const char *ext)
     while (ext[k] && k < 63) { low[k] = (char)tolower((unsigned char)ext[k]); k++; }
     low[k] = '\0';
 
+    /* Theme-aware, like macOS UserDefineLangManager languageForExtension:
+     * a UDL may ship a light + dark variant claiming the same ext (e.g.
+     * "Markdown (preinstalled)" / "…(preinstalled dark mode)"). Prefer the
+     * variant whose darkModeTheme matches the active theme; fall back to
+     * the first match so a single-variant UDL still resolves. */
+    gboolean want_dark = theme_effective_dark();
+    int first = -1;
     for (guint di = 0; di < s_defs->len; di++) {
         UdlDefInternal *def = g_ptr_array_index(s_defs, di);
         gchar **parts = g_strsplit(def->ext, " ", -1);
-        for (int j = 0; parts[j]; j++) {
-            if (g_ascii_strcasecmp(parts[j], low) == 0) {
-                g_strfreev(parts);
-                return (int)di;
-            }
-        }
+        gboolean hit = FALSE;
+        for (int j = 0; parts[j]; j++)
+            if (g_ascii_strcasecmp(parts[j], low) == 0) { hit = TRUE; break; }
         g_strfreev(parts);
+        if (!hit) continue;
+        if (first < 0) first = (int)di;
+        if (def->dark_mode_theme == want_dark) return (int)di;
     }
-    return -1;
+    return first;
 }
 
 void udl_apply(GtkWidget *sci, int index)
