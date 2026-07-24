@@ -9,6 +9,11 @@ void       statusbar_set_language(const char *lang);
 void       statusbar_set_encoding(const char *enc);
 void       statusbar_set_overtype(gboolean ovr);
 
+/* GAP-92 — git-branch segment (macOS _gitBranchLabel): "⎇ <branch>",
+ * dimmed, left of the right-side block. NULL/empty hides it. Driven
+ * by gitpanel.c's async resolver; the label itself is dumb. */
+void       statusbar_set_git_branch(const char *branch);
+
 /* Plugin-addressable middle field (NPPM_SETSTATUSBAR) — macOS parity
  * commit b5b73b2: every STATUSBAR_* field id routes to this one label;
  * the built-in left/right blocks are never overwritten by plugins. */

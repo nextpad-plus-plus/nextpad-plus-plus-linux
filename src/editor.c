@@ -15,6 +15,7 @@
 #include "i18n.h"
 #include "autocomplete.h"
 #include "gitgutter.h"
+#include "gitpanel.h"
 #include "changehistory.h"
 #include "macro.h"
 #include "funclist.h"
@@ -1898,6 +1899,12 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
     update_window_title();
     findreplace_set_sci(sci);
     toolbar_sync_toggles(sci);
+    /* GAP-92 — status-bar git branch follows the active doc (macOS
+     * didActivateEditor path: 1 s delay, only while the panel is open). */
+    {
+        NppDoc *swd = doc_of_sci(sci);
+        gitpanel_statusbar_branch_refresh(swd ? swd->filepath : NULL, FALSE);
+    }
     watermark_refresh_for(sci);   /* GAP-64 — `sci` is the INCOMING page */
     if (tabstrip_active())
         tabstrip_mark_active((int)page_num);
@@ -2456,6 +2463,8 @@ static gboolean save_doc_to_path(NppDoc *doc, const char *path)
     /* GAP-80 — the buffer reached disk (Save and Save-As both funnel
      * through here; fires only on success). */
     plugin_notify_file_saved(doc);
+    /* GAP-92 — macOS _editorDidSave refreshes the branch immediately. */
+    gitpanel_statusbar_branch_refresh(doc->filepath, TRUE);
     gitgutter_update(doc->sci, path);
     return TRUE;
 }

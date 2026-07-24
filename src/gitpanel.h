@@ -20,6 +20,13 @@ void       gitpanel_refresh(void);
 void       gitpanel_set_visible(gboolean v);
 gboolean   gitpanel_is_visible(void);
 
+/* GAP-92 — refresh the status-bar branch segment for `filepath`
+ * (async; gated on the panel being visible; NULL path clears).
+ * immediate=FALSE debounces 1 s — use for tab switches (macOS
+ * dispatch_after); TRUE resolves now — use for saves / git ops. */
+void       gitpanel_statusbar_branch_refresh(const char *filepath,
+                                             gboolean immediate);
+
 /* Public hooks called from editor.c on doc switch or save. */
 void       gitpanel_doc_changed(const char *file_path);
 

@@ -15,6 +15,7 @@
  * for full async + cancellation.
  */
 #include "gitpanel.h"
+#include "statusbar.h"
 #include "gtk_compat.h"
 #include "npp_menu.h"
 #include "editor.h"
@@ -143,7 +144,10 @@ static void update_branch_label(void) {
     }
 }
 
+static void gitpanel_branch_kick(void);
+
 static void refresh_status(void) {
+    gitpanel_branch_kick();
     if (!s_status_store) return;
     gtk_list_store_clear(s_status_store);
     if (!s_repo_dir[0]) return;
@@ -566,6 +570,88 @@ GtkWidget *gitpanel_init(GtkWidget *parent_window) {
     return s_panel;
 }
 
+/* ── GAP-92 — status-bar git branch (macOS _updateGitBranch) ─────────
+ * Resolved OFF the main thread (git spawn per tab switch would jank the
+ * UI; macOS uses a utility queue). Gated on the panel being visible —
+ * the macOS rule (there: avoids the Xcode-CLT install prompt; here: the
+ * same no-git-spawn-when-unused principle the panel-restore whitelist
+ * follows). Tab switches are debounced 1 s (macOS dispatch_after);
+ * saves/panel ops apply immediately. A generation counter drops stale
+ * in-flight results when the user switches repos quickly. */
+
+static guint s_branch_timer;
+static guint s_branch_gen;
+
+typedef struct { char *dir; guint gen; char *branch; } BranchJob;
+
+static gboolean branch_apply_idle(gpointer data) {
+    BranchJob *j = data;
+    if (j->gen == s_branch_gen)
+        statusbar_set_git_branch(j->branch);
+    g_free(j->dir);
+    g_free(j->branch);
+    g_free(j);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer branch_thread(gpointer data) {
+    BranchJob *j = data;
+    char *out = NULL;
+    int   st  = 0;
+    char *argv[] = { "git", "-C", j->dir, "rev-parse", "--abbrev-ref",
+                     "HEAD", NULL };
+    if (g_spawn_sync(NULL, argv, NULL,
+                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL,
+                     NULL, NULL, &out, NULL, &st, NULL) &&
+        g_spawn_check_wait_status(st, NULL) && out) {
+        g_strstrip(out);
+        if (*out) j->branch = g_strdup(out);
+    }
+    g_free(out);
+    g_idle_add(branch_apply_idle, j);
+    return NULL;
+}
+
+static void branch_resolve_now(const char *filepath) {
+    s_branch_gen++;
+    if (!filepath || !*filepath) {          /* untitled → no repo → clear */
+        statusbar_set_git_branch(NULL);
+        return;
+    }
+    BranchJob *j = g_new0(BranchJob, 1);
+    j->dir = g_path_get_dirname(filepath);
+    j->gen = s_branch_gen;
+    GThread *t = g_thread_new("git-branch", branch_thread, j);
+    g_thread_unref(t);
+}
+
+static gboolean branch_timer_cb(gpointer data) {
+    char *path = data;
+    s_branch_timer = 0;
+    branch_resolve_now(path[0] ? path : NULL);
+    g_free(path);
+    return G_SOURCE_REMOVE;
+}
+
+/* Immediate refresh for the current doc — used by refresh_status()
+ * (panel show + after every git operation). */
+static void gitpanel_branch_kick(void) {
+    NppDoc *d = editor_current_doc();
+    gitpanel_statusbar_branch_refresh(d ? d->filepath : NULL, TRUE);
+}
+
+void gitpanel_statusbar_branch_refresh(const char *filepath,
+                                       gboolean immediate) {
+    if (!gitpanel_is_visible()) return;     /* macOS gate */
+    if (s_branch_timer) { g_source_remove(s_branch_timer); s_branch_timer = 0; }
+    if (immediate) {
+        branch_resolve_now(filepath);
+    } else {
+        s_branch_timer = g_timeout_add(1000, branch_timer_cb,
+                                       g_strdup(filepath ? filepath : ""));
+    }
+}
+
 void gitpanel_set_visible(gboolean v) {
     if (!s_panel) return;
     GtkWidget *frame = gtk_widget_get_parent(s_panel);
@@ -579,6 +665,11 @@ void gitpanel_set_visible(gboolean v) {
     } else {
         if (frame) gtk_widget_hide(frame);
         gtk_widget_hide(s_panel);
+        /* GAP-92 — the branch segment is live only while the panel is
+         * open; clear it and drop any in-flight resolution. */
+        s_branch_gen++;
+        if (s_branch_timer) { g_source_remove(s_branch_timer); s_branch_timer = 0; }
+        statusbar_set_git_branch(NULL);
     }
 }
 

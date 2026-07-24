@@ -12,6 +12,7 @@ static GtkWidget *s_lbl_eol;
 static GtkWidget *s_lbl_lang;
 static GtkWidget *s_lbl_ovr;
 static GtkWidget *s_lbl_indent;
+static GtkWidget *s_lbl_git;      /* "⎇ branch" (GAP-92, macOS parity) */
 
 /* Registered by main.c — opens the Language menu on double-click of
  * the language token (macOS issue #174). */
@@ -80,6 +81,14 @@ GtkWidget *statusbar_init(void)
     npp_box_pack_end(GTK_BOX(box), vsep(), FALSE, 0);
     npp_box_pack_end(GTK_BOX(box), (s_lbl_indent = rlabel("Spaces: 4")), FALSE, 0);
     npp_box_pack_end(GTK_BOX(box), vsep(), FALSE, 0);
+    /* GAP-92 — git branch, dimmed, left of the right block with a 12px
+     * gap (macOS anchors _gitBranchLabel left of _statusRight). Hidden
+     * until a branch resolves. */
+    s_lbl_git = rlabel("");
+    gtk_widget_add_css_class(s_lbl_git, "dim-label");
+    gtk_widget_set_margin_end(s_lbl_git, 12);
+    gtk_widget_set_visible(s_lbl_git, FALSE);
+    npp_box_pack_end(GTK_BOX(box), s_lbl_git, FALSE, 0);
 
     /* Double-click on the language token opens the Language menu
      * (macOS issue #174) — main.c registers the callback. */
@@ -120,15 +129,14 @@ void statusbar_update_from_sci(GtkWidget *sci)
     snprintf(buf, sizeof(buf), use_tabs ? "Tabs: %d" : "Spaces: %d", tab_w);
     gtk_label_set_text(GTK_LABEL(s_lbl_indent), buf);
 
-    /* Document length (characters) + line count — macOS/Windows parity. */
+    /* Document length (BYTES — macOS uses SCI_GETLENGTH; GAP-92 align)
+     * + line count. */
     {
         ScintillaObject *s = SCINTILLA(sci);
         sptr_t doclen = scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
-        sptr_t nchars = scintilla_send_message(s, SCI_COUNTCHARACTERS,
-                                               0, doclen);
         sptr_t nlines = scintilla_send_message(s, SCI_GETLINECOUNT, 0, 0);
         snprintf(buf, sizeof(buf), "length : %ld    lines : %ld",
-                 (long)nchars, (long)nlines);
+                 (long)doclen, (long)nlines);
         gtk_label_set_text(GTK_LABEL(s_lbl_docstat), buf);
     }
 
@@ -155,6 +163,20 @@ void statusbar_update_from_sci(GtkWidget *sci)
         else
             snprintf(buf, sizeof(buf), "Sel : %ld | %ld", chars, lines);
         gtk_label_set_text(GTK_LABEL(s_lbl_sel), buf);
+    }
+}
+
+void statusbar_set_git_branch(const char *branch)
+{
+    if (!s_lbl_git) return;
+    if (branch && *branch) {
+        gchar *t = g_strdup_printf("\xe2\x8e\x87 %s", branch);  /* U+2387 */
+        gtk_label_set_text(GTK_LABEL(s_lbl_git), t);
+        g_free(t);
+        gtk_widget_set_visible(s_lbl_git, TRUE);
+    } else {
+        gtk_label_set_text(GTK_LABEL(s_lbl_git), "");
+        gtk_widget_set_visible(s_lbl_git, FALSE);
     }
 }
 
