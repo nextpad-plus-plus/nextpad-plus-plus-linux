@@ -334,7 +334,12 @@ void theme_modern_reload(void)
      * under the panel title aligns flawlessly with the Tahoe-inspired
      * tab strip's bottom edge (user-reported 1px seam mismatch). */
     g_string_append(css,
-        ".npp-modern .nextpad-panel-frame-titlebar { min-height: 26px; }\n");
+        /* Tahoe-only: the Modern tab strip grew with the trailing +/\u25be/\u2715
+         * controls (GAP-70), so the panel title bar needs 31px for its
+         * bottom separator to keep lining up with the tab bar's line
+         * (26px originally; 31/34/36px over the user's visual passes; macOS PanelFrame keeps the same alignment
+         * invariant). Classic keeps the 25px base. */
+        ".npp-modern .nextpad-panel-frame-titlebar { min-height: 36px; }\n");
 
     /* Full-tab colour tint (Tahoe) instead of Classic's 3px stripe. The
      * selectors out-specify the stripe rules from install_tab_color_css. */
