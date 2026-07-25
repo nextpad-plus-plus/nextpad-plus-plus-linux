@@ -3524,7 +3524,7 @@ void editor_goto_line_dialog(void)
         (uptr_t)editor_send(SCI_GETLENGTH, 0, 0), 0) + 1;
     GtkAdjustment *adj = gtk_adjustment_new(1, 1, (gdouble)lines, 1, 10, 0);
     GtkWidget *spin = gtk_spin_button_new(adj, 1, 0);
-    gtk_entry_set_activates_default(GTK_ENTRY(spin), TRUE);
+    npp_spin_activates_default(spin);
     npp_box_pack(GTK_BOX(hbox), spin, TRUE, 0);
 
     gtk_widget_show_all(dlg);

@@ -1082,7 +1082,7 @@ void macro_run_multiple_dialog(GtkWidget *sci, GtkWindow *parent)
     npp_toggle_set_active(radio_n, TRUE);
     GtkWidget *spin = gtk_spin_button_new_with_range(1, 100000, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin), 1);
-    gtk_entry_set_activates_default(GTK_ENTRY(spin), TRUE);
+    npp_spin_activates_default(spin);
     npp_box_pack(GTK_BOX(row), radio_n, FALSE, 0);
     npp_box_pack(GTK_BOX(row), spin, FALSE, 0);
     npp_box_pack(GTK_BOX(row), gtk_label_new("times"), FALSE, 0);

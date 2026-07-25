@@ -153,6 +153,17 @@ static inline void npp_container_remove(GtkWidget *parent, GtkWidget *child)
 }
 #define gtk_container_remove(p, c)  npp_container_remove(GTK_WIDGET(p), (c))
 
+/* GAP-100 — GTK4's GtkSpinButton no longer derives from GtkEntry (the
+ * GTK3 GTK_ENTRY(spin) cast trips a critical and does nothing): reach
+ * the inner GtkText through the editable delegate so Enter still
+ * activates the dialog's default button. */
+static inline void npp_spin_activates_default(GtkWidget *spin)
+{
+    GtkEditable *d = gtk_editable_get_delegate(GTK_EDITABLE(spin));
+    if (GTK_IS_TEXT(d))
+        g_object_set(d, "activates-default", TRUE, NULL);
+}
+
 /* gtk_container_get_children → walk the GTK4 child list into a GList. */
 static inline GList *npp_container_children(GtkWidget *parent)
 {
@@ -248,8 +259,18 @@ static inline gboolean npp_toggle_get_active(GtkWidget *w)
 #define gtk_toggle_button_set_active(b, a) npp_toggle_set_active((GtkWidget *)(b), (a))
 #define gtk_toggle_button_get_active(b)    npp_toggle_get_active((GtkWidget *)(b))
 
-/* ── gtk_dialog_run → nested GMainLoop shim (same technique GTK3 used) ──── */
-typedef struct { GMainLoop *loop; int response; } NppDlgRun;
+/* ── gtk_dialog_run → nested GMainLoop shim (same technique GTK3 used) ────
+ *
+ * GAP-100 hardening: in GTK4, Esc / the titlebar ✕ DESTROY the dialog
+ * (GTK3 only hid it). Every gtk_dialog_run caller reads its widgets
+ * after the call returns, so a destroyed dialog meant reads on freed
+ * memory (the logged combo/spin/get_parent criticals) — and any close
+ * path that skipped the response left the nested loop spinning forever
+ * (the Define-Your-Language freeze family). The shim restores the GTK3
+ * contract: close-request is vetoed and turned into the DELETE_EVENT
+ * response, so the dialog survives until the caller destroys it. A
+ * destroy backstop quits the loop should the dialog die regardless. */
+typedef struct { GMainLoop *loop; int response; gboolean destroyed; } NppDlgRun;
 static inline void npp__dlg_response(GtkDialog *d, int resp, gpointer u)
 {
     (void)d;
@@ -257,16 +278,36 @@ static inline void npp__dlg_response(GtkDialog *d, int resp, gpointer u)
     r->response = resp;
     if (g_main_loop_is_running(r->loop)) g_main_loop_quit(r->loop);
 }
+static inline gboolean npp__dlg_close_request(GtkWindow *w, gpointer u)
+{
+    (void)u;
+    gtk_dialog_response(GTK_DIALOG(w), GTK_RESPONSE_DELETE_EVENT);
+    return TRUE;   /* veto the destroy — the GTK3 close behaviour */
+}
+static inline void npp__dlg_destroyed(GtkWidget *w, gpointer u)
+{
+    (void)w;
+    NppDlgRun *r = u;
+    r->destroyed = TRUE;
+    if (g_main_loop_is_running(r->loop)) g_main_loop_quit(r->loop);
+}
 static inline int npp_dialog_run(GtkWidget *dialog)
 {
-    NppDlgRun r = { g_main_loop_new(NULL, FALSE), GTK_RESPONSE_NONE };
-    gulong h = g_signal_connect(dialog, "response",
-                                G_CALLBACK(npp__dlg_response), &r);
+    NppDlgRun r = { g_main_loop_new(NULL, FALSE), GTK_RESPONSE_NONE, FALSE };
+    gulong h  = g_signal_connect(dialog, "response",
+                                 G_CALLBACK(npp__dlg_response), &r);
+    gulong hc = g_signal_connect(dialog, "close-request",
+                                 G_CALLBACK(npp__dlg_close_request), &r);
+    gulong hd = g_signal_connect(dialog, "destroy",
+                                 G_CALLBACK(npp__dlg_destroyed), &r);
     gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
     gtk_window_present(GTK_WINDOW(dialog));
     g_main_loop_run(r.loop);
-    if (g_signal_handler_is_connected(dialog, h))
+    if (!r.destroyed) {
         g_signal_handler_disconnect(dialog, h);
+        g_signal_handler_disconnect(dialog, hc);
+        g_signal_handler_disconnect(dialog, hd);
+    }
     g_main_loop_unref(r.loop);
     return r.response;
 }
