@@ -41,4 +41,22 @@ void panel_frame_set_chrome_visible(GtkWidget *frame, gboolean visible);
  * stays. Panels are detachable by default. */
 void panel_frame_set_detachable(GtkWidget *frame, gboolean detachable);
 
+/* GAP-101 — run the frame's ✕ close chain programmatically (macOS
+ * PanelFrame simulateCloseClick): floating.c routes the float window's
+ * close button through this so closing the window closes the PANEL. */
+void panel_frame_simulate_close(GtkWidget *frame);
+
+/* GAP-101 — re-derive the pop icon from floating_is_floating(); called
+ * by floating.c after dock-backs that bypass the frame's pop button. */
+void panel_frame_refresh_pop_icon(GtkWidget *frame);
+
+/* GAP-101 — themed icon loader for the float-window header buttons:
+ * resources/icons/<standard|dark>/<subpath>.png pre-scaled to px×px.
+ * force_standard pins the standard asset even in dark mode (macOS does
+ * this for the blue "pinned" tack); fallback_icon is a stock name used
+ * when the asset is missing. */
+GtkWidget *panel_frame_icon_image(const char *subpath, int px,
+                                  gboolean force_standard,
+                                  const char *fallback_icon);
+
 #endif /* PANEL_FRAME_H */

@@ -7127,6 +7127,22 @@ static void side_dock_chain_rebuild(GtkWidget *host) {
     memcpy(s_last_set, vis, sizeof(vis[0]) * (size_t)n);
     s_last_set_n = n;
 
+    /* GAP-102 — the rebuild unparents frames; if the window's focused
+     * widget sits inside the dock, GTK clears the focus chain across
+     * the paneds mid-teardown and logs stale focus-child warnings.
+     * Hand focus to the editor first (the natural post-close target). */
+    {
+        GtkRoot *root = gtk_widget_get_root(host);
+        if (GTK_IS_WINDOW(root)) {
+            GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(root));
+            if (focus && gtk_widget_is_ancestor(focus, host)) {
+                GtkWidget *sci = current_sci();
+                if (sci) gtk_widget_grab_focus(sci);
+                else     gtk_window_set_focus(GTK_WINDOW(root), NULL);
+            }
+        }
+    }
+
     /* Normalize: EVERY frame still inside the old chain — visible or
      * not — back into the host box BEFORE the chain is dropped. A frame
      * that just went hidden is not in vis[] but still sits in the old

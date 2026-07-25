@@ -8,6 +8,7 @@
  */
 #include "floating.h"
 #include "gtk_compat.h"
+#include "panel_frame.h"
 #include <string.h>
 
 typedef enum {
@@ -83,7 +84,25 @@ void floating_register(const char *name, GtkWidget *widget) {
     /* Default geometry for popout. */
     e->float_w = 400;
     e->float_h = 600;
-    e->pinned  = TRUE;   /* panels float above the editor by default */
+    /* GAP-101 — a fresh pop-out starts UNPINNED (macOS
+     * FloatingPanelWindow default); persisted pin state still wins via
+     * floating_set_state on session restore. */
+    e->pinned  = FALSE;
+}
+
+/* GAP-101 — macOS pin visuals: outline tack unpinned (theme-keyed),
+ * blue filled tack pinned (ALWAYS the standard asset, matching
+ * FloatingPanelWindow.mm which hardcodes the standard dir), with the
+ * macOS tooltips. */
+static void pin_apply_visuals(GtkWidget *pin, gboolean pinned) {
+    gtk_button_set_child(GTK_BUTTON(pin),
+        pinned ? panel_frame_icon_image("tabbar/pinTabButton_pinned", 16,
+                                        TRUE,  "view-pin-symbolic")
+               : panel_frame_icon_image("tabbar/pinTabButton", 16,
+                                        FALSE, "view-pin-symbolic"));
+    gtk_widget_set_tooltip_text(pin,
+        pinned ? "Window is pinned on top — click to unpin"
+               : "Pin window on top");
 }
 
 /* GAP-72 — pin toggle: transient-for-main on, free toplevel off. */
@@ -95,6 +114,22 @@ static void on_pin_toggled(GtkToggleButton *b, gpointer win)
     if (e) e->pinned = pinned;
     gtk_window_set_transient_for(GTK_WINDOW(win),
         pinned && GTK_IS_WINDOW(main_root) ? GTK_WINDOW(main_root) : NULL);
+    pin_apply_visuals(GTK_WIDGET(b), pinned);   /* GAP-101 */
+}
+
+/* GAP-101 — float-header "Dock back" button (macOS _FPWDockBackButton).
+ * Deferred to an idle: the button sits in the header bar of the window
+ * dock-back destroys — don't tear it down mid-"clicked". */
+static gboolean popin_idle(gpointer name) {
+    floating_dockback(name);
+    g_free(name);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_popin_clicked(GtkButton *b, gpointer ud) {
+    (void)b;
+    FloatingEntry *e = ud;
+    g_idle_add(popin_idle, g_strdup(e->name));
 }
 
 /* Reparent the widget from its float window back into the captured dock
@@ -104,6 +139,8 @@ static void on_pin_toggled(GtkToggleButton *b, gpointer win)
 static void dockback_reparent(FloatingEntry *e) {
     g_object_ref(e->widget);
     gtk_container_remove(GTK_CONTAINER(e->float_window), e->widget);
+    /* GAP-101 — restore the frame's own title bar for docked life. */
+    panel_frame_set_chrome_visible(e->widget, TRUE);
 
     switch (e->slot) {
     case SLOT_PANED_1:
@@ -135,14 +172,21 @@ static gboolean on_float_window_delete(GtkWindow *w, gpointer ud) {
     if (!e) return FALSE;
     /* Persist geometry before closing. */
     gtk_window_get_size(w, &e->float_w, &e->float_h);
-    /* GAP-98: reparent only, then let GTK's default close-request path
-     * destroy the (now childless) window — the old code destroyed it
-     * mid-emission and returned TRUE, leaving GTK to finish the signal
-     * on a torn-down instance. */
+    /* GAP-101 — macOS red-✕ semantics (windowShouldClose →
+     * simulateCloseClick): closing the float window closes the PANEL,
+     * it does not dock it back open. Reparent the frame into its dock
+     * slot first (GAP-98: never destroy the window mid-emission), then
+     * run the frame's ✕ chain — with float_window already NULL the
+     * chain skips its dock-back branch and simply hides the content,
+     * driving the module visibility flag, the dock recount and the
+     * toolbar sync. Reopening from the menu shows the panel docked,
+     * exactly like macOS. */
     dockback_reparent(e);
     e->float_window = NULL;
+    panel_frame_refresh_pop_icon(e->widget);   /* GAP-101 */
+    panel_frame_simulate_close(e->widget);
     if (s_layout_hook) s_layout_hook();
-    return FALSE;
+    return FALSE;   /* let GTK destroy the now-childless window */
 }
 
 void floating_popout(const char *name) {
@@ -160,6 +204,16 @@ void floating_popout(const char *name) {
      * frame up from there. */
     GtkWidget *live_parent = gtk_widget_get_parent(e->widget);
     if (!live_parent) return;
+
+    /* GAP-102 — if the focused widget sits inside the frame we're about
+     * to unparent, clear the main window's focus first: GTK otherwise
+     * clears the chain mid-removal and logs stale paned focus-child
+     * warnings (the float window takes focus right after anyway). */
+    if (GTK_IS_WINDOW(main_root)) {
+        GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(main_root));
+        if (focus && gtk_widget_is_ancestor(focus, e->widget))
+            gtk_window_set_focus(GTK_WINDOW(main_root), NULL);
+    }
 
     /* Hold a ref so the widget survives reparenting. */
     g_object_ref(e->widget);
@@ -182,11 +236,23 @@ void floating_popout(const char *name) {
      * levels, so pin = transient-for-main; unpin = free-floating. */
     {
         GtkWidget *hb  = gtk_header_bar_new();
+        /* GAP-101 — macOS float chrome: [pin][pop-in] at the trailing
+         * edge (FloatingPanelWindow accessory). pack_end order: first
+         * packed lands rightmost, so pop-in goes in first. */
+        GtkWidget *popin = gtk_button_new();
+        gtk_button_set_child(GTK_BUTTON(popin),
+            panel_frame_icon_image("panels/toolbar/pop_in", 16,
+                                   FALSE, "go-down"));
+        gtk_button_set_has_frame(GTK_BUTTON(popin), FALSE);
+        gtk_widget_set_tooltip_text(popin, "Dock back");
+        g_signal_connect(popin, "clicked",
+                         G_CALLBACK(on_popin_clicked), e);
+        gtk_header_bar_pack_end(GTK_HEADER_BAR(hb), popin);
+
         GtkWidget *pin = gtk_toggle_button_new();
-        gtk_button_set_icon_name(GTK_BUTTON(pin), "view-pin-symbolic");
         gtk_button_set_has_frame(GTK_BUTTON(pin), FALSE);
-        gtk_widget_set_tooltip_text(pin, "Keep above the main window");
         npp_toggle_set_active(pin, e->pinned);
+        pin_apply_visuals(pin, e->pinned);
         g_object_set_data(G_OBJECT(pin), "float-entry", e);
         g_object_set_data(G_OBJECT(pin), "float-main",  main_root);
         g_signal_connect(pin, "toggled", G_CALLBACK(on_pin_toggled), win);
@@ -200,6 +266,12 @@ void floating_popout(const char *name) {
     gtk_container_add(GTK_CONTAINER(win), e->widget);
     g_object_unref(e->widget);
 
+    /* GAP-101 — the float window's native chrome (title + ✕ + pin +
+     * pop-in) takes over: collapse the frame's own title bar so the
+     * popped panel doesn't show a double header (macOS PanelFrame
+     * setPopped: collapses to 0). */
+    panel_frame_set_chrome_visible(e->widget, FALSE);
+
     gtk_widget_show_all(win);
     e->float_window = win;
     if (s_layout_hook) s_layout_hook();
@@ -212,6 +284,7 @@ void floating_dockback(const char *name) {
     GtkWidget *win = e->float_window;
     dockback_reparent(e);
     e->float_window = NULL;
+    panel_frame_refresh_pop_icon(e->widget);   /* GAP-101 */
     gtk_widget_destroy(win);
     if (s_layout_hook) s_layout_hook();
 }

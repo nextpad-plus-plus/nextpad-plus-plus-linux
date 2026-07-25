@@ -224,6 +224,32 @@ static GtkWidget *pf_make_pop_image(gboolean popped) {
     return img;
 }
 
+/* GAP-101 — shared with floating.c for the float-window header chrome:
+ * load an icon PNG from resources/icons/<theme>/<subpath>.png at `px`,
+ * pre-scaled (same sharp-blit technique as pf_make_pop_image).
+ * `force_standard` pins the standard-theme asset even in dark mode —
+ * macOS does this for the blue "pinned" tack (FloatingPanelWindow.mm). */
+GtkWidget *panel_frame_icon_image(const char *subpath, int px,
+                                  gboolean force_standard,
+                                  const char *fallback_icon) {
+    const char *theme_subdir =
+        (!force_standard && pf_is_dark()) ? "dark" : "standard";
+    char path[1024];
+    g_snprintf(path, sizeof(path), "%s/icons/%s/%s.png",
+               RESOURCES_DIR, theme_subdir, subpath);
+    if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(path, px, px, NULL);
+        if (pb) {
+            GtkWidget *img = gtk_image_new_from_pixbuf(pb);
+            g_object_unref(pb);
+            return img;
+        }
+    }
+    GtkWidget *img = gtk_image_new_from_icon_name(fallback_icon);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), px);
+    return img;
+}
+
 static void pf_refresh_pop_icon(PanelFrameState *st) {
     gboolean popped = floating_is_floating(st->name);
     GtkWidget *new_img = pf_make_pop_image(popped);
@@ -265,6 +291,21 @@ static void on_close_clicked(GtkButton *btn, gpointer ud) {
         gtk_widget_hide(st->content);
     else
         gtk_widget_hide(frame);
+}
+
+/* GAP-101 — macOS PanelFrame simulateCloseClick: the float window's ✕
+ * routes through the exact same close chain as the title-bar ✕. */
+void panel_frame_simulate_close(GtkWidget *frame) {
+    g_return_if_fail(GTK_IS_WIDGET(frame));
+    on_close_clicked(NULL, frame);
+}
+
+/* GAP-101 — re-derive the pop button icon from the live floating state;
+ * floating.c calls this after a dock-back that didn't go through the
+ * frame's own pop button (header pop-in, float-window ✕). */
+void panel_frame_refresh_pop_icon(GtkWidget *frame) {
+    PanelFrameState *st = pf_state(frame);
+    if (st) pf_refresh_pop_icon(st);
 }
 
 static void on_pop_clicked(GtkButton *btn, gpointer ud) {
