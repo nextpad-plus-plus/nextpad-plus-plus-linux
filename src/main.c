@@ -6944,6 +6944,7 @@ static GtkWidget *g_side_panel_host;
 
 static void on_panel_frame_show(GtkWidget *frame, gpointer user_data);
 static void on_panel_frame_hide(GtkWidget *frame, gpointer user_data);
+static void side_dock_register_frame(GtkWidget *frame);   /* GAP-99 */
 
 GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
                                     GtkWidget *content)
@@ -6961,6 +6962,7 @@ GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
                      G_CALLBACK(on_panel_frame_show), g_side_panel_host);
     g_signal_connect(frame, "hide",
                      G_CALLBACK(on_panel_frame_hide), g_side_panel_host);
+    side_dock_register_frame(frame);   /* GAP-99 */
     return frame;
 }
 
@@ -7040,10 +7042,141 @@ static gboolean side_host_any_visible(GtkWidget *host) {
     return FALSE;
 }
 
+/* ── GAP-99 — draggable vertical dividers between stacked panels ─────────
+ *
+ * macOS (SidePanelHost.mm) stacks docked panels in a vertical NSSplitView:
+ * thin draggable dividers, and whenever the SET of docked panels changes
+ * (show / hide / pop-out / dock-back) heights snap back to 1/N each —
+ * between change events the user's drag positions hold. No persistence
+ * across launches (by design, macOS 3c2c4a9). GTK4 has no N-child paned,
+ * so N visible frames are re-nested into a chain of N−1 vertical
+ * GtkPaneds (frame₀ / (frame₁ / (… / frameₙ₋₁))) rebuilt on every set
+ * change; hidden frames park in the host box exactly as before. The
+ * rebuild is skipped when the set is unchanged, which is precisely what
+ * preserves the user's divider drags. */
+#define MAX_DOCK_FRAMES 64
+static GtkWidget *s_dock_frames[MAX_DOCK_FRAMES]; /* registration = stack order */
+static int        s_dock_frame_n;
+static GtkWidget *s_chain_root;                   /* paned chain when N ≥ 2 */
+static GtkWidget *s_last_set[MAX_DOCK_FRAMES];    /* set at last rebuild */
+static int        s_last_set_n;
+static guint      s_redist_source;
+static int        s_redist_tries;
+
+static void side_dock_register_frame(GtkWidget *frame) {
+    if (!frame || s_dock_frame_n >= MAX_DOCK_FRAMES) return;
+    s_dock_frames[s_dock_frame_n++] = frame;
+    /* macOS floor: 24 pt title bar + a content sliver — a divider drag
+     * (shrink = FALSE below) can never crush a panel past this. */
+    gtk_widget_set_size_request(frame, -1, 40);
+}
+
+/* Equalize: every paned's start child is exactly one 1/N slice, so the
+ * SAME position value applies at every level of the chain — no need to
+ * wait for the inner paneds' own allocations. Retries until the chain
+ * root is allocated (startup restore runs before the window maps). */
+static gboolean side_dock_redistribute_cb(gpointer d) {
+    (void)d;
+    if (!s_chain_root) { s_redist_source = 0; return G_SOURCE_REMOVE; }
+    GtkAllocation a;
+    gtk_widget_get_allocation(s_chain_root, &a);
+    if (a.height <= 1) {
+        if (++s_redist_tries < 600) return G_SOURCE_CONTINUE;
+        s_redist_source = 0;
+        return G_SOURCE_REMOVE;   /* never mapped — give up */
+    }
+    int m = 1;
+    for (GtkWidget *p = s_chain_root; GTK_IS_PANED(p);
+         p = gtk_paned_get_end_child(GTK_PANED(p)))
+        m++;
+    int slice = a.height / m;
+    for (GtkWidget *p = s_chain_root; GTK_IS_PANED(p);
+         p = gtk_paned_get_end_child(GTK_PANED(p)))
+        gtk_paned_set_position(GTK_PANED(p), slice);
+    s_redist_source = 0;
+    return G_SOURCE_REMOVE;
+}
+
+static void side_dock_schedule_redistribute(void) {
+    if (s_redist_source) g_source_remove(s_redist_source);
+    s_redist_tries  = 0;
+    s_redist_source = g_timeout_add(16, side_dock_redistribute_cb, NULL);
+}
+
+static void side_dock_chain_rebuild(GtkWidget *host) {
+    GtkWidget *vis[MAX_DOCK_FRAMES];
+    int n = 0;
+    for (int i = 0; i < s_dock_frame_n; i++) {
+        GtkWidget *f = s_dock_frames[i];
+        GtkWidget *p = f ? gtk_widget_get_parent(f) : NULL;
+        if (!p || !gtk_widget_get_visible(f)) continue;
+        /* Docked = in the host box or inside the current chain; a
+         * floating frame's parent is its float window — excluded. */
+        if (p != host && !(s_chain_root && gtk_widget_is_ancestor(f, s_chain_root)))
+            continue;
+        vis[n++] = f;
+    }
+
+    /* Unchanged set → keep the user's divider drags (the macOS rule). */
+    if (n == s_last_set_n) {
+        gboolean same = TRUE;
+        for (int i = 0; i < n; i++)
+            if (vis[i] != s_last_set[i]) { same = FALSE; break; }
+        if (same) return;
+    }
+    memcpy(s_last_set, vis, sizeof(vis[0]) * (size_t)n);
+    s_last_set_n = n;
+
+    /* Normalize: EVERY frame still inside the old chain — visible or
+     * not — back into the host box BEFORE the chain is dropped. A frame
+     * that just went hidden is not in vis[] but still sits in the old
+     * chain; dropping the root without rescuing it would finalize the
+     * frame (and the panel content) with the paneds. */
+    if (s_chain_root) {
+        for (int i = 0; i < s_dock_frame_n; i++) {
+            GtkWidget *f = s_dock_frames[i];
+            if (!f || !gtk_widget_is_ancestor(f, s_chain_root)) continue;
+            g_object_ref(f);
+            gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(f)), f);
+            npp_box_pack(GTK_BOX(host), f, TRUE, 0);
+            g_object_unref(f);
+        }
+        gtk_box_remove(GTK_BOX(host), s_chain_root);
+        s_chain_root = NULL;
+    }
+    if (n < 2) return;   /* 0/1 panels: no dividers; the box handles it */
+
+    GtkWidget *tail = NULL;
+    for (int i = 0; i < n - 1; i++) {
+        GtkWidget *pd = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
+        gtk_widget_set_vexpand(pd, TRUE);
+        gtk_paned_set_shrink_start_child(GTK_PANED(pd), FALSE);
+        gtk_paned_set_shrink_end_child(GTK_PANED(pd), FALSE);
+        /* Outer-height changes go to the bottom-most panel (macOS: the
+         * flexible last subview absorbs window resizes). */
+        gtk_paned_set_resize_start_child(GTK_PANED(pd), FALSE);
+        gtk_paned_set_resize_end_child(GTK_PANED(pd), TRUE);
+        if (tail) gtk_paned_set_end_child(GTK_PANED(tail), pd);
+        else      s_chain_root = pd;
+        g_object_ref(vis[i]);
+        gtk_box_remove(GTK_BOX(host), vis[i]);
+        gtk_paned_set_start_child(GTK_PANED(pd), vis[i]);
+        g_object_unref(vis[i]);
+        tail = pd;
+    }
+    g_object_ref(vis[n - 1]);
+    gtk_box_remove(GTK_BOX(host), vis[n - 1]);
+    gtk_paned_set_end_child(GTK_PANED(tail), vis[n - 1]);
+    g_object_unref(vis[n - 1]);
+    npp_box_pack(GTK_BOX(host), s_chain_root, TRUE, 0);
+    side_dock_schedule_redistribute();
+}
+
 static void side_host_recount(GtkWidget *host, GtkWidget *opened_frame) {
     GtkWidget *frame = opened_frame;
     GtkWidget *paned = GTK_WIDGET(g_object_get_data(G_OBJECT(host),
                                                     "npp-hpaned"));
+    side_dock_chain_rebuild(host);   /* GAP-99 — re-nest on set change */
     if (side_host_any_visible(host)) {
         /* GAP-82 (macOS 619750a): position the divider only when the
          * pane was COLLAPSED — stacking a second panel into an open
@@ -7344,6 +7477,7 @@ static void build_main_window(GtkApplication *app)
                          G_CALLBACK(on_panel_frame_show), side_panel_host);
         g_signal_connect(side_frames[i], "hide",
                          G_CALLBACK(on_panel_frame_hide), side_panel_host);
+        side_dock_register_frame(side_frames[i]);   /* GAP-99 */
     }
 
     /* G22 incremental search bar — revealer above the status bar. */

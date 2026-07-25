@@ -153,9 +153,17 @@ void floating_popout(const char *name) {
      * removal below unparents everything. */
     GtkRoot *main_root = gtk_widget_get_root(e->parent);
 
+    /* GAP-99: remove from the LIVE parent, not the captured slot — the
+     * paned-chain dock re-nests frames, so the frame may sit inside a
+     * GtkPaned even though it was registered in the host box. Dock-back
+     * still targets the captured e->parent; the chain rebuild picks the
+     * frame up from there. */
+    GtkWidget *live_parent = gtk_widget_get_parent(e->widget);
+    if (!live_parent) return;
+
     /* Hold a ref so the widget survives reparenting. */
     g_object_ref(e->widget);
-    gtk_container_remove(GTK_CONTAINER(e->parent), e->widget);
+    gtk_container_remove(GTK_CONTAINER(live_parent), e->widget);
 
     /* GAP-98: the removal emits no hide — let the dock re-derive its
      * visibility (collapses when the detached panel was the last one). */
