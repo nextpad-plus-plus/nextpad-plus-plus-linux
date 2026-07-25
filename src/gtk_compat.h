@@ -136,6 +136,19 @@ static inline void npp_container_remove(GtkWidget *parent, GtkWidget *child)
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), NULL);
     else if (GTK_IS_FRAME(parent))
         gtk_frame_set_child(GTK_FRAME(parent), NULL);
+    /* GAP-100 — every set_child single-child parent the ADD path above
+     * handles must be detachable here too: the bare unparent fallback
+     * finalized the child while the parent's internal pointer still
+     * referenced it (panel pop-icon swap → CSS-node corruption + a
+     * later unparent on freed memory). */
+    else if (GTK_IS_BUTTON(parent))
+        gtk_button_set_child(GTK_BUTTON(parent), NULL);
+    else if (GTK_IS_LIST_BOX_ROW(parent))
+        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(parent), NULL);
+    else if (GTK_IS_VIEWPORT(parent))
+        gtk_viewport_set_child(GTK_VIEWPORT(parent), NULL);
+    else if (GTK_IS_REVEALER(parent))
+        gtk_revealer_set_child(GTK_REVEALER(parent), NULL);
     else                              gtk_widget_unparent(child);
 }
 #define gtk_container_remove(p, c)  npp_container_remove(GTK_WIDGET(p), (c))

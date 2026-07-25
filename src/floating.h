@@ -48,4 +48,9 @@ void floating_capture_geometry(void);
  * these transitions — the hook lets panelstate re-save popped flags). */
 void floating_set_layout_hook(void (*hook)(void));
 
+/* GAP-98 — called after the frame is removed from / re-packed into the
+ * dock (same no-signal reason): main.c re-derives the dock's visibility.
+ * The frame is passed on dock-back (width restore), NULL on pop-out. */
+void floating_set_dock_hook(void (*hook)(GtkWidget *frame_or_null));
+
 #endif /* FLOATING_H */

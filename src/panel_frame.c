@@ -247,6 +247,14 @@ static void on_close_clicked(GtkButton *btn, gpointer ud) {
     PanelFrameState *st = pf_state(frame);
     if (!st) return;
     g_message("panel_frame: close clicked for '%s'", st->name);
+    /* GAP-98 — ✕ on a floating panel: dock it back first so the float
+     * window closes with it (hiding the content alone left an empty
+     * float shell on screen). macOS closes the floating window too;
+     * the panel reopens docked, matching hidePanel. */
+    if (floating_is_floating(st->name)) {
+        floating_toggle(st->name);
+        pf_refresh_pop_icon(st);
+    }
     if (st->on_close)
         st->on_close(frame, st->on_close_user);
     else if (st->content)

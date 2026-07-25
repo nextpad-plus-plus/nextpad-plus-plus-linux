@@ -6950,12 +6950,17 @@ GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
 {
     if (!g_side_panel_host || !content) return NULL;
     GtkWidget *frame = panel_frame_new(name, title, content, NULL, NULL);
+    /* GAP-98: born-hidden BEFORE packing/connecting — the frame inherits
+     * the content's visible flag (usually TRUE), and hiding it after the
+     * handlers were connected emitted a hide for a frame whose show was
+     * never seen (the old counter took a phantom −1 and later collapsed
+     * the dock with a panel still open). */
+    gtk_widget_set_visible(frame, FALSE);
     npp_box_pack(GTK_BOX(g_side_panel_host), frame, TRUE, 0);
     g_signal_connect(frame, "show",
                      G_CALLBACK(on_panel_frame_show), g_side_panel_host);
     g_signal_connect(frame, "hide",
                      G_CALLBACK(on_panel_frame_hide), g_side_panel_host);
-    gtk_widget_set_visible(frame, FALSE);
     return frame;
 }
 
@@ -7008,17 +7013,38 @@ static gboolean apply_pending_paned_pos(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-static void side_host_bump(GtkWidget *host, int delta, GtkWidget *frame) {
-    int n = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(host),
-                                              "npp-visible-count"));
-    n += delta;
-    if (n < 0) n = 0;
-    g_object_set_data(G_OBJECT(host), "npp-visible-count",
-                      GINT_TO_POINTER(n));
+/* GAP-98 — the toolbar panel toggles mirror *_is_visible(), which probes
+ * the CONTENT widget; on open the frame shows before the content does, so
+ * sync from an idle where both have settled (coalesced). */
+static guint s_tb_sync_idle;
 
+static gboolean tb_sync_idle_cb(gpointer d) {
+    (void)d;
+    s_tb_sync_idle = 0;
+    toolbar_sync_panels();
+    return G_SOURCE_REMOVE;
+}
+
+/* GAP-98 — dock visibility is DERIVED from the children on every change,
+ * never counted: the old "npp-visible-count" integer desynced (plugin
+ * attach emitted a hide that was never counted as a show; float pop-out /
+ * dock-back moved frames without any show/hide at all) and once it hit 0
+ * with a panel still visible the whole dock vanished. macOS keeps
+ * arrangedSubviews as the single source of truth (SidePanelHost.mm) —
+ * this is the GTK equivalent. `opened_frame` is the frame that just
+ * became visible (drives the width restore), NULL otherwise. */
+static gboolean side_host_any_visible(GtkWidget *host) {
+    for (GtkWidget *c = gtk_widget_get_first_child(host); c;
+         c = gtk_widget_get_next_sibling(c))
+        if (gtk_widget_get_visible(c)) return TRUE;
+    return FALSE;
+}
+
+static void side_host_recount(GtkWidget *host, GtkWidget *opened_frame) {
+    GtkWidget *frame = opened_frame;
     GtkWidget *paned = GTK_WIDGET(g_object_get_data(G_OBJECT(host),
                                                     "npp-hpaned"));
-    if (n > 0) {
+    if (side_host_any_visible(host)) {
         /* GAP-82 (macOS 619750a): position the divider only when the
          * pane was COLLAPSED — stacking a second panel into an open
          * pane must never jump the width the user chose. */
@@ -7056,14 +7082,24 @@ static void side_host_bump(GtkWidget *host, int delta, GtkWidget *frame) {
     } else {
         gtk_widget_hide(host);
     }
+    if (!s_tb_sync_idle)
+        s_tb_sync_idle = g_idle_add(tb_sync_idle_cb, NULL);
 }
 
 static void on_panel_frame_show(GtkWidget *frame, gpointer user_data) {
-    side_host_bump(GTK_WIDGET(user_data), +1, frame);
+    side_host_recount(GTK_WIDGET(user_data), frame);
 }
 
 static void on_panel_frame_hide(GtkWidget *frame, gpointer user_data) {
-    side_host_bump(GTK_WIDGET(user_data), -1, frame);
+    (void)frame;
+    side_host_recount(GTK_WIDGET(user_data), NULL);
+}
+
+/* GAP-98 — floating.c moves frames in/out of the dock without any
+ * show/hide emission; it calls this hook after each transition. */
+static void side_host_dock_changed(GtkWidget *frame_or_null) {
+    if (g_side_panel_host)
+        side_host_recount(g_side_panel_host, frame_or_null);
 }
 
 /* GAP-82 — a user drag of the hpaned divider resized the side pane:
@@ -7268,15 +7304,14 @@ static void build_main_window(GtkApplication *app)
     if (project_frame)   npp_box_pack(GTK_BOX(side_panel_host), project_frame, TRUE, 0);
     if (charpanel_frame)   npp_box_pack(GTK_BOX(side_panel_host), charpanel_frame, TRUE, 0);
     if (cliphistory_frame) npp_box_pack(GTK_BOX(side_panel_host), cliphistory_frame, TRUE, 0);
-    /* Q14 — collapse host when every panel inside is hidden; reveal it
-     * (and set a reasonable paned position) when any becomes visible.
-     * Tracked by counting "show"/"hide" signals across the panel frames.
+    /* Q14/GAP-98 — collapse host when every panel inside is hidden;
+     * reveal it (and set a reasonable paned position) when any becomes
+     * visible. Derived from the children by side_host_recount on every
+     * frame show/hide — never counted.
      * Note: NO `no_show_all` here — show_all must recurse into every frame
      * so the title bar, separator and inner panel widgets get prepared.
      * We then hide the host explicitly at the bottom of build_main_window
      * after all panel contents have been hidden. */
-    g_object_set_data(G_OBJECT(side_panel_host), "npp-visible-count",
-                      GINT_TO_POINTER(0));
 
     GtkWidget *hpaned1 = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_paned_pack1(GTK_PANED(hpaned1), vpaned,          TRUE,  FALSE);
@@ -7453,6 +7488,7 @@ static void build_main_window(GtkApplication *app)
     panelstate_register("mdpreview",   mdpanel_frame,     TRUE);
     panelstate_register("gitpanel",    gitpanel_frame,    FALSE);
     floating_set_layout_hook(panelstate_layout_changed);
+    floating_set_dock_hook(side_host_dock_changed);   /* GAP-98 */
     /* Replay the saved open/popped panel layout (gated on the
      * "Remember panel visibility" pref inside). Panels are built,
      * hidden and registered by now; this also un-suspends state

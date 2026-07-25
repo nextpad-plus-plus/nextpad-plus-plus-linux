@@ -37,6 +37,9 @@ static int           s_n = 0;
 /* GAP-83 — panelstate.c re-saves open+popped state on every pop-out /
  * dock-back (these transitions emit no show/hide; macOS b98a360). */
 static void (*s_layout_hook)(void);
+/* GAP-98 — main.c re-derives the dock's visibility (and restores its
+ * width) after every pop-out / dock-back; same no-show/hide reason. */
+static void (*s_dock_hook)(GtkWidget *frame_or_null);
 
 static FloatingEntry *find_entry(const char *name) {
     for (int i = 0; i < s_n; i++)
@@ -94,21 +97,51 @@ static void on_pin_toggled(GtkToggleButton *b, gpointer win)
         pinned && GTK_IS_WINDOW(main_root) ? GTK_WINDOW(main_root) : NULL);
 }
 
+/* Reparent the widget from its float window back into the captured dock
+ * slot. Does NOT touch e->float_window — the two callers own the
+ * window's fate (explicit destroy vs. letting GTK's close-request
+ * default run). */
+static void dockback_reparent(FloatingEntry *e) {
+    g_object_ref(e->widget);
+    gtk_container_remove(GTK_CONTAINER(e->float_window), e->widget);
+
+    switch (e->slot) {
+    case SLOT_PANED_1:
+        gtk_paned_pack1(GTK_PANED(e->parent), e->widget, e->resize, e->shrink);
+        break;
+    case SLOT_PANED_2:
+        gtk_paned_pack2(GTK_PANED(e->parent), e->widget, e->resize, e->shrink);
+        break;
+    case SLOT_BOX_START:
+        npp_box_pack(GTK_BOX(e->parent), e->widget, TRUE, 0);
+        break;
+    case SLOT_BOX_END:
+        npp_box_pack_end(GTK_BOX(e->parent), e->widget, TRUE, 0);
+        break;
+    case SLOT_CONTAINER:
+    case SLOT_NONE:
+        gtk_container_add(GTK_CONTAINER(e->parent), e->widget);
+        break;
+    }
+    g_object_unref(e->widget);
+    gtk_widget_show(e->widget);
+    /* GAP-98: the re-pack emits no show — let the dock re-derive its
+     * visibility (and restore its width if it was collapsed). */
+    if (s_dock_hook) s_dock_hook(e->widget);
+}
+
 static gboolean on_float_window_delete(GtkWindow *w, gpointer ud) {
     FloatingEntry *e = (FloatingEntry *)ud;
     if (!e) return FALSE;
     /* Persist geometry before closing. */
     gtk_window_get_size(w, &e->float_w, &e->float_h);
-    /* Dock back. */
-    floating_dockback(e->name);
-    return TRUE;  /* we destroyed the window via dockback */
-}
-
-/* TRUE if `box` still has at least one visible child. */
-static gboolean box_has_visible_child(GtkWidget *box) {
-    for (GtkWidget *c = gtk_widget_get_first_child(box); c;
-         c = gtk_widget_get_next_sibling(c))
-        if (gtk_widget_get_visible(c)) return TRUE;
+    /* GAP-98: reparent only, then let GTK's default close-request path
+     * destroy the (now childless) window — the old code destroyed it
+     * mid-emission and returned TRUE, leaving GTK to finish the signal
+     * on a torn-down instance. */
+    dockback_reparent(e);
+    e->float_window = NULL;
+    if (s_layout_hook) s_layout_hook();
     return FALSE;
 }
 
@@ -116,18 +149,17 @@ void floating_popout(const char *name) {
     FloatingEntry *e = find_entry(name); if (!e || e->float_window) return;
     if (!e->widget || !e->parent) return;
 
+    /* Root of the docked parent = the main window; grab it BEFORE the
+     * removal below unparents everything. */
+    GtkRoot *main_root = gtk_widget_get_root(e->parent);
+
     /* Hold a ref so the widget survives reparenting. */
     g_object_ref(e->widget);
     gtk_container_remove(GTK_CONTAINER(e->parent), e->widget);
 
-    /* If the dock host (a box) is now empty, collapse it so the editor
-     * reclaims the space the detached panel occupied. */
-    if (GTK_IS_BOX(e->parent) && !box_has_visible_child(e->parent))
-        gtk_widget_set_visible(e->parent, FALSE);
-
-    /* Root of the docked parent = the main window; grab it BEFORE the
-     * removal below unparents everything. */
-    GtkRoot *main_root = gtk_widget_get_root(e->parent);
+    /* GAP-98: the removal emits no hide — let the dock re-derive its
+     * visibility (collapses when the detached panel was the last one). */
+    if (s_dock_hook) s_dock_hook(NULL);
 
     GtkWidget *win = gtk_window_new();
     char title[128];
@@ -169,36 +201,10 @@ void floating_dockback(const char *name) {
     FloatingEntry *e = find_entry(name); if (!e || !e->float_window) return;
     if (!e->widget || !e->parent) return;
 
-    g_object_ref(e->widget);
-    gtk_container_remove(GTK_CONTAINER(e->float_window), e->widget);
-
-    /* Re-show the dock host before re-inserting (popout may have hidden
-     * it once empty). */
-    if (e->parent) gtk_widget_set_visible(e->parent, TRUE);
-
-    switch (e->slot) {
-    case SLOT_PANED_1:
-        gtk_paned_pack1(GTK_PANED(e->parent), e->widget, e->resize, e->shrink);
-        break;
-    case SLOT_PANED_2:
-        gtk_paned_pack2(GTK_PANED(e->parent), e->widget, e->resize, e->shrink);
-        break;
-    case SLOT_BOX_START:
-        npp_box_pack(GTK_BOX(e->parent), e->widget, TRUE, 0);
-        break;
-    case SLOT_BOX_END:
-        npp_box_pack_end(GTK_BOX(e->parent), e->widget, TRUE, 0);
-        break;
-    case SLOT_CONTAINER:
-    case SLOT_NONE:
-        gtk_container_add(GTK_CONTAINER(e->parent), e->widget);
-        break;
-    }
-    g_object_unref(e->widget);
-
-    gtk_widget_destroy(e->float_window);
+    GtkWidget *win = e->float_window;
+    dockback_reparent(e);
     e->float_window = NULL;
-    gtk_widget_show(e->widget);
+    gtk_widget_destroy(win);
     if (s_layout_hook) s_layout_hook();
 }
 
@@ -241,4 +247,8 @@ void floating_capture_geometry(void) {
 
 void floating_set_layout_hook(void (*hook)(void)) {
     s_layout_hook = hook;
+}
+
+void floating_set_dock_hook(void (*hook)(GtkWidget *frame_or_null)) {
+    s_dock_hook = hook;
 }
