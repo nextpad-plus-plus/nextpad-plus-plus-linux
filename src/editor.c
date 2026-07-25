@@ -1885,6 +1885,17 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
 /* Tab switch                                                          */
 /* ------------------------------------------------------------------ */
 
+/* GAP-101 — see the call site at the bottom of on_switch_page. */
+static guint s_bufact_idle = 0;
+static gboolean notify_buffer_activated_idle(gpointer data)
+{
+    (void)data;
+    s_bufact_idle = 0;
+    NppDoc *doc = editor_current_doc();
+    if (doc) plugin_notify_buffer_activated(doc);
+    return G_SOURCE_REMOVE;
+}
+
 static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
                            guint page_num, gpointer data)
 {
@@ -1917,6 +1928,17 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
         funclist_update(sci);
     extern void main_mdpreview_notify_changed(void);
     main_mdpreview_notify_changed();
+    /* GAP-101 — NPPN_BUFFERACTIVATED on plain tab switches. It only fired
+     * via main_doclist_refresh (open/close/save paths), so clicking another
+     * tab never notified plugins: the Markdown panel kept rendering the old
+     * document, the Beads indicator kept the old view (macOS fires it on
+     * every tab activation). Deferred to idle because during a "switch-page"
+     * emission gtk_notebook_get_current_page still reports the OLD page (see
+     * watermark_refresh_for) — plugins react by querying
+     * NPPM_GETCURRENTSCINTILLA, which must resolve the settled state.
+     * Coalesced: a rapid switch burst fires once, for the final tab. */
+    if (s_bufact_idle) g_source_remove(s_bufact_idle);
+    s_bufact_idle = g_idle_add(notify_buffer_activated_idle, NULL);
 }
 
 /* ------------------------------------------------------------------ */
