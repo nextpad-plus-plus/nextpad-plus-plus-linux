@@ -15,6 +15,17 @@
  * limit, and that ceiling is shared by everyone behind the same NAT.
  */
 #include "updatecheck.h"
+/* TEMPORARY bring-up: the Linux repo is PRIVATE, and GitHub answers an
+ * unauthenticated request for a private repo with 404 — so without a
+ * token every check would report "no published release". Same embedded
+ * token plugins-admin uses (GITIGNORED src/github_token.h; env
+ * NPP_GITHUB_TOKEN overrides). Once the repo is public this is dead
+ * weight and the whole block can go. */
+#if defined(__has_include)
+#  if __has_include("github_token.h")
+#    include "github_token.h"
+#  endif
+#endif
 #include "prefs.h"
 #include "paths.h"
 #include "branding.h"
@@ -25,14 +36,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Same endpoint macOS uses: the public macOS repo is the release
- * source-of-truth and, unlike the private GTK4 repo, its releases API is
- * reachable without authentication. */
+/* The Linux port now has its own releases (deb + rpm, arm64 + x86, all
+ * carrying the same version), so it checks its OWN repo rather than the
+ * macOS one — a macOS tag says nothing about what Linux users can
+ * install. NOTE: this repo is private for now; see the token block
+ * above for why that matters. */
 static const char *kReleasesAPI =
     "https://api.github.com/repos/nextpad-plus-plus/"
-    "nextpad-plus-plus-macos/releases/latest";
+    "nextpad-plus-plus-linux/releases/latest";
 static const char *kDownloadPage =
-    "https://github.com/nextpad-plus-plus/nextpad-plus-plus-macos/releases/latest";
+    "https://github.com/nextpad-plus-plus/nextpad-plus-plus-linux/releases/latest";
 
 #define CHECK_INTERVAL   (24 * 60 * 60)   /* daily                     */
 #define RETRY_FLOOR      (10 * 60)        /* after a failure           */
@@ -367,6 +380,13 @@ void updatecheck_run(void (*done)(gpointer), gpointer user_data)
     char *inm = s_etag && *s_etag
                 ? g_strdup_printf("If-None-Match: %s", s_etag) : NULL;
 
+    const char *token = g_getenv("NPP_GITHUB_TOKEN");
+#ifdef NPP_EMBEDDED_GITHUB_TOKEN
+    if (!token || !*token) token = NPP_EMBEDDED_GITHUB_TOKEN;
+#endif
+    char *auth = (token && *token)
+                 ? g_strdup_printf("Authorization: Bearer %s", token) : NULL;
+
     /* NOTE: no -f. It would discard the body AND hide the status code,
      * which is the whole reason failures were indistinguishable. */
     GPtrArray *a = g_ptr_array_new();
@@ -386,6 +406,10 @@ void updatecheck_run(void (*done)(gpointer), gpointer user_data)
         g_ptr_array_add(a, (gpointer)"-H");
         g_ptr_array_add(a, (gpointer)inm);
     }
+    if (auth) {
+        g_ptr_array_add(a, (gpointer)"-H");
+        g_ptr_array_add(a, (gpointer)auth);
+    }
     g_ptr_array_add(a, (gpointer)kReleasesAPI);
     g_ptr_array_add(a, NULL);
 
@@ -396,6 +420,7 @@ void updatecheck_run(void (*done)(gpointer), gpointer user_data)
     g_ptr_array_free(a, TRUE);
     g_free(ua);
     g_free(inm);
+    g_free(auth);
 
     if (!proc) {
         set_failure(err && err->message ? err->message
