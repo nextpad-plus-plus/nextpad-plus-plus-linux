@@ -16,6 +16,7 @@
  */
 #include "gitpanel.h"
 #include "statusbar.h"
+#include "i18n.h"
 #include "gtk_compat.h"
 #include "npp_menu.h"
 #include "editor.h"
@@ -50,28 +51,74 @@ static char       s_repo_dir[1024] = "";
  * which does not exist — so every git command silently failed and the
  * whole panel showed nothing. argv also means paths with spaces or
  * non-ASCII bytes are passed as single elements — no shell quoting. */
-static char *run_git_ex(const char *workdir, const char *const *argv,
-                        gboolean *ok_out) {
-    if (ok_out) *ok_out = FALSE;
+/* GAP-103 (macOS 5384da1 / PR #262) — the full form: returns stdout, and
+ * optionally reports whether git launched AND exited 0 plus git's stderr,
+ * which is where every failure reason lives. Mutating callers need both;
+ * read-only callers keep the run_git() wrapper below unchanged.
+ * `err_out` (caller frees) is set only on failure. */
+static char *run_git_full(const char *workdir, const char *const *argv,
+                          gboolean *ok_out, char **err_out) {
+    if (ok_out)  *ok_out  = FALSE;
+    if (err_out) *err_out = NULL;
     if (!workdir) return NULL;
     gchar *stdout_buf = NULL, *stderr_buf = NULL;
     gint   status = 0;
     GError *err = NULL;
+    /* g_spawn_sync drains both pipes concurrently, so a git that floods
+     * stderr (hundreds of CRLF warnings) can never wedge us — the macOS
+     * half of this commit, PR #263, fixed exactly that deadlock in its
+     * hand-rolled NSTask path; we have no equivalent to fix. */
     gboolean spawned = g_spawn_sync(workdir, (gchar **)argv, NULL,
                                     G_SPAWN_SEARCH_PATH, NULL, NULL,
                                     &stdout_buf, &stderr_buf, &status, &err);
-    g_free(stderr_buf);
     if (!spawned) {
+        if (err_out)
+            *err_out = g_strdup(err && err->message ? err->message
+                                                    : "Failed to launch git");
         if (err) g_error_free(err);
+        g_free(stderr_buf);
         g_free(stdout_buf);
         return NULL;
     }
-    if (ok_out) *ok_out = g_spawn_check_wait_status(status, NULL);
+    gboolean ok = g_spawn_check_wait_status(status, NULL);
+    if (ok_out) *ok_out = ok;
+    if (!ok && err_out && stderr_buf && *stderr_buf)
+        *err_out = g_strdup(g_strstrip(stderr_buf));
+    g_free(stderr_buf);
     return stdout_buf;
 }
 
+static char *run_git_ex(const char *workdir, const char *const *argv,
+                        gboolean *ok_out) {
+    return run_git_full(workdir, argv, ok_out, NULL);
+}
+
 static char *run_git(const char *workdir, const char *const *argv) {
-    return run_git_ex(workdir, argv, NULL);
+    return run_git_full(workdir, argv, NULL, NULL);
+}
+
+/* GAP-103 — macOS GitPanel _showGitFailure:error: — same shape as the
+ * existing Commit-Failed alert. Title is an English catalog string
+ * (i18n_translate is the macOS NppLocalizer translate: equivalent). */
+static void git_report_failure(const char *title_en, const char *err) {
+    GtkWidget *d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
+        GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+        "%s", i18n_translate(title_en));
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d), "%s",
+        (err && *err) ? err : i18n_translate("Unknown error"));
+    gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+}
+
+/* Run one mutating git command; on failure show `title_en` + git's stderr.
+ * Returns TRUE on success. */
+static gboolean run_git_checked(const char *const *argv, const char *title_en) {
+    gboolean ok = FALSE;
+    char *err = NULL;
+    g_free(run_git_full(s_repo_dir, argv, &ok, &err));
+    if (!ok) git_report_failure(title_en, err);
+    g_free(err);
+    return ok;
 }
 
 /* Walk up from `start` looking for a .git dir. Returns owned string or NULL. */
@@ -107,12 +154,12 @@ static GtkWidget *s_branch_label = NULL;     /* "ƒ <branch>" — matches macOS 
 static void stage_all_cmd(void) {
     if (!s_repo_dir[0]) return;
     const char *argv[] = { "git", "add", "-A", NULL };
-    g_free(run_git(s_repo_dir, argv));
+    run_git_checked(argv, "Stage Failed");     /* GAP-103 */
 }
 static void unstage_all_cmd(void) {
     if (!s_repo_dir[0]) return;
     const char *argv[] = { "git", "reset", "HEAD", "--", NULL };
-    g_free(run_git(s_repo_dir, argv));
+    run_git_checked(argv, "Unstage Failed");   /* GAP-103 */
 }
 static void on_stage_all_clicked(GtkButton *b, gpointer u) {
     (void)b;(void)u; stage_all_cmd();   void gitpanel_refresh(void); gitpanel_refresh();
@@ -180,8 +227,12 @@ static void refresh_status(void) {
     g_free(out);
 }
 
-/* P11 — stage / unstage / discard helpers, run as g_spawn_command_line. */
-static void run_git_simple(const char *fmt, const char *path) {
+/* P11 — stage / unstage / discard helpers, run as g_spawn_command_line.
+ * GAP-103: reports git's own stderr under `title_en` when the command
+ * fails (silently ignoring the exit status meant a failed stage looked
+ * identical to a no-op). */
+static void run_git_simple(const char *fmt, const char *path,
+                           const char *title_en) {
     if (!s_repo_dir[0]) return;
     /* fmt is a space-separated subcommand token list, e.g. "add --" or
      * "restore --staged --"; build argv = git <tokens…> <path> so the
@@ -193,7 +244,7 @@ static void run_git_simple(const char *fmt, const char *path) {
     for (guint i = 0; i < nt; i++) argv[i + 1] = toks[i];
     argv[nt + 1] = path;
     argv[nt + 2] = NULL;
-    g_free(run_git(s_repo_dir, argv));
+    run_git_checked(argv, title_en);
     g_free(argv);
     g_strfreev(toks);
 }
@@ -213,14 +264,14 @@ static gchar *status_selected_path(void) {
 static void on_stage_selected(GtkButton *mi, gpointer u) {
     (void)mi; (void)u;
     gchar *p = status_selected_path(); if (!p) return;
-    run_git_simple("add --", p);
+    run_git_simple("add --", p, "Stage Failed");
     g_free(p);
     refresh_status();
 }
 static void on_unstage_selected(GtkButton *mi, gpointer u) {
     (void)mi; (void)u;
     gchar *p = status_selected_path(); if (!p) return;
-    run_git_simple("restore --staged --", p);
+    run_git_simple("restore --staged --", p, "Unstage Failed");
     g_free(p);
     refresh_status();
 }
@@ -233,7 +284,7 @@ static void on_discard_selected(GtkButton *mi, gpointer u) {
     int r = gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
     if (r == GTK_RESPONSE_OK) {
-        run_git_simple("checkout --", p);
+        run_git_simple("checkout --", p, "Discard Failed");
         refresh_status();
     }
     g_free(p);
@@ -273,14 +324,25 @@ static void on_commit_clicked(GtkButton *btn, gpointer u) {
     }
     const char *argv[] = { "git", "commit", "-m", msg, NULL };
     gboolean committed = FALSE;
-    gchar *out = run_git_ex(s_repo_dir, argv, &committed);
+    char *cerr = NULL;
+    gchar *out = run_git_full(s_repo_dir, argv, &committed, &cerr);
 
-    GtkWidget *d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
-        committed ? GTK_MESSAGE_INFO : GTK_MESSAGE_ERROR,
-        GTK_BUTTONS_OK, "%s", committed ? "Commit succeeded." : "Commit failed.");
-    if (out && *out) gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d), "%s", out);
-    gtk_dialog_run(GTK_DIALOG(d));
-    gtk_widget_destroy(d);
+    /* GAP-103 — on failure the reason is on STDERR; the old code showed
+     * stdout, so "Commit failed." came up with an empty detail box.
+     * macOS shows errMsg ?: "Unknown error" (GitPanel.mm:638-639). */
+    if (!committed) {
+        git_report_failure("Commit Failed", cerr);
+    } else {
+        GtkWidget *d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
+            GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s",
+            i18n_translate("Commit succeeded."));
+        if (out && *out)
+            gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d),
+                                                     "%s", out);
+        gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+    }
+    g_free(cerr);
     g_free(out);
 
     if (committed) {

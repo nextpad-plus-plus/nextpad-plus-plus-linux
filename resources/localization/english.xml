@@ -1683,6 +1683,8 @@ You can re-activate this dialog in Preferences later."/>
 				<Item id="90221" name="Locked Attribute (macOS)"/>
 				<Item id="90222" name="Check for Updates…"/>
 				<Item id="90223" name="Open Recent"/>
+				<Item id="90227" name="Stage Failed"/>
+				<Item id="90228" name="Unstage Failed"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>
