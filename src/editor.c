@@ -24,6 +24,7 @@
 #include "spell.h"
 #include "ctxmenu.h"
 #include "plugin.h"
+#include <math.h>     /* isfinite — hostile scroll deltas */
 #include <string.h>
 #include <stdio.h>
 
@@ -2118,12 +2119,30 @@ static gboolean on_tabscroll(GtkEventControllerScroll *sc,
 {
     (void)dx;
     GtkWidget *nb = GTK_WIDGET(ud);
-    if (dy == 0.0) return GDK_EVENT_PROPAGATE;
+
+    /* Hostile deltas are not hypothetical — input drivers and virtual
+     * pointers do emit them, and both failure modes here are severe:
+     * a NaN poisons the accumulator permanently (every later notch adds
+     * to NaN, silently killing tab scrolling for the session), and +inf
+     * spins the step loop forever because inf - 1.0 == inf. Drop both
+     * before they can touch the accumulator. */
+    if (!isfinite(dy) || dy == 0.0) return GDK_EVENT_PROPAGATE;
     if (!gtk_notebook_get_show_tabs(GTK_NOTEBOOK(nb))) return GDK_EVENT_PROPAGATE;
+
+    int pages = gtk_notebook_get_n_pages(GTK_NOTEBOOK(nb));
+    if (pages < 2) return GDK_EVENT_STOP;
 
     double acc = dy;
     const double *prev = g_object_get_data(G_OBJECT(sc), "npp-acc");
-    if (prev) acc += *prev;
+    if (prev && isfinite(*prev)) acc += *prev;
+
+    /* One event may at most walk the strip once. A legitimate fling of a
+     * few notches still steps in full (see the 3.0 case in the tests),
+     * but an absurd delta cannot drive thousands of page switches — each
+     * one synchronously refreshes the status bar, title, toolbar and
+     * preview. */
+    if (acc >  pages) acc =  pages;
+    if (acc < -pages) acc = -pages;
 
     while (acc >= TABSCROLL_STEP) {
         gtk_notebook_next_page(GTK_NOTEBOOK(nb));
@@ -2134,9 +2153,15 @@ static gboolean on_tabscroll(GtkEventControllerScroll *sc,
         acc += TABSCROLL_STEP;
     }
 
-    double *keep = g_new(double, 1);
-    *keep = acc;
-    g_object_set_data_full(G_OBJECT(sc), "npp-acc", keep, g_free);
+    /* Reuse the slot rather than reallocating on every wheel event. */
+    double *keep = g_object_get_data(G_OBJECT(sc), "npp-acc");
+    if (keep) {
+        *keep = acc;
+    } else {
+        keep = g_new(double, 1);
+        *keep = acc;
+        g_object_set_data_full(G_OBJECT(sc), "npp-acc", keep, g_free);
+    }
     return GDK_EVENT_STOP;
 }
 
