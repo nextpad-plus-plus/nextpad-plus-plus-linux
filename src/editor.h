@@ -97,6 +97,9 @@ gboolean   editor_close_sci(GtkWidget *sci);        /* close one exact tab     *
 gboolean   editor_close_page_multi(int page, gboolean *dont_save_all);
 gboolean   editor_close_all_but_current(void);
 gboolean   editor_close_all_but_pinned(void);   /* GAP-95 */
+
+/* GAP-107 — GtkOverlay over the editor area; host for the update card. */
+GtkWidget *editor_card_host(void);
 void       editor_close_all_quit(GApplication *app);
 
 /* Split views (#3) — move/clone the focused editor to the secondary

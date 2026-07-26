@@ -87,6 +87,9 @@ static GtkWidget *sci_of_page(int page);
  * saving, printing or undo. Hidden the moment content appears and
  * re-shown if the buffer empties again. */
 static GtkWidget *s_watermark = NULL;
+/* GAP-107 — the editor-area overlay; the update card is placed in its
+ * bottom-right corner (macOS puts its card over the editor area too). */
+static GtkWidget *s_nb_overlay = NULL;
 
 /* Evaluate against an explicit sci — during a "switch-page" emission
  * gtk_notebook_get_current_page still reports the OLD page, so the
@@ -2178,6 +2181,7 @@ GtkWidget *editor_init(GtkWidget *window)
      * the new-document watermark. Splits only ever set the paned END
      * child, so the wrapper is invisible to the split machinery. */
     GtkWidget *nb_overlay = gtk_overlay_new();
+    s_nb_overlay = nb_overlay;   /* GAP-107 — update card host */
     gtk_overlay_set_child(GTK_OVERLAY(nb_overlay), s_notebook);
     s_watermark = watermark_build();
     gtk_overlay_add_overlay(GTK_OVERLAY(nb_overlay), s_watermark);
@@ -3738,3 +3742,8 @@ void editor_incr_search_close(void)
     }
     s_incr_match_end = -1;
 }
+
+/* GAP-107 — overlay wrapping the primary editor notebook; the update
+ * card hangs off it so it floats over the editor without stealing
+ * layout space or blocking input elsewhere. */
+GtkWidget *editor_card_host(void) { return s_nb_overlay; }

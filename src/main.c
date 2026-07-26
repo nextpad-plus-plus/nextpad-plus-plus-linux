@@ -28,6 +28,8 @@
 #include "prefs.h"
 #include "i18n.h"
 #include "toolbar.h"
+#include "updatecheck.h"
+#include "updatecard.h"
 #include "recent.h"
 #include "session.h"
 #include "backup.h"
@@ -2430,59 +2432,31 @@ static void npp_info_dialog(const char *msg, const char *detail) {
     g_object_unref(d);
 }
 
-/* Compare two "X.Y.Z" version strings: <0 / 0 / >0. */
-static int version_cmp(const char *a, const char *b) {
-    int a1=0,a2=0,a3=0, b1=0,b2=0,b3=0;
-    sscanf(a ? a : "", "%d.%d.%d", &a1,&a2,&a3);
-    sscanf(b ? b : "", "%d.%d.%d", &b1,&b2,&b3);
-    if (a1 != b1) return a1 < b1 ? -1 : 1;
-    if (a2 != b2) return a2 < b2 ? -1 : 1;
-    if (a3 != b3) return a3 < b3 ? -1 : 1;
-    return 0;
-}
-
-/* Pull a top-level string value for `key` out of a JSON blob. */
-static char *json_string_value(const char *json, const char *key) {
-    char needle[64];
-    snprintf(needle, sizeof needle, "\"%s\"", key);
-    const char *p = json ? strstr(json, needle) : NULL;
-    if (!p) return NULL;
-    p = strchr(p + strlen(needle), ':');
-    if (!p) return NULL;
-    for (p++; *p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'; p++) ;
-    if (*p != '"') return NULL;
-    p++;
-    const char *e = p;
-    while (*e && *e != '"') { if (*e == '\\' && e[1]) e++; e++; }
-    return g_strndup(p, (gsize)(e - p));
-}
-
-/* Version check targets the public macOS repo — it is the release
- * source-of-truth (CLAUDE.md) and, unlike the private GTK4 repo, its
- * releases API is reachable without authentication. Same endpoint the
- * macOS app uses (AppDelegate kGitHubReleasesAPI). */
-static const char *kReleasesAPI =
-    "https://api.github.com/repos/nextpad-plus-plus/"
-    "nextpad-plus-plus-macos/releases/latest";
-
 /* The Help section holding the "Check for Updates" item — kept so its
  * status bullet can be refreshed after a check. */
 static GMenu *g_updates_section = NULL;
 void main_retranslate_menu(void);   /* defined later in this file */
 
 /* Refresh the "Check for Updates" menu item with a status bullet.
- * state — 0 none, 1 green (up to date), 2 yellow (update available).
+ * GAP-107: three states now, matching macOS — yellow available, green up
+ * to date, red check failed (red was never wired before).
  * The bullet is a coloured-circle emoji prefixed to the label —
  * GtkPopoverMenuBar renders it in colour via the emoji font.
  * (g_menu_item_set_icon is NOT used: a GIcon on a popover-menu item
  * crashes GTK's menu renderer with a GdkPixbuf/GdkPaintable type
- * mismatch. i18n_translate_menu preserves the leading bullet.) */
-static void set_update_badge(int state, const char *label) {
+ * mismatch. i18n_translate_menu preserves the leading bullet.)
+ *
+ * The item's TITLE is deliberately left alone — it belongs to the
+ * localizer. The previous code assigned hard-coded English here
+ * ("Update Available (v%s)"), which is not a catalog key, so a
+ * translated menu silently reverted to English. */
+static void set_update_badge(NppUpdateStatus st) {
     if (!g_updates_section) return;
-    const char *base = label ? label : "Check for Updates…";
-    char *full = (state == 2) ? g_strconcat("🟡 ", base, NULL)
-               : (state == 1) ? g_strconcat("🟢 ", base, NULL)
-               :                g_strdup(base);
+    const char *base = "Check for Updates…";
+    char *full = (st == NPP_UPDATE_AVAILABLE)  ? g_strconcat("🟡 ", base, NULL)
+               : (st == NPP_UPDATE_UP_TO_DATE) ? g_strconcat("🟢 ", base, NULL)
+               : (st == NPP_UPDATE_FAILED)     ? g_strconcat("🔴 ", base, NULL)
+               :                                 g_strdup(base);
     GMenuItem *it = g_menu_item_new(full, "app.check-updates");
     g_free(full);
     g_menu_remove(g_updates_section, 0);
@@ -2491,113 +2465,110 @@ static void set_update_badge(int state, const char *label) {
     main_retranslate_menu();   /* push through the i18n menu copy */
 }
 
-/* "Open Release Page" choice from the update-available dialog. */
-static void on_update_choice(GObject *src, GAsyncResult *res, gpointer u) {
-    char *url = (char *)u;
-    int idx = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(src), res, NULL);
-    if (idx == 0 && url && *url && g_window)
-        gtk_show_uri_on_window(GTK_WINDOW(g_window), url,
+/* ── GAP-107 — the update card is the ONLY surface (no modal alerts) ── */
+
+static void update_card_primary(gpointer u);
+
+static void update_card_dismissed(gboolean never_remind, gpointer u) {
+    NppUpdateCardStyle style = (NppUpdateCardStyle)GPOINTER_TO_INT(u);
+    /* Only the update-available card carries a verdict. Dismissing an
+     * "up to date" or a failure card must never mark a version seen —
+     * that would silence a release the user has not actually been
+     * shown. */
+    if (style == NPP_CARD_UPDATE_AVAILABLE) {
+        /* "Never remind me again" turns the automatic flow off entirely
+         * (reversible in Preferences ▸ General ▸ Updates); a plain Close
+         * silences only THIS version, so the next release speaks up. */
+        if (never_remind) updatecheck_disable_auto();
+        else              updatecheck_mark_seen();
+    }
+    set_update_badge(updatecheck_status());
+}
+
+static void present_update_card(gboolean forced) {
+    GtkWidget *host = editor_card_host();
+    if (!host) return;
+    NppUpdateStatus st = updatecheck_status();
+    if (!forced && !updatecheck_should_present_card()) return;
+
+    NppUpdateCardStyle style;
+    char *title, *message;
+    switch (st) {
+    case NPP_UPDATE_AVAILABLE:
+        style   = NPP_CARD_UPDATE_AVAILABLE;
+        title   = g_strdup_printf("Nextpad++ v%s %s",
+                      updatecheck_latest_version(),
+                      i18n_translate("is available"));
+        message = g_strdup_printf("%s v%s", i18n_translate("You're running"),
+                      updatecheck_current_version());
+        break;
+    case NPP_UPDATE_FAILED:
+        style   = NPP_CARD_FAILED;
+        title   = g_strdup(i18n_translate("Unable to Check for Updates"));
+        message = g_strdup(updatecheck_failure_message()
+                      ? updatecheck_failure_message()
+                      : i18n_translate("No response from server."));
+        break;
+    default:
+        style   = NPP_CARD_UP_TO_DATE;
+        title   = g_strdup(i18n_translate("You're Up to Date"));
+        message = g_strdup_printf("Nextpad++ %s %s",
+                      updatecheck_current_version(),
+                      i18n_translate("is the latest version."));
+        break;
+    }
+    updatecard_show(host, style, title, message,
+                    update_card_dismissed, update_card_primary,
+                    GINT_TO_POINTER(style));
+    g_free(title);
+    g_free(message);
+}
+
+static void update_flow_done(gpointer u) {
+    gboolean forced = GPOINTER_TO_INT(u);
+    set_update_badge(updatecheck_status());
+    present_update_card(forced);
+}
+
+static void update_card_primary(gpointer u) {
+    NppUpdateCardStyle style = (NppUpdateCardStyle)GPOINTER_TO_INT(u);
+    if (style == NPP_CARD_FAILED) {
+        /* Try Again — same path as the menu command. */
+        updatecheck_run(update_flow_done, GINT_TO_POINTER(TRUE));
+        return;
+    }
+    if (g_window)
+        gtk_show_uri_on_window(GTK_WINDOW(g_window),
+                               updatecheck_download_url(),
                                GDK_CURRENT_TIME, NULL);
-    g_free(url);
 }
 
-/* curl GET completed — parse tag_name, set the bullet, and (when the
- * user asked) report the result in a dialog. user_data carries the
- * user-initiated flag; a silent startup check only sets the bullet. */
-static void on_update_response(GObject *src, GAsyncResult *res, gpointer u) {
-    gboolean user_initiated = GPOINTER_TO_INT(u);
-    GSubprocess *proc = G_SUBPROCESS(src);
-    char   *out = NULL;
-    GError *err = NULL;
-    gboolean ok = g_subprocess_communicate_utf8_finish(proc, res,
-                                                       &out, NULL, &err);
-    if (!ok || !out || g_subprocess_get_exit_status(proc) != 0) {
-        if (user_initiated)
-            npp_info_dialog("Unable to Check for Updates",
-                err ? err->message
-                    : "Could not reach the update server — check your "
-                      "internet connection.");
-        if (err) g_error_free(err);
-        g_free(out);
-        g_object_unref(proc);
-        return;
-    }
-    char *tag = json_string_value(out, "tag_name");
-    char *url = json_string_value(out, "html_url");
-    const char *latest = tag ? (tag[0] == 'v' ? tag + 1 : tag) : NULL;
-
-    if (!latest || !*latest) {
-        if (user_initiated)
-            npp_info_dialog("Unable to Check for Updates",
-                            "No published release was found.");
-    } else if (version_cmp(latest, APP_VERSION) > 0) {
-        char label[96];
-        snprintf(label, sizeof label, "Update Available (v%s)", latest);
-        set_update_badge(2, label);                 /* yellow bullet */
-        if (user_initiated) {
-            GtkAlertDialog *d = gtk_alert_dialog_new(
-                "Nextpad++ v%s is available", latest);
-            char detail[160];
-            snprintf(detail, sizeof detail,
-                     "You are running v%s.", APP_VERSION);
-            gtk_alert_dialog_set_detail(d, detail);
-            const char *btns[] = { "Open Release Page", "Later", NULL };
-            gtk_alert_dialog_set_buttons(d, btns);
-            gtk_alert_dialog_set_default_button(d, 0);
-            gtk_alert_dialog_set_cancel_button(d, 1);
-            gtk_alert_dialog_choose(d, g_window ? GTK_WINDOW(g_window) : NULL,
-                                    NULL, on_update_choice,
-                                    url ? g_strdup(url) : NULL);
-            g_object_unref(d);
-        }
-    } else {
-        set_update_badge(1, "Check for Updates…");  /* green bullet */
-        if (user_initiated) {
-            char detail[128];
-            snprintf(detail, sizeof detail,
-                     "Nextpad++ %s is the latest version.", APP_VERSION);
-            npp_info_dialog("You're Up to Date", detail);
-        }
-    }
-    g_free(tag); g_free(url); g_free(out);
-    g_object_unref(proc);
-}
-
-/* Kick off a GitHub releases-API check. user_initiated TRUE shows a
- * result dialog; FALSE (startup) just refreshes the menu bullet. */
-static void check_for_updates(gboolean user_initiated) {
-    GError *err = NULL;
-    GSubprocess *proc = g_subprocess_new(
-        G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
-        &err, "curl", "-fsSL",
-        "-A", "nextpad-plus-plus-gtk4",
-        "-H", "Accept: application/vnd.github+json",
-        kReleasesAPI, NULL);
-    if (!proc) {
-        if (user_initiated)
-            npp_info_dialog("Unable to Check for Updates",
-                err ? err->message
-                    : "The 'curl' command is required to check for updates.");
-        if (err) g_error_free(err);
-        return;
-    }
-    g_subprocess_communicate_utf8_async(proc, NULL, NULL, on_update_response,
-                                        GINT_TO_POINTER(user_initiated));
+/* Launch / activation path: paint the indicator from cache first
+ * (instant and offline-safe), then refresh over the network at most
+ * once a day. */
+static void run_automatic_update_flow(void) {
+    set_update_badge(updatecheck_status());
+    present_update_card(FALSE);
+    if (!updatecheck_is_due()) return;
+    updatecheck_run(update_flow_done, GINT_TO_POINTER(FALSE));
 }
 
 static void action_check_updates(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    check_for_updates(TRUE);
+    /* The menu command always hits the network and always answers —
+     * bypassing the daily throttle, the opt-out and the per-version
+     * dismissal. Every outcome is reported in the card. */
+    updatecheck_run(update_flow_done, GINT_TO_POINTER(TRUE));
 }
 
-/* Silent startup check (macOS checkForUpdateUserInitiated:NO) — runs
- * once, regardless of how many times it is scheduled. */
+/* Silent startup check (macOS _runAutomaticUpdateFlow) — runs once,
+ * regardless of how many times it is scheduled. */
 static gboolean startup_update_check(gpointer d) {
     (void)d;
     static gboolean done = FALSE;
     if (done) return G_SOURCE_REMOVE;
     done = TRUE;
-    check_for_updates(FALSE);
+    run_automatic_update_flow();
     return G_SOURCE_REMOVE;
 }
 

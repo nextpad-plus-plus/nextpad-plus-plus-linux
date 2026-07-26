@@ -175,6 +175,10 @@ typedef struct {
     int      in_sel_threshold;        /* min chars of selection to enable "in selection" */
     char     search_engine_url[256];  /* default "https://duckduckgo.com/?q=%s" */
     char     custom_browser[256];     /* GAP-94c — View ▸ Custom Browser command */
+    /* GAP-107 — Preferences ▸ General ▸ Updates (macOS NppUpdateAutoCheck,
+     * default on). Also cleared by the card's "Never remind me again",
+     * so that opt-out stays reversible. */
+    gboolean auto_check_updates;
 
     /* ── Delimiter tab ──────────────────────────────────────── */
     char     delim_open[8];           /* default "(" */

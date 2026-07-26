@@ -179,6 +179,7 @@ NppPrefs g_prefs = {
     .in_sel_threshold        = 1024,
     .search_engine_url       = "https://duckduckgo.com/?q=%s",
     .custom_browser          = "",
+    .auto_check_updates      = TRUE,   /* GAP-107 (macOS default YES) */
     /* Delimiter */
     .delim_open              = "(",
     .delim_close             = ")",
@@ -477,6 +478,9 @@ static void apply_attr(const char *group, const char *attr, const char *val)
             strncpy(g_prefs.custom_browser, val, sizeof(g_prefs.custom_browser) - 1);
             g_prefs.custom_browser[sizeof(g_prefs.custom_browser) - 1] = '\0';
         }
+    }
+    else if (!strcmp(group, "UpdateAutoCheck")) {          /* GAP-107 */
+        if (!strcmp(attr, "name2")) g_prefs.auto_check_updates = is_show(val);
     }
 }
 
@@ -902,6 +906,10 @@ g_prefs.tab_max_label_width,
     g_string_append_printf(b,
         "        <GUIConfig name=\"CustomBrowser\" command=\"%s\" />\n", cb_esc);
     g_free(cb_esc);
+    /* GAP-107 — automatic update checks (macOS NppUpdateAutoCheck). */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"UpdateAutoCheck\" name2=\"%s\" />\n",
+        b2sh(g_prefs.auto_check_updates));
 
     /* GAP-53 — Find window transparency. */
     g_string_append_printf(b,
@@ -1129,6 +1137,7 @@ CHK(tab_wrap,          tab_bar_wrap,               editor_tabstrip_sync())   /* 
 CHK(tab_follow_zoom,   tab_follow_zoom,            editor_refresh_all_tab_labels())   /* GAP-31 */
 CHK(hide_tab_bar,      hide_tab_bar,               editor_apply_prefs())
 CHK(status_visible,    show_status_bar,            statusbar_set_visible(g_prefs.show_status_bar))
+CHK(auto_check_upd,    auto_check_updates,         (void)0)   /* GAP-107 */
 
 static void on_tab_width(GtkSpinButton *s, gpointer d)
     { (void)d; g_prefs.tab_width = (int)gtk_spin_button_get_value(s); editor_apply_prefs(); prefs_save(); }
@@ -1318,6 +1327,17 @@ static GtkWidget *page_general(void)
     GtkWidget *tn = gtk_label_new("Takes effect on next launch.");
     gtk_widget_set_halign(tn, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), tn, 0, r++, 2, 1);
+
+    /* GAP-107 — Updates, mirroring the macOS General pane group
+     * (PreferencesWindowController.mm:771). Off also silences the
+     * automatic card; the menu command always checks regardless. */
+    GtkWidget *uh = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(uh), "<b>Updates</b>");
+    gtk_widget_set_halign(uh, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(uh, 8);
+    gtk_grid_attach(GTK_GRID(g), uh, 0, r++, 2, 1);
+    make_check(g, r++, "Automatically check for updates",
+               g_prefs.auto_check_updates, G_CALLBACK(on_auto_check_upd));
 
     return g;
 }

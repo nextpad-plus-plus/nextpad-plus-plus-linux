@@ -796,6 +796,7 @@ GMenuModel *i18n_translate_menu(GMenuModel *src)
                 const char *bullet = NULL;
                 if (g_str_has_prefix(eng, "🟢 "))      bullet = "🟢 ";
                 else if (g_str_has_prefix(eng, "🟡 ")) bullet = "🟡 ";
+                else if (g_str_has_prefix(eng, "🔴 ")) bullet = "🔴 ";   /* GAP-107 */
                 if (bullet) {
                     char *t = g_strconcat(bullet,
                                   i18n_translate(eng + strlen(bullet)), NULL);

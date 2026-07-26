@@ -91,6 +91,8 @@ set(APP_SRCS
     "${CMAKE_SOURCE_DIR}/fuzzy/FuzzyMatcher.cxx"
     "${CMAKE_SOURCE_DIR}/fuzzy/FuzzyText.cxx"
     "${SRC}/recent.c"
+    "${SRC}/updatecheck.c"
+    "${SRC}/updatecard.c"
     "${SRC}/stubs.c"
     "${SRC}/paths.c"
     # GTK4 migration helpers
