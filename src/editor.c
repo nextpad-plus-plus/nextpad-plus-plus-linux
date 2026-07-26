@@ -2095,6 +2095,67 @@ static gboolean on_search_entry_key(GtkEventControllerKey *ctl, guint keyval,
 /* Public API                                                         */
 /* ------------------------------------------------------------------ */
 
+/* ── GAP-106 — mouse-wheel over the tab bar steps through tabs ────────
+ *
+ * macOS pans its tab viewport by one tab-width per notch and leaves the
+ * selection alone (NppTabBar.mm:285). That is not reachable here:
+ * GtkNotebook is not a GtkScrollable, exposes no adjustment, and keeps
+ * its first-visible-tab offset private. Stepping the page instead gets
+ * the same visible result — GtkNotebook auto-reveals the selected tab,
+ * so the strip follows — at the cost of also changing the active
+ * document. That matches the Windows build's tab-bar wheel behaviour.
+ *
+ * Direction follows macOS: up = earlier, down = later. Clamps at both
+ * ends (next/prev_page are no-ops there); deliberately no wrap-around.
+ */
+/* A discrete wheel notch delivers dy = ±1, but a touchpad streams
+ * fractions — without accumulating, a light two-finger swipe would fly
+ * through a dozen documents. */
+#define TABSCROLL_STEP 1.0
+
+static gboolean on_tabscroll(GtkEventControllerScroll *sc,
+                             double dx, double dy, gpointer ud)
+{
+    (void)dx;
+    GtkWidget *nb = GTK_WIDGET(ud);
+    if (dy == 0.0) return GDK_EVENT_PROPAGATE;
+    if (!gtk_notebook_get_show_tabs(GTK_NOTEBOOK(nb))) return GDK_EVENT_PROPAGATE;
+
+    double acc = dy;
+    const double *prev = g_object_get_data(G_OBJECT(sc), "npp-acc");
+    if (prev) acc += *prev;
+
+    while (acc >= TABSCROLL_STEP) {
+        gtk_notebook_next_page(GTK_NOTEBOOK(nb));
+        acc -= TABSCROLL_STEP;
+    }
+    while (acc <= -TABSCROLL_STEP) {
+        gtk_notebook_prev_page(GTK_NOTEBOOK(nb));
+        acc += TABSCROLL_STEP;
+    }
+
+    double *keep = g_new(double, 1);
+    *keep = acc;
+    g_object_set_data_full(G_OBJECT(sc), "npp-acc", keep, g_free);
+    return GDK_EVENT_STOP;
+}
+
+static void tabscroll_attach(GtkWidget *nb)
+{
+    /* The controller goes on the notebook's HEADER, not the notebook:
+     * GTK then hit-tests for us, so only wheel events actually over the
+     * tab strip arrive and the editor keeps its own scrolling. Testing
+     * the pointer position instead is not an option — scroll events
+     * carry no usable position (gdk_event_get_position yields NaN on
+     * the wheel path), which silently disabled an earlier attempt. */
+    GtkWidget *hdr = gtk_widget_get_first_child(nb);
+    if (!hdr) return;
+    GtkEventController *sc =
+        gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+    g_signal_connect(sc, "scroll", G_CALLBACK(on_tabscroll), nb);
+    gtk_widget_add_controller(hdr, sc);
+}
+
 GtkWidget *editor_init(GtkWidget *window)
 {
     stylestore_init(NULL);
@@ -2109,6 +2170,7 @@ GtkWidget *editor_init(GtkWidget *window)
     gtk_notebook_set_show_tabs(GTK_NOTEBOOK(s_notebook),
                                !g_prefs.hide_tab_bar);   /* macOS #183 */
     g_signal_connect(s_notebook, "switch-page", G_CALLBACK(on_switch_page), NULL);
+    tabscroll_attach(s_notebook);                        /* GAP-106 */
     g_signal_connect(s_notebook, "page-removed",
                      G_CALLBACK(on_page_removed), NULL);
     g_signal_connect(s_notebook, "page-reordered",
@@ -2662,6 +2724,7 @@ static GtkWidget *secondary_notebook_new(gboolean vertical)
     gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nb),
                                !g_prefs.hide_tab_bar);   /* macOS #183 */
     g_signal_connect(nb, "switch-page", G_CALLBACK(on_switch_page), NULL);
+    tabscroll_attach(nb);                                /* GAP-106 */
     *(vertical ? &s_notebook_v : &s_notebook_h) = nb;
     return nb;
 }
