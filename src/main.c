@@ -2686,65 +2686,135 @@ static gboolean startup_update_check(gpointer d) {
     return G_SOURCE_REMOVE;
 }
 
+/* GAP-111 — single-quote a path for safe embedding in /bin/sh
+ * (macOS _shellQuote). A path containing a quote, backtick, $ or
+ * backslash produced a broken wrapper before. */
+static char *sh_quote(const char *v)
+{
+    GString *q = g_string_new("'");
+    for (const char *c = v; c && *c; c++) {
+        if (*c == '\'') g_string_append(q, "'\\''");
+        else            g_string_append_c(q, *c);
+    }
+    g_string_append_c(q, '\'');
+    return g_string_free(q, FALSE);
+}
+
+/* Which binary should the wrapper point at? The running one is the
+ * obvious answer but the wrong one for a developer build: baking
+ * .../build-release/Nextpad++ into ~/.local/bin means the command dies
+ * the moment that tree is rebuilt elsewhere or removed. Prefer an
+ * installed Nextpad++ on PATH; fall back to the running binary. */
+static char *cli_target_binary(char **why_out)
+{
+    char *onpath = g_find_program_in_path("Nextpad++");
+    if (onpath) {
+        if (why_out) *why_out = g_strdup("the installed Nextpad++ on your PATH");
+        return onpath;
+    }
+    GError *err = NULL;
+    char *exe = g_file_read_link("/proc/self/exe", &err);
+    if (err) g_error_free(err);
+    /* A binary replaced while running reads back as "<path> (deleted)";
+     * writing that into the wrapper would guarantee a broken command. */
+    if (exe && g_str_has_suffix(exe, " (deleted)")) {
+        g_free(exe);
+        return NULL;
+    }
+    if (exe && why_out)
+        *why_out = g_strdup("the running Nextpad++ (a build tree — re-run "
+                            "this item after installing the package)");
+    return exe;
+}
+
 static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     GError *err = NULL;
-    /* /proc/self/exe is a symlink to the running binary. */
-    char *exe = g_file_read_link("/proc/self/exe", &err);
+    char *why = NULL;
+    char *exe = cli_target_binary(&why);
     if (!exe) {
         npp_info_dialog("Installation Failed",
-            err ? err->message
-                : "Could not locate the Nextpad++ executable.");
-        if (err) g_error_free(err);
+            "Could not locate the Nextpad++ executable. If the application "
+            "was rebuilt or replaced while running, restart it and try again.");
+        g_free(why);
         return;
     }
     char *bindir = g_build_filename(g_get_home_dir(), ".local", "bin", NULL);
+    gboolean bindir_existed = g_file_test(bindir, G_FILE_TEST_IS_DIR);
     g_mkdir_with_parents(bindir, 0755);
     char *target = g_build_filename(bindir, "nextpad++", NULL);
-    /* A wrapper script (mirrors macOS _makeCLIScriptForApp) so it keeps
-     * working after the app is moved — just re-run the menu item. */
+
+    /* Wrapper script (mirrors macOS _makeCLIScriptForApp). Option flags
+     * are routed through a fresh instance: they are consumed at startup
+     * and cannot be delivered to an already-running window, so without
+     * this `nextpad++ -n42 file` would silently open at line 1 — the
+     * same reason macOS re-launches via `open --args`. */
+    char *qexe = sh_quote(exe);
     char *script = g_strdup_printf(
         "#!/bin/sh\n"
         "# nextpad++ — CLI wrapper for Nextpad++ (Linux).\n"
         "# Auto-generated; re-run Help > Install nextpad++ Command Line\n"
         "# Tool if the application is moved.\n"
-        "exec \"%s\" \"$@\"\n", exe);
+        "APP=%s\n"
+        "# Files go to the running instance; option flags only take effect\n"
+        "# at startup, so a command carrying flags gets its own instance.\n"
+        "for a in \"$@\"; do\n"
+        "  case \"$a\" in -*) exec \"$APP\" -multiInst \"$@\" ;; esac\n"
+        "done\n"
+        "exec \"$APP\" \"$@\"\n", qexe);
+    g_free(qexe);
 
     char *existing = NULL;
     g_file_get_contents(target, &existing, NULL, NULL);
-    gboolean already = (existing && g_strcmp0(existing, script) == 0);
+    /* "Already installed" must also mean "still works": an identical but
+     * non-executable wrapper, or one pointing at a binary that no longer
+     * exists, used to be reported as installed. */
+    gboolean same       = (existing && g_strcmp0(existing, script) == 0);
+    gboolean executable = g_file_test(target, G_FILE_TEST_IS_EXECUTABLE);
+    gboolean already    = same && executable;
     g_free(existing);
 
-    char detail[640];
+    gboolean on_path = FALSE;
+    const char *pe = g_getenv("PATH");
+    if (pe) {
+        char **dirs = g_strsplit(pe, ":", -1);
+        for (int i = 0; dirs[i]; i++)
+            if (g_strcmp0(dirs[i], bindir) == 0) on_path = TRUE;
+        g_strfreev(dirs);
+    }
+    /* Ubuntu's ~/.profile puts ~/.local/bin on PATH, but only when the
+     * directory already existed at login — so a first install needs a
+     * re-login, which the old text never said. */
+    const char *path_note =
+        on_path ? ""
+        : (!bindir_existed
+           ? "\n\nNote: ~/.local/bin was just created. On Ubuntu it joins "
+             "your PATH automatically, but only after you log out and back "
+             "in."
+           : "\n\nNote: ~/.local/bin is not on your PATH — add it to run "
+             "'nextpad++' from any terminal.");
+
+    char detail[1024];
     if (already) {
         snprintf(detail, sizeof detail,
-            "nextpad++ is already installed at:\n%s\n\nUsage:  nextpad++ file.txt",
-            target);
+            "nextpad++ is already installed at:\n%s\n\nIt points at %s.\n\n"
+            "Usage:  nextpad++ file.txt%s", target, why ? why : "", path_note);
         npp_info_dialog("Already Installed", detail);
     } else if (g_file_set_contents(target, script, -1, &err)) {
         chmod(target, 0755);
-        gboolean on_path = FALSE;
-        const char *pe = g_getenv("PATH");
-        if (pe) {
-            char **dirs = g_strsplit(pe, ":", -1);
-            for (int i = 0; dirs[i]; i++)
-                if (g_strcmp0(dirs[i], bindir) == 0) on_path = TRUE;
-            g_strfreev(dirs);
-        }
         snprintf(detail, sizeof detail,
-            "Installed the 'nextpad++' command at:\n%s\n\nUsage:  nextpad++ file.txt%s",
-            target,
-            on_path ? ""
-                    : "\n\nNote: ~/.local/bin is not on your PATH — add it "
-                      "to run 'nextpad++' from any terminal.");
+            "Installed the 'nextpad++' command at:\n%s\n\nIt points at %s.\n\n"
+            "Usage:  nextpad++ file.txt\n        nextpad++ -n42 main.cpp%s",
+            target, why ? why : "", path_note);
         npp_info_dialog("Command Line Tool Installed", detail);
     } else {
         npp_info_dialog("Installation Failed",
             err ? err->message : "Could not write the wrapper script.");
         if (err) g_error_free(err);
     }
-    g_free(exe); g_free(bindir); g_free(target); g_free(script);
+    g_free(exe); g_free(why); g_free(bindir); g_free(target); g_free(script);
 }
+
 
 /* GAP-110 — Debug Info, mirroring the macOS report (9 sections). This
  * used to print 6 lines, one of which was wrong: it reported
