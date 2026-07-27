@@ -14,6 +14,11 @@
 
 #include <gtk/gtk.h>
 #include "gtk_compat.h"
+#include <glib/gstdio.h>      /* GStatBuf, g_stat  — GAP-110 */
+#include <sys/utsname.h>      /* uname             — GAP-110 */
+#include <sys/resource.h>     /* getrusage         — GAP-110 */
+#include <unistd.h>           /* getpid, sysconf   — GAP-110 */
+#include <locale.h>           /* setlocale         — GAP-110 */
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
@@ -2741,44 +2746,362 @@ static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
     g_free(exe); g_free(bindir); g_free(target); g_free(script);
 }
 
-static void action_debug_info(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a;(void)p;(void)u;
+/* GAP-110 — Debug Info, mirroring the macOS report (9 sections). This
+ * used to print 6 lines, one of which was wrong: it reported
+ * g_get_user_config_dir() (~/.config) as "Config dir" while the port
+ * actually stores everything under npp_local_dir()
+ * ($XDG_DATA_HOME/nextpad++) — the one path a user would paste into a
+ * bug report pointed at the wrong directory. */
+
+/* First matching line of a key=value-ish file (e.g. /etc/os-release,
+ * /proc/cpuinfo). Caller frees; NULL when absent. */
+static char *dbg_probe_file(const char *path, const char *key, char sep)
+{
+    char *data = NULL;
+    if (!g_file_get_contents(path, &data, NULL, NULL)) return NULL;
+    char *found = NULL;
+    gchar **lines = g_strsplit(data, "\n", -1);
+    for (int i = 0; lines[i] && !found; i++) {
+        if (!g_str_has_prefix(lines[i], key)) continue;
+        const char *v = strchr(lines[i], sep);
+        if (!v) continue;
+        gchar *t = g_strstrip(g_strdup(v + 1));
+        size_t n = strlen(t);
+        if (n >= 2 && t[0] == '"' && t[n - 1] == '"') {
+            found = g_strndup(t + 1, n - 2);
+            g_free(t);
+        } else {
+            found = t;
+        }
+    }
+    g_strfreev(lines);
+    g_free(data);
+    return found;
+}
+
+/* Whole-file value (sysfs / device-tree). Those are NUL-terminated and
+ * sometimes NUL-padded, so take up to the first NUL and trim. */
+static char *dbg_read_trimmed(const char *path)
+{
+    char *data = NULL; gsize len = 0;
+    if (!g_file_get_contents(path, &data, &len, NULL)) return NULL;
+    gsize n = strnlen(data, len);
+    char *out = g_strstrip(g_strndup(data, n));
+    g_free(data);
+    if (!*out || !g_utf8_validate(out, -1, NULL)) { g_free(out); return NULL; }
+    return out;
+}
+
+static void dbg_file_line(GString *s, const char *label, const char *path)
+{
+    GStatBuf st;
+    if (path && g_stat(path, &st) == 0)
+        g_string_append_printf(s, "  %-22s %" G_GINT64_FORMAT " bytes\n",
+                               label, (gint64)st.st_size);
+    else
+        g_string_append_printf(s, "  %-22s (not found)\n", label);
+}
+
+static int dbg_count_dir(const char *dir)
+{
+    GDir *d = dir ? g_dir_open(dir, 0, NULL) : NULL;
+    if (!d) return -1;
+    int n = 0;
+    while (g_dir_read_name(d)) n++;
+    g_dir_close(d);
+    return n;
+}
+
+static char *build_debug_info(void)
+{
     GString *s = g_string_new(NULL);
-    g_string_append_printf(s, "Nextpad++ — Debug Info\n\n");
-    g_string_append_printf(s, "Built:      %s %s\n", __DATE__, __TIME__);
-    g_string_append_printf(s, "GLib:       %d.%d.%d\n",
-        glib_major_version, glib_minor_version, glib_micro_version);
-    g_string_append_printf(s, "GTK:        %d.%d.%d\n",
-        gtk_get_major_version(), gtk_get_minor_version(),
-        gtk_get_micro_version());
-    g_string_append_printf(s, "Config dir: %s\n", g_get_user_config_dir());
-    g_string_append_printf(s, "Locale:     %s\n",
-        g_getenv("LANG") ? g_getenv("LANG") : "(unset)");
+    NppDoc *doc = editor_current_doc();
+    GtkWidget *sci = current_sci();
+
+    /* ── App ────────────────────────────────────────────────────── */
+#if defined(__aarch64__)
+    const char *arch = "ARM 64-bit";
+#elif defined(__x86_64__)
+    const char *arch = "x86 64-bit";
+#else
+    const char *arch = "unknown arch";
+#endif
+    g_string_append_printf(s, "%s v%s   (%s)\n", APP_NAME, APP_VERSION, arch);
+    g_string_append_printf(s, "Build time: %s - %s\n", __DATE__, __TIME__);
+#if defined(__clang__)
+    g_string_append_printf(s, "Built with: Clang %d.%d.%d\n",
+        __clang_major__, __clang_minor__, __clang_patchlevel__);
+#elif defined(__GNUC__)
+    g_string_append_printf(s, "Built with: GCC %d.%d.%d\n",
+        __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
+#endif
+#ifdef __STDC_VERSION__
+    g_string_append_printf(s, "C Standard: %ld\n", (long)__STDC_VERSION__);
+#endif
+    g_string_append_printf(s, "GTK:        %d.%d.%d (built %d.%d.%d)\n",
+        gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version(),
+        GTK_MAJOR_VERSION, GTK_MINOR_VERSION, GTK_MICRO_VERSION);
+    g_string_append_printf(s, "GLib:       %d.%d.%d (built %d.%d.%d)\n",
+        glib_major_version, glib_minor_version, glib_micro_version,
+        GLIB_MAJOR_VERSION, GLIB_MINOR_VERSION, GLIB_MICRO_VERSION);
+    g_string_append_printf(s, "Application ID: %s\n",
+        g_app ? g_application_get_application_id(G_APPLICATION(g_app)) : "(none)");
+    {
+        char *exe = g_file_read_link("/proc/self/exe", NULL);
+        g_string_append_printf(s, "Path:       %s\n", exe ? exe : "(unknown)");
+        g_free(exe);
+    }
+    g_string_append_printf(s, "Resources:  %s\n", npp_bundle_dir());
+    {
+        gchar *cfg = npp_local_dir();
+        g_string_append_printf(s, "Config Dir: %s\n", cfg);
+        g_free(cfg);
+    }
+
+    /* ── Runtime ────────────────────────────────────────────────── */
+    g_string_append_printf(s, "\nProcess ID: %d\n", (int)getpid());
+    g_string_append_printf(s, "Admin mode: %s\n", geteuid() == 0 ? "ON" : "OFF");
+    g_string_append_printf(s, "Sandbox:    %s\n",
+        g_file_test("/.flatpak-info", G_FILE_TEST_EXISTS) ? "Flatpak"
+        : g_getenv("SNAP") ? "Snap" : "OFF");
+    {
+        GtkNative *nat = g_window ? GTK_NATIVE(g_window) : NULL;
+        GskRenderer *r = nat ? gtk_native_get_renderer(nat) : NULL;
+        g_string_append_printf(s, "Renderer:   %s\n",
+            r ? G_OBJECT_TYPE_NAME(r) : "(none)");
+    }
     g_string_append_printf(s, "Display:    %s\n",
         g_getenv("WAYLAND_DISPLAY") ? "Wayland" :
         g_getenv("DISPLAY")         ? "X11"     : "(none)");
-    GtkWidget *dlg = gtk_dialog_new_with_buttons("Debug Info",
+
+    /* ── Settings ───────────────────────────────────────────────── */
+    g_string_append(s, "\n── Settings ──\n");
+    g_string_append_printf(s, "  Periodic Backup:       %s\n", g_prefs.backup_enabled ? "ON" : "OFF");
+    g_string_append_printf(s, "  Auto-Indent:           %s\n", g_prefs.auto_indent ? "ON" : "OFF");
+    g_string_append_printf(s, "  Show Line Numbers:     %s\n", g_prefs.show_line_numbers ? "ON" : "OFF");
+    g_string_append_printf(s, "  Tab Width:             %d\n", g_prefs.tab_width);
+    g_string_append_printf(s, "  Use Tabs:              %s\n", g_prefs.use_tabs ? "ON" : "OFF");
+    g_string_append_printf(s, "  Highlight Cur. Line:   %s\n", g_prefs.highlight_current_line ? "ON" : "OFF");
+    g_string_append_printf(s, "  Zoom Level:            %d\n", g_prefs.zoom_level);
+    g_string_append_printf(s, "  EOL Type:              %s\n",
+        g_prefs.default_eol == 0 ? "CRLF" : g_prefs.default_eol == 1 ? "CR" : "LF");
+    g_string_append_printf(s, "  Default Encoding:      %s\n", g_prefs.default_encoding);
+    g_string_append_printf(s, "  Theme Preset:          %s\n", g_prefs.theme_preset);
+    g_string_append_printf(s, "  Auto-Complete:         %s\n", g_prefs.autocomplete_enabled ? "ON" : "OFF");
+    g_string_append_printf(s, "  Auto-Complete Min:     %d\n", g_prefs.autocomplete_min_chars);
+    g_string_append_printf(s, "  Auto Update Check:     %s\n", g_prefs.auto_check_updates ? "ON" : "OFF");
+
+    /* ── Appearance ─────────────────────────────────────────────── */
+    g_string_append(s, "\n── Appearance ──\n");
+    g_string_append_printf(s, "  Dark Mode:             %s\n", theme_effective_dark() ? "ON" : "OFF");
+    {
+        char *tn = NULL;
+        g_object_get(gtk_settings_get_default(), "gtk-theme-name", &tn, NULL);
+        g_string_append_printf(s, "  GTK Theme:             %s\n", tn ? tn : "(unknown)");
+        g_free(tn);
+    }
+
+    /* ── Display ────────────────────────────────────────────────── */
+    g_string_append(s, "\n── Display Info ──\n");
+    {
+        GdkDisplay *dpy = gdk_display_get_default();
+        GListModel *mons = dpy ? gdk_display_get_monitors(dpy) : NULL;
+        guint n = mons ? g_list_model_get_n_items(mons) : 0;
+        g_string_append_printf(s, "  Monitors: %u\n", n);
+        for (guint i = 0; i < n; i++) {
+            GdkMonitor *m = g_list_model_get_item(mons, i);
+            GdkRectangle g;
+            gdk_monitor_get_geometry(m, &g);
+            const char *mk = gdk_monitor_get_manufacturer(m);
+            const char *md = gdk_monitor_get_model(m);
+            char *who = (mk && md) ? g_strdup_printf("%s %s", mk, md)
+                      : g_strdup(md ? md : (mk ? mk : "(monitor)"));
+            int hz = gdk_monitor_get_refresh_rate(m) / 1000;
+            g_string_append_printf(s,
+                "    [%u] %s — %dx%d at (%d,%d), scale %d", i, who,
+                g.width, g.height, g.x, g.y,
+                gdk_monitor_get_scale_factor(m));
+            if (hz > 0) g_string_append_printf(s, ", %d Hz", hz);
+            g_string_append_c(s, '\n');
+            g_free(who);
+            g_object_unref(m);
+        }
+    }
+
+    /* ── Window ─────────────────────────────────────────────────── */
+    g_string_append(s, "\n── Window Info ──\n");
+    if (g_window) {
+        g_string_append_printf(s, "  Size:                  %dx%d\n",
+            gtk_widget_get_width(GTK_WIDGET(g_window)),
+            gtk_widget_get_height(GTK_WIDGET(g_window)));
+        g_string_append_printf(s, "  Maximized:             %s\n",
+            gtk_window_is_maximized(GTK_WINDOW(g_window)) ? "YES" : "NO");
+    }
+    g_string_append_printf(s, "  Status bar visible:    %s\n", g_prefs.show_status_bar ? "YES" : "NO");
+    g_string_append_printf(s, "  Tab bar visible:       %s\n", g_prefs.hide_tab_bar ? "NO" : "YES");
+    g_string_append_printf(s, "  Open tabs:             %d\n", editor_page_count());
+
+    /* ── Current editor ─────────────────────────────────────────── */
+    g_string_append(s, "\n── Current Editor ──\n");
+    if (doc) {
+        g_string_append_printf(s, "  File:                  %s\n",
+            doc->filepath ? doc->filepath : "(untitled)");
+        g_string_append_printf(s, "  Language:              %s\n",
+            doc->language ? doc->language : "Plain Text");
+        g_string_append_printf(s, "  Encoding:              %s%s\n",
+            doc->encoding ? doc->encoding : "UTF-8", doc->has_bom ? " (BOM)" : "");
+        g_string_append_printf(s, "  Modified:              %s\n", doc->modified ? "YES" : "NO");
+        g_string_append_printf(s, "  Read-Only:             %s\n", doc->user_readonly ? "YES" : "NO");
+        g_string_append_printf(s, "  Word Wrap:             %s\n", doc->word_wrap ? "ON" : "OFF");
+        g_string_append_printf(s, "  Monitoring:            %s\n", doc->monitoring ? "ON" : "OFF");
+        if (sci) {
+            ScintillaObject *o = SCINTILLA(sci);
+            long len   = (long)scintilla_send_message(o, SCI_GETLENGTH, 0, 0);
+            long lines = (long)scintilla_send_message(o, SCI_GETLINECOUNT, 0, 0);
+            long pos   = (long)scintilla_send_message(o, SCI_GETCURRENTPOS, 0, 0);
+            long ln    = (long)scintilla_send_message(o, SCI_LINEFROMPOSITION, (uptr_t)pos, 0);
+            long col   = (long)scintilla_send_message(o, SCI_GETCOLUMN, (uptr_t)pos, 0);
+            long eol   = (long)scintilla_send_message(o, SCI_GETEOLMODE, 0, 0);
+            g_string_append_printf(s, "  Document length:       %ld bytes\n", len);
+            g_string_append_printf(s, "  Line count:            %ld\n", lines);
+            g_string_append_printf(s, "  Caret:                 Ln %ld, Col %ld\n", ln + 1, col + 1);
+            g_string_append_printf(s, "  EOL:                   %s\n",
+                eol == 0 ? "CRLF" : eol == 1 ? "CR" : "LF");
+            g_string_append_printf(s, "  Zoom:                  %ld\n",
+                (long)scintilla_send_message(o, SCI_GETZOOM, 0, 0));
+            g_string_append_printf(s, "  Lexer ID:              %ld\n",
+                (long)scintilla_send_message(o, SCI_GETLEXER, 0, 0));
+            g_string_append_printf(s, "  Undo available:        %s\n",
+                scintilla_send_message(o, SCI_CANUNDO, 0, 0) ? "yes" : "none");
+        }
+    } else {
+        g_string_append(s, "  (no document open)\n");
+    }
+
+    /* ── OS & hardware ──────────────────────────────────────────── */
+    g_string_append(s, "\n── OS & Hardware ──\n");
+    {
+        char *pretty = dbg_probe_file("/etc/os-release", "PRETTY_NAME", '=');
+        g_string_append_printf(s, "  OS:                    %s\n",
+            pretty ? pretty : "(unknown)");
+        g_free(pretty);
+        struct utsname un;
+        if (uname(&un) == 0) {
+            g_string_append_printf(s, "  Kernel:                %s %s\n", un.sysname, un.release);
+            g_string_append_printf(s, "  Machine:               %s\n", un.machine);
+        }
+        char *model = dbg_read_trimmed("/sys/devices/virtual/dmi/id/product_name");
+        if (!model) model = dbg_read_trimmed("/proc/device-tree/model");
+        /* x86 exposes "model name"; ARM usually has none — fall back to
+         * the SoC lines, and omit the row entirely rather than print
+         * something meaningless. */
+        char *cpu = dbg_probe_file("/proc/cpuinfo", "model name", ':');
+        if (!cpu) cpu = dbg_probe_file("/proc/cpuinfo", "Hardware", ':');
+        if (!cpu) cpu = dbg_probe_file("/proc/cpuinfo", "Processor", ':');
+        /* Deliberately no "CPU implementer" fallback: it yields a raw
+         * code like 0x61, which is less useful than omitting the row —
+         * the Machine line above already gives the architecture. */
+        if (model) { g_string_append_printf(s, "  Hardware Model:        %s\n", model); g_free(model); }
+        if (cpu)   { g_string_append_printf(s, "  CPU:                   %s\n", cpu);   g_free(cpu); }
+        g_string_append_printf(s, "  CPU Cores:             %u logical\n",
+                               g_get_num_processors());
+        long pages = sysconf(_SC_PHYS_PAGES), psz = sysconf(_SC_PAGESIZE);
+        if (pages > 0 && psz > 0)
+            g_string_append_printf(s, "  Memory:                %.1f GB\n",
+                (double)pages * (double)psz / (1024.0 * 1024.0 * 1024.0));
+        g_string_append_printf(s, "  Page Size:             %ld bytes\n", psz);
+        struct rusage ru;
+        if (getrusage(RUSAGE_SELF, &ru) == 0)   /* Linux reports kilobytes */
+            g_string_append_printf(s, "  Process Max RSS:       %.1f MB\n",
+                                   (double)ru.ru_maxrss / 1024.0);
+    }
+
+    /* ── Locale ─────────────────────────────────────────────────── */
+    g_string_append(s, "\n── Locale & Encoding ──\n");
+    {
+        const char *loc = setlocale(LC_ALL, NULL);
+        const char * const *langs = g_get_language_names();
+        const char *charset = NULL;
+        g_get_charset(&charset);
+        g_string_append_printf(s, "  Locale:                %s\n", loc ? loc : "(unset)");
+        g_string_append_printf(s, "  Language:              %s\n",
+                               langs && langs[0] ? langs[0] : "(unset)");
+        g_string_append_printf(s, "  System Encoding:       %s\n",
+                               charset ? charset : "(unknown)");
+    }
+
+    /* ── Plugins ────────────────────────────────────────────────── */
+    g_string_append(s, "\n── Plugins ──\n");
+    {
+        int n = plugin_count();
+        for (int i = 0; i < n; i++) {
+            const char *nm = plugin_name_at(i);
+            if (!nm) continue;
+            gchar *rel = g_strdup_printf("%s/%s.so", nm, nm);
+            gchar *so  = npp_local_file("plugins", rel);
+            GStatBuf st;
+            if (so && g_stat(so, &st) == 0) {
+                GDateTime *dt = g_date_time_new_from_unix_local((gint64)st.st_mtime);
+                char *when = g_date_time_format(dt, "%Y-%m-%d %H:%M");
+                g_string_append_printf(s, "  %-22s %" G_GINT64_FORMAT " KB   %s\n",
+                    nm, (gint64)st.st_size / 1024, when);
+                g_free(when); g_date_time_unref(dt);
+            } else {
+                g_string_append_printf(s, "  %-22s (binary not found)\n", nm);
+            }
+            g_free(rel); g_free(so);
+        }
+        if (n == 0) g_string_append(s, "  (none installed)\n");
+        g_string_append_printf(s, "  Total: %d plugin(s)\n", n);
+    }
+
+    /* ── Config files ───────────────────────────────────────────── */
+    g_string_append(s, "\n── Config Files ──\n");
+    {
+        gchar *f;
+        f = npp_local_file(NULL, "config.xml");   dbg_file_line(s, "config.xml", f);   g_free(f);
+        f = npp_local_file(NULL, "session.xml");  dbg_file_line(s, "session.xml", f);  g_free(f);
+        f = npp_local_file(NULL, "macros.xml");   dbg_file_line(s, "macros.xml", f);   g_free(f);
+        gchar *bk = npp_backup_dir();
+        int nb = dbg_count_dir(bk);
+        if (nb < 0) g_string_append_printf(s, "  %-22s (not found)\n", "backup/ files:");
+        else        g_string_append_printf(s, "  %-22s %d\n", "backup/ files:", nb);
+        g_free(bk);
+        gchar *udl = npp_user_subdir("userDefineLangs");
+        int nu = dbg_count_dir(udl);
+        if (nu < 0) g_string_append_printf(s, "  %-22s (not found)\n", "userDefineLangs/ files:");
+        else        g_string_append_printf(s, "  %-22s %d\n", "userDefineLangs/ files:", nu);
+        g_free(udl);
+    }
+    return g_string_free(s, FALSE);
+}
+
+static void action_debug_info(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    char *body = build_debug_info();
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(
+        i18n_translate("Debug Info"),
         g_window ? GTK_WINDOW(g_window) : NULL, GTK_DIALOG_MODAL,
-        "_Copy to Clipboard", 1, "_Close", GTK_RESPONSE_CLOSE, NULL);
-    GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
-    gtk_container_set_border_width(GTK_CONTAINER(box), 10);
+        i18n_translate("_Copy to Clipboard"), 1,
+        i18n_translate("_Close"), GTK_RESPONSE_CLOSE, NULL);
+    GtkWidget *ca = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(ca), 10);
     GtkWidget *tv = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
     gtk_text_view_set_monospace(GTK_TEXT_VIEW(tv), TRUE);
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv));
-    gtk_text_buffer_set_text(buf, s->str, -1);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)), body, -1);
     GtkWidget *sw = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_min_content_width(GTK_SCROLLED_WINDOW(sw), 480);
-    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(sw), 240);
+    gtk_scrolled_window_set_min_content_width(GTK_SCROLLED_WINDOW(sw), 600);
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(sw), 420);
     gtk_container_add(GTK_CONTAINER(sw), tv);
-    npp_box_pack(GTK_BOX(box), sw, TRUE, 0);
+    gtk_container_add(GTK_CONTAINER(ca), sw);
     gtk_widget_show_all(dlg);
-    int resp = gtk_dialog_run(GTK_DIALOG(dlg));
-    if (resp == 1)
-        npp_clipboard_set_text(s->str);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == 1)
+        npp_clipboard_set_text(body);
     gtk_widget_destroy(dlg);
-    g_string_free(s, TRUE);
+    g_free(body);
 }
+
 
 static void action_insert_blank_below(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
