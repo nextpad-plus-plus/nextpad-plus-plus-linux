@@ -28,6 +28,27 @@ set(LEX_ROOT "${CMAKE_SOURCE_DIR}/lexilla")
 set(SRC      "${CMAKE_SOURCE_DIR}/src")
 set(RES      "${CMAKE_SOURCE_DIR}/resources")
 
+# GAP-112 — About dialog facts, read from the vendored trees at configure
+# time so they cannot drift from what is actually built.
+function(_npp_dotted OUTVAR FILE FALLBACK)
+  set(_v "${FALLBACK}")
+  if(EXISTS "${FILE}")
+    file(READ "${FILE}" _raw)
+    string(STRIP "${_raw}" _raw)
+    if(_raw MATCHES "^([0-9])([0-9])([0-9])$")
+      set(_v "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+    elseif(_raw)
+      set(_v "${_raw}")
+    endif()
+  endif()
+  set(${OUTVAR} "${_v}" PARENT_SCOPE)
+endfunction()
+_npp_dotted(NPP_SCI_VERSION "${CMAKE_SOURCE_DIR}/scintilla/version.txt" "unknown")
+_npp_dotted(NPP_LEX_VERSION "${CMAKE_SOURCE_DIR}/lexilla/version.txt" "unknown")
+file(GLOB _npp_sci_patches "${CMAKE_SOURCE_DIR}/scintilla-patches/*.patch")
+list(LENGTH _npp_sci_patches NPP_SCI_PATCHES)
+message(STATUS "Scintilla ${NPP_SCI_VERSION} (+${NPP_SCI_PATCHES} patches), Lexilla ${NPP_LEX_VERSION}")
+
 # -----------------------------------------------------------------------------
 # Scintilla — GTK4 backend.
 #
@@ -188,6 +209,9 @@ endif()
 target_compile_definitions(nextpad_pp PRIVATE
     GTK
     RESOURCES_DIR="${NPP_RES_DIR}"
+    NPP_SCI_VERSION="${NPP_SCI_VERSION}"
+    NPP_LEX_VERSION="${NPP_LEX_VERSION}"
+    NPP_SCI_PATCHES=${NPP_SCI_PATCHES}
 )
 target_compile_options(nextpad_pp PRIVATE ${GTK4_CFLAGS_OTHER} ${ADW_CFLAGS_OTHER})
 set_source_files_properties("${SRC}/lexilla_bridge.cpp" PROPERTIES

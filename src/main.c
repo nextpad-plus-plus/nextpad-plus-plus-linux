@@ -1331,28 +1331,83 @@ static void action_reopen_closed(GSimpleAction *a, GVariant *p, gpointer u) {
     }
 }
 
+/* GAP-112 — About, mirroring the macOS panel (name + version + arch,
+ * build time, home, GPL) and adding the two facts that are specific to
+ * this port: it is a full GTK4 build, and the vendored Scintilla is
+ * patched to complete GTK4 support that upstream does not ship. */
 static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    /* P16 — bundled macOS logo (logo150px). GTK4's "logo" property is a
-     * GdkPaintable, not a GdkPixbuf — load it as a GdkTexture (which is
-     * a GdkPaintable) or g_object_set rejects it with a type error. */
+    /* P16 — bundled logo. GTK4's "logo" property is a GdkPaintable, not
+     * a GdkPixbuf — load it as a GdkTexture (which is a GdkPaintable) or
+     * g_object_set rejects it with a type error. */
     GdkTexture *logo = NULL;
     const char *logo_path = RESOURCES_DIR "/icons/standard/about/logo150px.png";
     if (g_file_test(logo_path, G_FILE_TEST_EXISTS))
         logo = gdk_texture_new_from_filename(logo_path, NULL);
+
+#if defined(__aarch64__)
+    const char *arch = "ARM 64-bit";
+#elif defined(__x86_64__)
+    const char *arch = "x86 64-bit";
+#else
+    const char *arch = "unknown architecture";
+#endif
+    char *version = g_strdup_printf("v%s     (%s)", APP_VERSION, arch);
+
+    /* Scintilla/Lexilla ship their version as a bare integer (558 =
+     * 5.5.8) in version.txt; NPP_SCI_VERSION/NPP_LEX_VERSION are passed
+     * in by CMake from those files. */
+    char *comments = g_strdup_printf(
+        "A native Linux port of Notepad++ — multi-tab editing with "
+        "Scintilla and Lexilla.\n"
+        "\n"
+        "Build time: %s - %s\n"
+        "\n"
+        "This is a full GTK4 build: GTK %d.%d.%d with libadwaita, written "
+        "in C11, with no GTK3 compatibility layer.\n"
+        "\n"
+        "Editor core: Scintilla %s (GTK4 backend) and Lexilla %s. Upstream "
+        "Scintilla's GTK4 support is incomplete, so the vendored copy "
+        "carries %d local patches that finish it — among them the GTK4 "
+        "autocomplete list box, line markers, mouse-wheel scrolling, "
+        "popover teardown and full-text painting.",
+        __DATE__, __TIME__,
+        gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version(),
+        NPP_SCI_VERSION, NPP_LEX_VERSION, NPP_SCI_PATCHES);
+
+    /* macOS shows the GPL notice inline; GtkAboutDialog gives it its own
+     * License view, reached from the dialog. Same text either way. */
+    const char *license =
+        "GNU General Public Licence\n\n"
+        "This program is free software; you can redistribute it and/or "
+        "modify it under the terms of the GNU General Public License "
+        "as published by the Free Software Foundation; either version 3 "
+        "of the License, or at your option any later version.\n\n"
+        "This program is distributed in the hope that it will be useful, "
+        "but WITHOUT ANY WARRANTY; without even the implied warranty of "
+        "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the "
+        "GNU General Public License for more details.\n\n"
+        "You should have received a copy of the GNU General Public "
+        "License along with this program. If not, see\n"
+        "<https://www.gnu.org/licenses/>.";
+
     gtk_show_about_dialog(GTK_WINDOW(g_window),
-        "program-name", APP_NAME,
-        "version",      APP_VERSION,
-        "comments",     "A native Linux port of Notepad++ — multi-tab text editor "
-                        "with Scintilla + Lexilla. GTK4 + libadwaita, C11.",
+        "program-name", APP_NAME " Linux",
+        "version",      version,
+        "comments",     comments,
         "website",      "https://nextpad.org",
-        "website-label","nextpad.org",
+        "website-label","https://nextpad.org",
         "copyright",    "© 2026 Andrey Letov",
-        "license-type", GTK_LICENSE_GPL_3_0,
+        "license",      license,
+        "license-type", GTK_LICENSE_CUSTOM,
+        "wrap-license", TRUE,
         "logo",         logo,
         NULL);
+    g_free(version);
+    g_free(comments);
     if (logo) g_object_unref(logo);
 }
+
 
 /* ──────────────────────────────────────────────────────────────────────
  * G11.2 Language menu
