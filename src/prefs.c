@@ -2034,13 +2034,33 @@ static void backup_dir_update_status(void)
     g_free(resolved);
 }
 
+/* The default backup folder, i.e. what npp_backup_dir() resolves to with no
+ * custom dir set. Used both to prefill the field and to recognise "the user
+ * left it at the default" (macOS: shownBak / "empty or the default string →
+ * use the default"). */
+static gchar *backup_default_dir(void)
+{
+    char saved[sizeof(g_prefs.backup_custom_dir)];
+    g_strlcpy(saved, g_prefs.backup_custom_dir, sizeof(saved));
+    g_prefs.backup_custom_dir[0] = '\0';
+    gchar *dflt = npp_backup_dir();
+    g_strlcpy(g_prefs.backup_custom_dir, saved, sizeof(g_prefs.backup_custom_dir));
+    return dflt;
+}
+
 static void on_backup_dir_changed(GtkEditable *e, gpointer d)
 {
     (void)d;
     const char *v = gtk_entry_get_text(GTK_ENTRY(e));
-    strncpy(g_prefs.backup_custom_dir, v ? v : "",
-            sizeof(g_prefs.backup_custom_dir) - 1);
-    g_prefs.backup_custom_dir[sizeof(g_prefs.backup_custom_dir) - 1] = '\0';
+    if (!v) v = "";
+    /* Storing the default path verbatim would pin the backups to today's
+     * resolved location; store "" so the default keeps following the data
+     * dir, exactly as macOS does. */
+    gchar *dflt = backup_default_dir();
+    const char *store = (g_strcmp0(v, dflt) == 0) ? "" : v;
+    g_free(dflt);
+    g_strlcpy(g_prefs.backup_custom_dir, store,
+              sizeof(g_prefs.backup_custom_dir));
     prefs_save();
     backup_dir_update_status();
 }
@@ -2063,49 +2083,82 @@ static void on_backup_dir_choose(GtkButton *b, gpointer d)
 static void on_backup_dir_reset(GtkButton *b, gpointer d)
 {
     (void)b; (void)d;
-    if (s_backup_dir_entry)
-        gtk_entry_set_text(GTK_ENTRY(s_backup_dir_entry), "");
+    if (!s_backup_dir_entry) return;
+    /* Show the resolved default (macOS resetBackupDir:); the "changed"
+     * handler maps it back to "" so the pref stays on the default. */
+    gchar *dflt = backup_default_dir();
+    gtk_entry_set_text(GTK_ENTRY(s_backup_dir_entry), dflt);
+    g_free(dflt);
 }
 
 static GtkWidget *page_backup(void)
 {
+    /* GAP-108 — laid out to mirror the macOS Backup pane
+     * (_buildBackupPage): auto-backup toggle, interval row, then the backup
+     * location as a FULL-WIDTH block — its own label line, the path field
+     * below it, the Choose/Reset buttons, and the status line last. The old
+     * grid put the path on a label+field row and then attached the trailing
+     * info label at row 2 as well, so it collided with "Backup path:" and
+     * the page was unreadable. */
     GtkWidget *g = make_grid();
+    int r = 0;
 
-    GtkWidget *chk = gtk_check_button_new_with_label("Enable auto-backup for unsaved changes");
+    GtkWidget *chk = gtk_check_button_new_with_label("Enable auto-backup");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chk), g_prefs.backup_enabled);
-    gtk_grid_attach(GTK_GRID(g), chk, 0, 0, 2, 1);
+    gtk_grid_attach(GTK_GRID(g), chk, 0, r++, 2, 1);
     g_signal_connect(chk, "toggled", G_CALLBACK(on_backup_enabled), NULL);
 
     s_backup_interval_spin = gtk_spin_button_new_with_range(10, 3600, 10);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(s_backup_interval_spin),
                               g_prefs.backup_interval_secs);
     gtk_widget_set_sensitive(s_backup_interval_spin, g_prefs.backup_enabled);
-    row(g, 1, "Backup interval (seconds):", s_backup_interval_spin);
+    row(g, r++, "Backup interval (seconds):", s_backup_interval_spin);
     g_signal_connect(s_backup_interval_spin, "value-changed",
                      G_CALLBACK(on_backup_interval), NULL);
 
     /* Custom backup location (macOS 7670433 / GAP-16). */
+    GtkWidget *loc = gtk_label_new("Backup location:");
+    gtk_widget_set_halign(loc, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(loc, 6);
+    gtk_grid_attach(GTK_GRID(g), loc, 0, r++, 2, 1);
+
+    /* macOS shows the RESOLVED default path rather than an empty field, and
+     * treats "equals the default" as "use the default" on the way back in. */
     s_backup_dir_entry = gtk_entry_new();
-    gtk_entry_set_text(GTK_ENTRY(s_backup_dir_entry), g_prefs.backup_custom_dir);
-    gtk_entry_set_placeholder_text(GTK_ENTRY(s_backup_dir_entry),
-                                   "(default: user data dir/backup)");
+    {
+        gchar *shown = g_prefs.backup_custom_dir[0]
+                     ? g_strdup(g_prefs.backup_custom_dir)
+                     : npp_backup_dir();
+        gtk_entry_set_text(GTK_ENTRY(s_backup_dir_entry), shown);
+        /* Scroll to the end so the actual folder stays visible on long
+         * paths (macOS uses NSLineBreakByTruncatingHead for the same). */
+        gtk_editable_set_position(GTK_EDITABLE(s_backup_dir_entry), -1);
+        g_free(shown);
+    }
     gtk_widget_set_hexpand(s_backup_dir_entry, TRUE);
+    gtk_widget_set_halign(s_backup_dir_entry, GTK_ALIGN_FILL);
+    /* Long paths: keep the tail (the actual folder) visible, like macOS's
+     * NSLineBreakByTruncatingHead. */
+    gtk_entry_set_alignment(GTK_ENTRY(s_backup_dir_entry), 0.0f);
+    gtk_widget_add_css_class(s_backup_dir_entry, "monospace");
     g_signal_connect(s_backup_dir_entry, "changed",
                      G_CALLBACK(on_backup_dir_changed), NULL);
-    row(g, 2, "Backup path:", s_backup_dir_entry);
+    gtk_grid_attach(GTK_GRID(g), s_backup_dir_entry, 0, r++, 2, 1);
 
     GtkWidget *bbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *bchoose = gtk_button_new_with_label("Choose…");
-    GtkWidget *breset  = gtk_button_new_with_label("Reset to default");
+    GtkWidget *breset  = gtk_button_new_with_label("Reset to Default");
     gtk_box_append(GTK_BOX(bbox), bchoose);
     gtk_box_append(GTK_BOX(bbox), breset);
-    gtk_grid_attach(GTK_GRID(g), bbox, 1, 3, 1, 1);
+    gtk_widget_set_halign(bbox, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), bbox, 0, r++, 2, 1);
     g_signal_connect(bchoose, "clicked", G_CALLBACK(on_backup_dir_choose), NULL);
     g_signal_connect(breset,  "clicked", G_CALLBACK(on_backup_dir_reset),  NULL);
 
     s_backup_dir_status = gtk_label_new("");
     gtk_widget_set_halign(s_backup_dir_status, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(g), s_backup_dir_status, 1, 4, 1, 1);
+    gtk_label_set_ellipsize(GTK_LABEL(s_backup_dir_status), PANGO_ELLIPSIZE_END);
+    gtk_grid_attach(GTK_GRID(g), s_backup_dir_status, 0, r++, 2, 1);
     backup_dir_update_status();
 
     GtkWidget *info = gtk_label_new("Backups are removed when the file "
@@ -2113,7 +2166,7 @@ static GtkWidget *page_backup(void)
     gtk_widget_set_halign(info, GTK_ALIGN_START);
     gtk_widget_set_margin_top(info, 8);
     gtk_label_set_line_wrap(GTK_LABEL(info), TRUE);
-    gtk_grid_attach(GTK_GRID(g), info, 0, 2, 2, 1);
+    gtk_grid_attach(GTK_GRID(g), info, 0, r++, 2, 1);
 
     return g;
 }
@@ -2301,8 +2354,9 @@ void prefs_dialog_show(GtkWidget *parent)
      * overflow a horizontal strip; a left-side list matches the macOS
      * Preferences sidebar too. */
     gtk_notebook_set_tab_pos(GTK_NOTEBOOK(nb), GTK_POS_LEFT);
-    /* Sidebar rows ~30% tighter vertically (user request) — the theme
-     * default padding makes the page list sprawl. */
+    /* GAP-108 — sidebar rows tightened again (user request): the vertical
+     * padding is halved from the previous 7px pass to 3px, and any theme
+     * margin between rows is zeroed, so the 16-page list stops sprawling. */
     gtk_widget_add_css_class(nb, "npp-prefs-nb");
     {
         static GtkCssProvider *prov = NULL;
@@ -2310,7 +2364,8 @@ void prefs_dialog_show(GtkWidget *parent)
             prov = gtk_css_provider_new();
             gtk_css_provider_load_from_data(prov,
                 "notebook.npp-prefs-nb > header tab {"
-                "  padding-top: 7px; padding-bottom: 7px; min-height: 0;"
+                "  padding-top: 3px; padding-bottom: 3px;"
+                "  margin-top: 0; margin-bottom: 0; min-height: 0;"
                 "}", -1);
             gtk_style_context_add_provider_for_display(
                 gdk_display_get_default(),
