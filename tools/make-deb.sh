@@ -38,7 +38,7 @@ Version: $VER
 Section: editors
 Priority: optional
 Architecture: $ARCH
-Maintainer: Andrey Letov <aletik@gmail.com>
+Maintainer: Andrew Letov <aletik@gmail.com>
 Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libstdc++6, libc6
 Recommends: unzip, git
 Description: Multi-tab text editor (Linux port of Notepad++)

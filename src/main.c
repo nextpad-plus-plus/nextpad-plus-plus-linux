@@ -1430,7 +1430,7 @@ static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
         "along with this program. If not, see "
         "&lt;https://www.gnu.org/licenses/&gt;.", TRUE), FALSE, 0);
 
-    npp_box_pack(GTK_BOX(col), about_line("© 2026 Andrey Letov", FALSE), FALSE, 0);
+    npp_box_pack(GTK_BOX(col), about_line("© 2026 Andrew Letov", FALSE), FALSE, 0);
 
     gtk_widget_show_all(dlg);
     gtk_dialog_run(GTK_DIALOG(dlg));

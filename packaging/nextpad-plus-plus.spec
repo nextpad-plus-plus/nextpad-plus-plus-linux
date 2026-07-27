@@ -38,5 +38,5 @@ margin, 5-colour mark/style system, command palette, and a plugin SDK.
 %{_mandir}/man1/nextpad-plus-plus.1*
 
 %changelog
-* Wed May 13 2026 Andrey Letov <aletik@gmail.com> - 1.0.6-1
+* Wed May 13 2026 Andrew Letov <aletik@gmail.com> - 1.0.6-1
 - Initial Linux release.

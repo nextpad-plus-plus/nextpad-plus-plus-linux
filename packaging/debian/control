@@ -1,7 +1,7 @@
 Source: nextpad-plus-plus
 Section: editors
 Priority: optional
-Maintainer: Andrey Letov <aletik@gmail.com>
+Maintainer: Andrew Letov <aletik@gmail.com>
 Build-Depends: debhelper-compat (= 13),
                cmake (>= 3.20),
                pkg-config,
