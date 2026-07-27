@@ -211,6 +211,16 @@ target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${ADW_LIBRARY_DI
 include(GNUInstallDirs)
 
 install(TARGETS nextpad_pp RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# GAP-109 — the man page (nextpad-plus-plus.1) and the in-app Command
+# Line Arguments help both document `nextpad-plus-plus`, but nothing
+# installed it, so the documented command did not exist. Ship it as a
+# symlink beside the real binary.
+install(CODE "
+  file(MAKE_DIRECTORY \"\$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}\")
+  execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink
+                  \"Nextpad++\"
+                  \"\$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}/nextpad-plus-plus\")
+")
 install(FILES "${SCI_SO}" DESTINATION ${CMAKE_INSTALL_LIBDIR})
 # Install the contents of resources/ directly under .../nextpad-plus-plus
 # so the tree matches RESOURCES_DIR (= NPP_RES_DIR) baked into the binary.

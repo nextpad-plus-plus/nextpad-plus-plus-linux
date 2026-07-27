@@ -98,31 +98,63 @@ static gboolean g_cli_noplugin;        /* -noPlugin    */
 static gboolean g_cli_folders_ws;      /* -openFoldersAsWorkspace */
 static gboolean g_cli_open_session;    /* -openSession */
 static char    *g_cli_title_add;       /* -titleAdd=STR */
+/* GAP-109 */
+static gboolean g_cli_recursive;       /* -r           */
+static gboolean g_cli_quick_print;     /* -quickPrint  */
+static gboolean g_cli_loading_time;    /* -loadingTime */
+static gint64   g_cli_start_us;        /* process start, for -loadingTime */
 
 const char *main_cli_title_add(void) { return g_cli_title_add; }
 
 static const char kUsage[] =
-    "Usage: Nextpad++ [options] [file(s)]\n"
-    "  -multiInst                launch a new instance\n"
+    "Usage: nextpad++ [options] [file(s)]\n"
+    "\n"
+    "Session options (apply to the whole launch):\n"
+    "  -multiInst                launch a separate instance\n"
     "  -nosession                don't restore or save the session\n"
     "  -notabbar                 hide the tab bar\n"
     "  -noPlugin                 start without loading plugins\n"
-    "  -ro                       open file(s) read-only\n"
-    "  -monitor                  monitor the file (tail -f)\n"
-    "  -nN | -l N                go to line N\n"
-    "  -cN | -c N                go to column N\n"
-    "  -pN | -p N                go to byte position N\n"
-    "  -lLANG | -lang LANG       apply language LANG\n"
-    "  -udl=NAME | -udl NAME     apply User Defined Language NAME\n"
-    "  -LXX                      UI localization override (e.g. -Lfr)\n"
     "  -openSession              treat the file argument as a session file\n"
     "  -openFoldersAsWorkspace   open folder arguments in the Workspace panel\n"
     "  -settingsDir=DIR          use DIR for settings\n"
     "  -titleAdd=STR             append STR to the window title\n"
-    "  -xN -yN -alwaysOnTop -quickPrint -loadingTime -r\n"
-    "                            accepted for compatibility (not supported"
-    " by the toolkit)\n"
-    "  --help                    show this help\n";
+    "  -LXX                      UI localization override (e.g. -Lfr)\n"
+    "  -r                        recurse into folder arguments\n"
+    "  -quickPrint               print the file(s), then quit\n"
+    "  -loadingTime              report startup time\n"
+    "  --help, -help             show this help\n"
+    "\n"
+    "Per-file options (apply to the LAST file on the command line):\n"
+    "  -nN | -l N                go to line N (1-based)\n"
+    "  -cN | -c N                go to column N (1-based)\n"
+    "  -pN | -p N                go to byte position N\n"
+    "  -lLANG | -lang LANG       apply language LANG (e.g. -lcpp)\n"
+    "  -udl=NAME | -udl NAME     apply User Defined Language NAME\n"
+    "  -ro                       open read-only\n"
+    "  -fullReadOnly             same as -ro\n"
+    "  -fullReadOnlySavingForbidden  same as -ro\n"
+    "  -monitor                  monitor the file (tail -f)\n"
+    "\n"
+    "Accepted for compatibility, but inert on this platform:\n"
+    "  -xN -yN                   GTK4/Wayland cannot position windows\n"
+    "  -alwaysOnTop              GTK4 removed keep-above; Wayland has no\n"
+    "                            client-side equivalent\n"
+    "\n"
+    "A folder argument opens the files inside it (add -r to recurse);\n"
+    "opening more than 20 files asks for confirmation first.\n"
+    "Option flags only take effect on a fresh instance — when a window is\n"
+    "already open, file arguments are handed to it and flags are ignored.\n";
+
+/* macOS NppCommandLineParams extractValue strips a surrounding pair of
+ * double quotes (shells usually remove them, but -titleAdd="a b" typed
+ * inside another quoting layer arrives with them attached). */
+static char *cli_unquote(const char *v)
+{
+    size_t n = v ? strlen(v) : 0;
+    if (n >= 2 && v[0] == '"' && v[n - 1] == '"')
+        return g_strndup(v + 1, n - 2);
+    return g_strdup(v ? v : "");
+}
 
 /* Strip our recognised flags from argv (in place). Returns new argc. */
 static int parse_cli_flags(int argc, char **argv)
@@ -149,7 +181,7 @@ static int parse_cli_flags(int argc, char **argv)
                    g_ascii_strcasecmp(a, "-fullReadOnly") == 0 ||
                    g_ascii_strcasecmp(a, "-fullReadOnlySavingForbidden") == 0) {
             g_cli.read_only = TRUE;
-        } else if (strcmp(a, "-monitor") == 0) {
+        } else if (g_ascii_strcasecmp(a, "-monitor") == 0) {
             g_cli.monitor = TRUE;
         } else if (strcmp(a, "--help") == 0 || strcmp(a, "-help") == 0) {
             fputs(kUsage, stdout);
@@ -168,12 +200,19 @@ static int parse_cli_flags(int argc, char **argv)
             g_cli_open_session = TRUE;
         } else if (g_str_has_prefix(a, "-settingsDir=")) {
             npp_paths_set_override(a + strlen("-settingsDir="));
-        } else if (g_str_has_prefix(a, "-titleAdd=")) {
+        } else if (g_str_has_prefix(a, "-titleAdd=") ||
+                   (g_str_has_prefix(a, "-titleAdd") && a[9])) {
+            /* Both -titleAdd=STR and the glued -titleAddSTR (macOS). */
+            const char *v = a + strlen("-titleAdd");
+            if (*v == '=') v++;
             g_free(g_cli_title_add);
-            g_cli_title_add = g_strdup(a + strlen("-titleAdd="));
-        } else if (g_str_has_prefix(a, "-udl=")) {
+            g_cli_title_add = cli_unquote(v);
+        } else if (g_str_has_prefix(a, "-udl=") ||
+                   (g_str_has_prefix(a, "-udl") && a[4])) {
+            const char *v = a + strlen("-udl");
+            if (*v == '=') v++;
             g_free(g_cli.udl);
-            g_cli.udl = g_strdup(a + 5);
+            g_cli.udl = cli_unquote(v);
         } else if (a[0] == '-' && a[1] == 'L' && g_ascii_isalpha(a[2])) {
             extern void i18n_set_cli_locale(const char *code);
             i18n_set_cli_locale(a + 2);
@@ -196,11 +235,17 @@ static int parse_cli_flags(int argc, char **argv)
             /* Glued language: -lpython (excludes -loadingTime). */
             g_free(g_cli.lang);
             g_cli.lang = g_strdup(a + 2);
-        } else if (g_ascii_strcasecmp(a, "-alwaysOnTop") == 0 ||
-                   g_ascii_strcasecmp(a, "-quickPrint") == 0 ||
-                   g_ascii_strcasecmp(a, "-loadingTime") == 0 ||
-                   strcmp(a, "-r") == 0) {
-            g_message("cli: %s accepted but not supported on this platform", a);
+        } else if (strcmp(a, "-r") == 0) {
+            g_cli_recursive = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-quickPrint") == 0) {
+            g_cli_quick_print = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-loadingTime") == 0) {
+            g_cli_loading_time = TRUE;
+        } else if (g_ascii_strcasecmp(a, "-alwaysOnTop") == 0) {
+            /* GTK4 removed gtk_window_set_keep_above and Wayland has no
+             * client-side equivalent — the View menu item is inert for
+             * the same reason. Accepted so scripts do not break. */
+            g_message("cli: -alwaysOnTop is not supported by GTK4/Wayland");
         } else {
             argv[out++] = argv[i];
         }
@@ -372,8 +417,14 @@ void main_sync_language_menu(const char *key) {
                               g_variant_new_string(key ? key : ""));
 }
 
-/* G4: route printing. Stubbed for now. */
-void main_do_print(void) { }
+/* G4 — printing. The real GtkPrintOperation runner is defined further
+ * down (it needs the page-setup + Scintilla helpers); declare it here so
+ * the File ▸ Print actions above can reach it.
+ * GAP-109: this used to be an empty stub, which meant File ▸ Print and
+ * File ▸ Print Now silently did nothing — the working implementation was
+ * registered only as the menu-less "print-real" action. */
+static void run_print_operation(gboolean with_dialog);
+void main_do_print(void) { run_print_operation(FALSE); }
 
 /* G29 — Markdown preview: pull current buffer text and push to renderer.
  * Called on toggle, on tab switch, and when a markdown buffer is modified. */
@@ -1083,7 +1134,7 @@ static void action_load_session(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u; session_restore();
 }
 static void action_print(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a;(void)p;(void)u; main_do_print();
+    (void)a;(void)p;(void)u; run_print_operation(TRUE);
 }
 
 /* G11.8 Help menu */
@@ -1108,28 +1159,86 @@ static void action_help_manual(GSimpleAction *a, GVariant *p, gpointer u) {
 
 static void action_help_cli_args(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
+    /* GAP-109 — this dialog used to list 7 of the ~24 flags the parser
+     * actually accepts; everything else was undiscoverable. It is now
+     * generated from the same contract as the terminal --help, and each
+     * inert flag says so rather than being quietly omitted. Scrollable
+     * because the list no longer fits a message dialog. */
     const char *body =
-        "Usage: nextpad-plus-plus [OPTIONS] [FILE...]\n"
+        "Usage: nextpad++ [options] [file(s)]\n"
         "\n"
-        "Per-file options (apply to the LAST file in the batch):\n"
-        "  -l N          open at line N (1-based)\n"
-        "  -c N          position caret at column N (1-based)\n"
-        "  -p N          position caret at byte offset N\n"
-        "  -lang NAME    force lexer (e.g. cpp, python, javascript)\n"
-        "  -udl NAME     force user-defined language\n"
-        "  -ro           open read-only\n"
-        "  -monitor      tail -f mode (auto-reload on external change)\n"
+        "── Session options (apply to the whole launch) ──\n"
+        "  -multiInst                Launch a separate Nextpad++ instance\n"
+        "  -nosession                Start without restoring or saving the session\n"
+        "  -notabbar                 Hide the tab bar\n"
+        "  -noPlugin                 Start without loading any plugin\n"
+        "  -openSession              Treat the file argument as a session file\n"
+        "  -openFoldersAsWorkspace   Open folder arguments in the Workspace panel\n"
+        "  -settingsDir=DIR          Use DIR for settings instead of the default\n"
+        "  -titleAdd=STR             Append STR to the window title\n"
+        "  -LXX                      Apply UI localization XX (e.g. -Lfr)\n"
+        "  -r                        Recurse into folder arguments\n"
+        "  -quickPrint               Print the file(s), then quit\n"
+        "  -loadingTime              Report how long startup took\n"
+        "  --help, -help             Print this list to the terminal\n"
         "\n"
-        "Example:\n"
-        "  nextpad-plus-plus -l 50 -ro /var/log/syslog\n"
-        "  nextpad-plus-plus -lang python script.py main.c";
-    GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(g_window),
-        GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE,
-        "Command Line Arguments");
-    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg), "%s", body);
-    gtk_dialog_run(GTK_DIALOG(dlg));
+        "── Per-file options (apply to the LAST file listed) ──\n"
+        "  -nN   | -l N              Go to line N (1-based)\n"
+        "  -cN   | -c N              Go to column N (1-based)\n"
+        "  -pN   | -p N              Go to byte position N\n"
+        "  -lLANG | -lang LANG       Apply language LANG (e.g. -lcpp)\n"
+        "  -udl=NAME | -udl NAME     Apply User Defined Language NAME\n"
+        "  -ro                       Open read-only\n"
+        "  -fullReadOnly             Same as -ro\n"
+        "  -fullReadOnlySavingForbidden   Same as -ro\n"
+        "  -monitor                  Monitor the file (tail -f)\n"
+        "\n"
+        "── Accepted, but inert on this platform ──\n"
+        "  -xN, -yN                  GTK4/Wayland cannot position windows\n"
+        "  -alwaysOnTop              GTK4 removed keep-above and Wayland has\n"
+        "                            no client-side equivalent\n"
+        "\n"
+        "── Notes ──\n"
+        "A folder argument opens the files directly inside it; add -r to\n"
+        "recurse into subfolders. Hidden files are skipped. Opening more\n"
+        "than 20 files asks for confirmation first.\n"
+        "\n"
+        "Option flags apply only to a fresh instance. When a Nextpad++\n"
+        "window is already open, file arguments are handed to it and the\n"
+        "flags are ignored — use -multiInst to force a new instance.\n"
+        "\n"
+        "── Examples ──\n"
+        "  nextpad++ -n50 -ro /var/log/syslog\n"
+        "  nextpad++ -lang python script.py\n"
+        "  nextpad++ -r ~/project\n"
+        "\n"
+        "The 'nextpad++' command comes from Help > Install nextpad++\n"
+        "Command Line Tool. After installing the package, 'Nextpad++' and\n"
+        "'nextpad-plus-plus' are on PATH as well.";
+
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(
+        i18n_translate("Command Line Arguments"),
+        g_window ? GTK_WINDOW(g_window) : NULL, GTK_DIALOG_MODAL,
+        i18n_translate("_Copy to Clipboard"), 1,
+        i18n_translate("_Close"), GTK_RESPONSE_CLOSE, NULL);
+    GtkWidget *ca = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(ca), 10);
+    GtkWidget *tv = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(tv), TRUE);
+    gtk_text_buffer_set_text(
+        gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)), body, -1);
+    GtkWidget *sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_min_content_width(GTK_SCROLLED_WINDOW(sw), 620);
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(sw), 460);
+    gtk_container_add(GTK_CONTAINER(sw), tv);
+    gtk_container_add(GTK_CONTAINER(ca), sw);
+    gtk_widget_show_all(dlg);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == 1)
+        npp_clipboard_set_text(body);
     gtk_widget_destroy(dlg);
 }
+
 
 /* ──────────────────────────────────────────────────────────────────────
  * View → Summary — word/line/char counts for the current doc
@@ -3907,8 +4016,9 @@ static void action_panel_toggle(GSimpleAction *a, GVariant *p, gpointer u) {
  * the app session. */
 static GtkPageSetup *g_page_setup = NULL;
 
-static void action_print_real(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a;(void)p;(void)u;
+/* with_dialog FALSE = straight to the default printer (Print Now,
+ * -quickPrint); TRUE = show the print dialog first. */
+static void run_print_operation(gboolean with_dialog) {
     GtkWidget *sci = current_sci(); if (!sci) return;
 
     PrintCtx *pc = g_new0(PrintCtx, 1);
@@ -3931,9 +4041,15 @@ static void action_print_real(GSimpleAction *a, GVariant *p, gpointer u) {
     g_signal_connect(op, "begin-print", G_CALLBACK(on_print_begin), pc);
     g_signal_connect(op, "draw-page",   G_CALLBACK(on_print_draw),  pc);
     g_signal_connect(op, "end-print",   G_CALLBACK(on_print_end),   pc);
-    gtk_print_operation_run(op, GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG,
-                             GTK_WINDOW(g_window), NULL);
+    gtk_print_operation_run(op,
+        with_dialog ? GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG
+                    : GTK_PRINT_OPERATION_ACTION_PRINT,
+        GTK_WINDOW(g_window), NULL);
     g_object_unref(op);
+}
+
+static void action_print_real(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u; run_print_operation(TRUE);
 }
 
 /* P12 — Page Setup. Persist the result in g_page_setup so it's used for
@@ -7878,6 +7994,10 @@ static gboolean focus_editor_idle(gpointer d)
     return G_SOURCE_REMOVE;
 }
 
+/* GAP-109 — defined below, next to the folder/print CLI helpers. */
+static void cli_apply_window_flags(void);
+static gboolean cli_post_open_idle(gpointer d);
+
 static void on_activate(GtkApplication *app, gpointer ud)
 {
     if (g_getenv("NPP_CLI_DEBUG")) g_message("cli: on_activate");
@@ -7893,14 +8013,97 @@ static void on_activate(GtkApplication *app, gpointer ud)
          * keep_absent_session pref is honored inside session.c. */
         if (g_prefs.remember_session && !g_cli_nosession)
             session_restore();
-        if (g_cli_notabbar) {
-            extern void editor_force_hide_tabbar(void);
-            editor_force_hide_tabbar();
-        }
+        cli_apply_window_flags();                    /* GAP-109 */
     }
     gtk_window_present(GTK_WINDOW(g_window));
     g_idle_add(focus_editor_idle, NULL);
+    g_idle_add(cli_post_open_idle, NULL);            /* GAP-109 */
     g_timeout_add(2500, startup_update_check, NULL);
+}
+
+/* GAP-109 — window-scoped CLI flags. Previously applied only in
+ * on_activate, so `-notabbar file.txt` silently did nothing: with file
+ * arguments GApplication dispatches "open", not "activate". */
+static void cli_apply_window_flags(void)
+{
+    if (g_cli_notabbar) {
+        extern void editor_force_hide_tabbar(void);
+        editor_force_hide_tabbar();
+    }
+}
+
+/* GAP-109 — folder arguments (macOS _expandFolderArguments). A bare
+ * folder opens the files directly inside it; -r recurses. Hidden
+ * entries are skipped, matching macOS. Sorted for a stable tab order. */
+static void cli_collect_folder(const char *dir, gboolean recurse,
+                               GPtrArray *out)
+{
+    GDir *d = g_dir_open(dir, 0, NULL);
+    if (!d) return;
+    GPtrArray *subdirs = g_ptr_array_new_with_free_func(g_free);
+    const char *name;
+    while ((name = g_dir_read_name(d))) {
+        if (name[0] == '.') continue;               /* skip hidden */
+        char *full = g_build_filename(dir, name, NULL);
+        if (g_file_test(full, G_FILE_TEST_IS_DIR)) {
+            if (recurse) g_ptr_array_add(subdirs, full);
+            else         g_free(full);
+        } else {
+            g_ptr_array_add(out, full);             /* out owns it */
+        }
+    }
+    g_dir_close(d);
+    for (guint i = 0; i < subdirs->len; i++)
+        cli_collect_folder(g_ptr_array_index(subdirs, i), TRUE, out);
+    g_ptr_array_free(subdirs, TRUE);
+}
+
+static int cmp_path(gconstpointer a, gconstpointer b)
+{
+    return g_strcmp0(*(const char * const *)a, *(const char * const *)b);
+}
+
+/* Opening a whole tree can mean hundreds of tabs — macOS asks first
+ * past 20, and so do we. */
+#define CLI_MANY_FILES 20
+
+static void cli_open_folder(const char *dir)
+{
+    GPtrArray *files = g_ptr_array_new_with_free_func(g_free);
+    cli_collect_folder(dir, g_cli_recursive, files);
+    g_ptr_array_sort(files, cmp_path);
+
+    if (files->len > CLI_MANY_FILES) {
+        GtkWidget *d = gtk_message_dialog_new(
+            g_window ? GTK_WINDOW(g_window) : NULL, GTK_DIALOG_MODAL,
+            GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL,
+            "Open %u files from \"%s\"?", files->len, dir);
+        int r = gtk_dialog_run(GTK_DIALOG(d));
+        gtk_widget_destroy(d);
+        if (r != GTK_RESPONSE_OK) { g_ptr_array_free(files, TRUE); return; }
+    }
+    for (guint i = 0; i < files->len; i++)
+        editor_open_path_guarded(g_ptr_array_index(files, i));
+    g_ptr_array_free(files, TRUE);
+}
+
+/* GAP-109 — -loadingTime / -quickPrint, run once the window is up. */
+static gboolean cli_post_open_idle(gpointer d)
+{
+    (void)d;
+    if (g_cli_loading_time) {
+        g_cli_loading_time = FALSE;
+        double secs = (double)(g_get_monotonic_time() - g_cli_start_us) / 1e6;
+        char msg[128];
+        g_snprintf(msg, sizeof msg, "Loading time: %.3f seconds", secs);
+        npp_info_dialog("Nextpad++", msg);
+    }
+    if (g_cli_quick_print) {
+        g_cli_quick_print = FALSE;
+        main_do_print();
+        g_application_quit(G_APPLICATION(g_app));
+    }
+    return G_SOURCE_REMOVE;
 }
 
 static void on_open(GtkApplication *app, GFile **files, gint n_files,
@@ -7910,6 +8113,7 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
     if (g_getenv("NPP_CLI_DEBUG"))
         g_message("cli: on_open n=%d", n_files);
     if (!g_window) build_main_window(app);
+    cli_apply_window_flags();                        /* GAP-109 */
     for (gint i = 0; i < n_files; i++) {
         const char *path = g_file_peek_path(files[i]);
         if (!path) continue;
@@ -7919,11 +8123,14 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
             session_restore_from(path);
             continue;
         }
-        if (g_cli_folders_ws &&
-            g_file_test(path, G_FILE_TEST_IS_DIR)) {
-            /* GAP-62 — folder args land in the Workspace panel. */
-            workspace_add_folder(path);
-            workspace_set_visible(TRUE);
+        if (g_file_test(path, G_FILE_TEST_IS_DIR)) {
+            if (g_cli_folders_ws) {
+                /* GAP-62 — folder args land in the Workspace panel. */
+                workspace_add_folder(path);
+                workspace_set_visible(TRUE);
+            } else {
+                cli_open_folder(path);              /* GAP-109 */
+            }
             continue;
         }
         editor_open_path_guarded(path);             /* G17 size guard */
@@ -7932,6 +8139,7 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
     apply_cli_flags_to_current();
     gtk_window_present(GTK_WINDOW(g_window));
     g_idle_add(focus_editor_idle, NULL);
+    g_idle_add(cli_post_open_idle, NULL);            /* GAP-109 */
     g_timeout_add(2500, startup_update_check, NULL);
 }
 
@@ -7943,6 +8151,7 @@ int main(int argc, char **argv)
 {
     /* GAP-62 — flags must parse FIRST: -settingsDir redirects every path
      * below, -nosession/-noPlugin gate the loaders, --help exits. */
+    g_cli_start_us = g_get_monotonic_time();   /* GAP-109 -loadingTime */
     argc = parse_cli_flags(argc, argv);
     if (g_cli_nosession) session_set_disabled(TRUE);
 
