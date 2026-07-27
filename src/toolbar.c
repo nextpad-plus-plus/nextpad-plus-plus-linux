@@ -169,6 +169,40 @@ static void toolbar_colorize_pixbuf(GdkPixbuf *pb)
     }
 }
 
+/* GAP-110 — map a toolbar icon request onto the standard set's filename.
+ *
+ * resources/icons/standard/ is copied verbatim from macOS, so it carries
+ * macOS's canonical names (newFile, openFile, saveFile, closeAll, …). This
+ * toolbar, however, addresses icons by the SHORT names the themed light/dark
+ * set uses on disk (new_off.png, close_off.png, findrep_off.png, …). The dozen
+ * that differ are mapped here; every other name is spelled identically in both
+ * sets.
+ *
+ * Without this the "Standard icons" pref only half-applied: names that happened
+ * to coincide (print, cut, copy, find, zoomIn, wrap, …) loaded from standard/,
+ * while new/open/save/close/findrep/the macro icons missed and fell through to
+ * the themed folder — a toolbar mixing both sets, which is what the user saw. */
+static const char *standard_icon_name(const char *name)
+{
+    static const struct { const char *req, *std; } alias[] = {
+        { "new",          "newFile"      },
+        { "open",         "openFile"     },
+        { "save",         "saveFile"     },
+        { "saveall",      "saveAll"      },
+        { "close",        "closeFile"    },
+        { "closeall",     "closeAll"     },
+        { "findrep",      "findReplace"  },
+        { "startrecord",  "startRecord"  },
+        { "stoprecord",   "stopRecord"   },
+        { "playrecord",   "playRecord"   },
+        { "playrecord_m", "playRecord_m" },
+        { "saverecord",   "saveRecord"   },
+    };
+    for (size_t i = 0; i < G_N_ELEMENTS(alias); i++)
+        if (strcmp(name, alias[i].req) == 0) return alias[i].std;
+    return name;
+}
+
 static GtkWidget *load_icon(const char *name)
 {
     char path[512];
@@ -177,11 +211,16 @@ static GtkWidget *load_icon(const char *name)
     GdkPixbuf *pb = NULL;
 
     /* GAP-47 — "Standard icons" pref: the mode-agnostic classic set
-     * takes priority when enabled (macOS fbf4a86). */
+     * takes priority when enabled (macOS fbf4a86). Any name the standard
+     * folder does not cover falls through to the themed set, exactly as
+     * macOS's nppToolbarIcon falls back to the Fluent path. */
+    gboolean from_standard = FALSE;
     if (g_prefs.toolbar_standard_icons) {
         snprintf(path, sizeof(path),
-                 RESOURCES_DIR "/icons/standard/toolbar/%s.png", name);
+                 RESOURCES_DIR "/icons/standard/toolbar/%s.png",
+                 standard_icon_name(name));
         pb = gdk_pixbuf_new_from_file(path, NULL);
+        if (pb) from_standard = TRUE;
     }
     if (!pb) {
         snprintf(path, sizeof(path),
@@ -193,8 +232,10 @@ static GtkWidget *load_icon(const char *name)
         if (err) g_clear_error(&err);
         /* Fallback: try standard/ (16×16 classic icons) */
         snprintf(path, sizeof(path),
-                 RESOURCES_DIR "/icons/standard/toolbar/%s.png", name);
+                 RESOURCES_DIR "/icons/standard/toolbar/%s.png",
+                 standard_icon_name(name));
         pb = gdk_pixbuf_new_from_file(path, &err);
+        if (pb) from_standard = TRUE;
         if (!pb) {
             if (err) g_clear_error(&err);
             GtkWidget *mi = gtk_image_new_from_icon_name("image-missing");
@@ -209,7 +250,10 @@ static GtkWidget *load_icon(const char *name)
         g_object_unref(pb);
         pb = a;
     }
-    toolbar_colorize_pixbuf(pb);
+    /* macOS applies NO colorization to the standard set — it is returned
+     * as-is for every mode (fbf4a86: "used as-is for all modes"). Only the
+     * themed Fluent icons get the tint. */
+    if (!from_standard) toolbar_colorize_pixbuf(pb);
 
     GdkTexture *tex = gdk_texture_new_for_pixbuf(pb);
     g_object_unref(pb);
