@@ -2309,9 +2309,13 @@ GtkWidget *editor_init(GtkWidget *window)
     watermark_refresh();
 
     s_split_v = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    /* GAP-106 — tag both editor splits so their divider can be styled
+     * without touching the side-panel dock's GtkPaned chain (GAP-99). */
+    gtk_widget_add_css_class(s_split_v, "npp-editor-split");
     gtk_paned_set_start_child(GTK_PANED(s_split_v), nb_overlay);
     gtk_paned_set_resize_start_child(GTK_PANED(s_split_v), TRUE);
     s_split_h = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
+    gtk_widget_add_css_class(s_split_h, "npp-editor-split");
     gtk_paned_set_start_child(GTK_PANED(s_split_h), s_split_v);
     gtk_paned_set_resize_start_child(GTK_PANED(s_split_h), TRUE);
     s_active_notebook = s_notebook;
@@ -2357,6 +2361,29 @@ NppDoc *editor_current_doc(void)
     if (p < 0) return NULL;
     GtkWidget *sci = page_to_sci(gtk_notebook_get_nth_page(nb, p));
     return sci ? doc_of_sci(sci) : NULL;
+}
+
+/* GAP-107 — activate a document in whichever view owns it (primary or
+ * either split pane). The Document List routes clicks through here: macOS
+ * does the same in documentListPanel:activateEditor:, which walks the three
+ * tab managers and calls selectTabAtIndex: on the owner. Deliberately no
+ * grab_focus() — the list keeps keyboard focus so arrow-key navigation
+ * through it still works, and setting the page is enough to bring the doc
+ * up. Returns FALSE if the doc is not in any notebook (stale pointer). */
+gboolean editor_activate_doc(NppDoc *doc)
+{
+    if (!doc || !doc->sci) return FALSE;
+    GtkNotebook *nb = notebook_of(doc->sci);
+    GtkWidget   *sw = gtk_widget_get_parent(doc->sci);
+    if (!nb || !sw) return FALSE;
+    int page = gtk_notebook_page_num(nb, sw);
+    if (page < 0) return FALSE;
+    gtk_notebook_set_current_page(nb, page);
+    /* set_current_page is a no-op when that tab is already current in its
+     * own notebook, so make the owning view active explicitly (same reason
+     * as GAP-103's right-click handler). */
+    s_active_notebook = GTK_WIDGET(nb);
+    return TRUE;
 }
 
 GPtrArray *editor_all_docs(void)

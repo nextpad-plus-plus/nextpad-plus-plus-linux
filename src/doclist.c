@@ -42,7 +42,13 @@ G_DECLARE_FINAL_TYPE(DocListItem, doclist_item, DOCLIST, ITEM, GObject)
 
 struct _DocListItem {
     GObject  parent;
-    int      page;        /* index in the primary editor notebook */
+    /* GAP-107 — identity of the listed document. The list spans ALL views
+     * (primary + both split panes), so a primary-notebook index can no
+     * longer identify a row; every lookup goes through this pointer. It is
+     * borrowed and only valid until the next doclist_refresh(), which every
+     * open/close/move path already triggers. */
+    NppDoc  *doc;
+    int      page;        /* index within the doc's OWN notebook (display only) */
     gchar   *name;        /* basename with extension stripped (or "new N") */
     gchar   *ext;         /* leading-dot extension, or "" */
     gchar   *path;        /* directory containing the file, or "" */
@@ -76,6 +82,7 @@ static void doclist_item_init(DocListItem *self) { (void)self; }
 static DocListItem *doclist_item_new_from_doc(int page, const NppDoc *doc)
 {
     DocListItem *it = g_object_new(DOCLIST_ITEM_TYPE, NULL);
+    it->doc       = (NppDoc *)doc;
     it->page      = page;
     it->modified  = doc->modified;
     it->pinned    = doc->pinned;
@@ -273,8 +280,7 @@ static void on_selection_changed(GtkSelectionModel *sel,
     GObject *o = g_list_model_get_item(G_LIST_MODEL(sel), i);
     if (!o) return;
     DocListItem *item = DOCLIST_ITEM(o);
-    GtkWidget *nb = editor_get_notebook();
-    if (nb) gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), item->page);
+    editor_activate_doc(item->doc);   /* GAP-107 — may live in a split pane */
     g_object_unref(o);
 }
 
@@ -333,8 +339,7 @@ static void on_columnview_rightclick(GtkGestureClick *gesture, int n_press,
         /* Per-row right-click — switch editor to that doc, then pop the
          * exact same XML-driven tab context menu the tab strip uses.
          * Matches macOS DocumentListPanel.mm:contextMenuForRow:. */
-        GtkWidget *nb = editor_get_notebook();
-        if (nb) gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), item->page);
+        editor_activate_doc(item->doc);   /* GAP-107 — any view */
 
         NppMenu *menu = npp_menu_new();
         int n = ctxmenu_append_tab(menu, app);
@@ -541,36 +546,49 @@ void doclist_refresh(void)
 {
     if (!s_store) return;
 
-    /* Remember the currently-selected page to restore after rebuild. */
-    int sel_page = editor_current_page();
-
-    /* Rebuild the underlying store. Pinned docs come first so the
-     * unsorted order matches macOS (TabManager.allEditors there). */
+    /* GAP-107 — list documents from EVERY view. editor_all_docs() walks the
+     * primary notebook and both split panes; the old editor_page_count() /
+     * editor_doc_at() pair resolved against the primary only, so a tab moved
+     * into a split silently vanished from the list (and became unreachable
+     * from it when the tab bar was hidden). macOS fixed exactly this in
+     * 059cb8a by aggregating its three tab managers behind
+     * documentListPanelEditors:. */
     g_list_store_remove_all(s_store);
-    int n = editor_page_count();
+    GPtrArray *docs = editor_all_docs();
+    /* Pinned docs come first so the unsorted order matches macOS
+     * (TabManager.allEditors there). */
     for (int pass = 0; pass < 2; pass++) {
         gboolean want_pinned = (pass == 0);
-        for (int i = 0; i < n; i++) {
-            NppDoc *doc = editor_doc_at(i);
+        for (guint i = 0; i < docs->len; i++) {
+            NppDoc *doc = g_ptr_array_index(docs, i);
             if (!doc) continue;
             if (doc->pinned != want_pinned) continue;
-            DocListItem *it = doclist_item_new_from_doc(i, doc);
+            DocListItem *it = doclist_item_new_from_doc((int)i, doc);
             g_list_store_append(s_store, it);
             g_object_unref(it);
         }
     }
-    doclist_sync_selection(sel_page);
+    g_ptr_array_free(docs, TRUE);
+    doclist_sync_selection(-1);
 }
 
+/* `page` is ignored — kept so the header/API is unchanged. GAP-107: the row
+ * to highlight is found by DOC IDENTITY against the active view's current
+ * document, because rows now span every view and a primary-notebook page
+ * index cannot address them (macOS reads documentListPanelCurrentEditor:
+ * for the same reason). */
 void doclist_sync_selection(int page)
 {
-    if (!s_selection || page < 0) return;
+    (void)page;
+    if (!s_selection) return;
+    NppDoc *cur = editor_current_doc();
+    if (!cur) return;
     GListModel *m = G_LIST_MODEL(s_selection);
     guint n = g_list_model_get_n_items(m);
     for (guint i = 0; i < n; i++) {
         DocListItem *it = g_list_model_get_item(m, i);
         if (!it) continue;
-        if (it->page == page) {
+        if (it->doc == cur) {
             s_blocking_sel = TRUE;
             gtk_single_selection_set_selected(s_selection, i);
             s_blocking_sel = FALSE;

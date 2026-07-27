@@ -51,6 +51,9 @@ NppDoc    *editor_doc_at(int page);
  * editor_doc_at() — any whole-app walk (Save All, quit, session) must
  * use this. Caller frees the array only: g_ptr_array_free(a, TRUE). */
 GPtrArray *editor_all_docs(void);
+/* GAP-107 — bring a doc to the front in whichever view owns it (primary
+ * or a split pane); FALSE if it is in none. */
+gboolean   editor_activate_doc(NppDoc *doc);
 int        editor_page_count(void);
 int        editor_current_page(void);
 GtkWidget *editor_get_notebook(void);

@@ -5508,6 +5508,18 @@ static void install_tab_color_css(void) {
         ".npp-tab-controls menubutton > button {"
         "  padding: 2px 4px;"
         "  margin: 0;"
+        "}\n"
+        /* GAP-106 — the editor split divider drew a 1px grey hairline the
+         * full height of the split, INCLUDING straight through the tab
+         * strip, where it reads as a stray mark just left of the secondary
+         * view's first tab. Make it transparent: the panes stay draggable
+         * (the separator keeps its width, only the paint goes) and the two
+         * editors are still clearly delimited by the secondary's line-number
+         * margin. Scoped to .npp-editor-split so the side-panel dock's
+         * GtkPaned chain (GAP-99) keeps its own dividers. */
+        "paned.npp-editor-split > separator {"
+        "  background-color: transparent;"
+        "  background-image: none;"
         "}\n");
 
     /* GAP-105 — editor tab strip geometry. Scoped to .npp-editor-tabs so
