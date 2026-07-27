@@ -2354,9 +2354,11 @@ void prefs_dialog_show(GtkWidget *parent)
      * overflow a horizontal strip; a left-side list matches the macOS
      * Preferences sidebar too. */
     gtk_notebook_set_tab_pos(GTK_NOTEBOOK(nb), GTK_POS_LEFT);
-    /* GAP-108 — sidebar rows tightened again (user request): the vertical
-     * padding is halved from the previous 7px pass to 3px, and any theme
-     * margin between rows is zeroed, so the 16-page list stops sprawling. */
+    /* GAP-108 — sidebar row spacing. Theme margins are zeroed, so the blank
+     * gap between two labels is 2*padding + ~8px of line-box leading (which
+     * padding cannot remove). 6px padding therefore lands the gap on the
+     * requested 20px, down from the 30px the old 7px-padding-plus-margins
+     * rows produced. */
     gtk_widget_add_css_class(nb, "npp-prefs-nb");
     {
         static GtkCssProvider *prov = NULL;
@@ -2364,7 +2366,7 @@ void prefs_dialog_show(GtkWidget *parent)
             prov = gtk_css_provider_new();
             gtk_css_provider_load_from_data(prov,
                 "notebook.npp-prefs-nb > header tab {"
-                "  padding-top: 3px; padding-bottom: 3px;"
+                "  padding-top: 6px; padding-bottom: 6px;"
                 "  margin-top: 0; margin-bottom: 0; min-height: 0;"
                 "}", -1);
             gtk_style_context_add_provider_for_display(
