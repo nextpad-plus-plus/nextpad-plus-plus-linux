@@ -1331,19 +1331,26 @@ static void action_reopen_closed(GSimpleAction *a, GVariant *p, gpointer u) {
     }
 }
 
-/* GAP-112 — About, mirroring the macOS panel (name + version + arch,
- * build time, home, GPL) and adding the two facts that are specific to
- * this port: it is a full GTK4 build, and the vendored Scintilla is
- * patched to complete GTK4 support that upstream does not ship. */
+/* GAP-112 — About. Laid out like the macOS panel: logo top-left with
+ * every line left-aligned beside and beneath it. GtkAboutDialog centres
+ * its content and cannot do that, so this is a plain dialog. */
+static GtkWidget *about_line(const char *markup, gboolean wrap)
+{
+    GtkWidget *l = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(l), markup);
+    gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
+    gtk_widget_set_halign(l, GTK_ALIGN_START);
+    if (wrap) {
+        gtk_label_set_wrap(GTK_LABEL(l), TRUE);
+        gtk_label_set_wrap_mode(GTK_LABEL(l), PANGO_WRAP_WORD_CHAR);
+        gtk_label_set_max_width_chars(GTK_LABEL(l), 62);
+    }
+    gtk_label_set_selectable(GTK_LABEL(l), TRUE);
+    return l;
+}
+
 static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    /* P16 — bundled logo. GTK4's "logo" property is a GdkPaintable, not
-     * a GdkPixbuf — load it as a GdkTexture (which is a GdkPaintable) or
-     * g_object_set rejects it with a type error. */
-    GdkTexture *logo = NULL;
-    const char *logo_path = RESOURCES_DIR "/icons/standard/about/logo150px.png";
-    if (g_file_test(logo_path, G_FILE_TEST_EXISTS))
-        logo = gdk_texture_new_from_filename(logo_path, NULL);
 
 #if defined(__aarch64__)
     const char *arch = "ARM 64-bit";
@@ -1352,61 +1359,84 @@ static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
 #else
     const char *arch = "unknown architecture";
 #endif
-    char *version = g_strdup_printf("v%s     (%s)", APP_VERSION, arch);
 
-    /* Scintilla/Lexilla ship their version as a bare integer (558 =
-     * 5.5.8) in version.txt; NPP_SCI_VERSION/NPP_LEX_VERSION are passed
-     * in by CMake from those files. */
-    char *comments = g_strdup_printf(
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(
+        i18n_translate("About Nextpad++"),
+        g_window ? GTK_WINDOW(g_window) : NULL, GTK_DIALOG_MODAL,
+        i18n_translate("_OK"), GTK_RESPONSE_CLOSE, NULL);
+    GtkWidget *ca = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(ca), 18);
+
+    /* [logo] [text column] — the macOS arrangement. */
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
+    npp_box_pack(GTK_BOX(ca), row, TRUE, 0);
+
+    const char *logo_path = RESOURCES_DIR "/icons/standard/about/logo100px.png";
+    if (g_file_test(logo_path, G_FILE_TEST_EXISTS)) {
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(logo_path, 72, 72, NULL);
+        if (pb) {
+            GtkWidget *img = gtk_image_new_from_pixbuf(pb);
+            g_object_unref(pb);
+            gtk_widget_set_size_request(img, 72, 72);
+            gtk_widget_set_valign(img, GTK_ALIGN_START);
+            npp_box_pack(GTK_BOX(row), img, FALSE, 0);
+        }
+    }
+
+    GtkWidget *col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_hexpand(col, TRUE);
+    npp_box_pack(GTK_BOX(row), col, TRUE, 0);
+
+    char *head = g_markup_printf_escaped(
+        "<b><big>%s Linux v%s</big></b>     (%s)", APP_NAME, APP_VERSION, arch);
+    npp_box_pack(GTK_BOX(col), about_line(head, FALSE), FALSE, 0);
+    g_free(head);
+
+    char *build = g_markup_printf_escaped("Build time: %s - %s", __DATE__, __TIME__);
+    npp_box_pack(GTK_BOX(col), about_line(build, FALSE), FALSE, 0);
+    g_free(build);
+
+    npp_box_pack(GTK_BOX(col),
+        about_line("Home: <a href=\"https://nextpad.org\">https://nextpad.org</a>",
+                   FALSE), FALSE, 0);
+
+    npp_box_pack(GTK_BOX(col), about_line(
         "A native Linux port of Notepad++ — multi-tab editing with "
-        "Scintilla and Lexilla.\n"
-        "\n"
-        "Build time: %s - %s\n"
-        "\n"
-        "This is a full GTK4 build: GTK %d.%d.%d with libadwaita, written "
-        "in C11, with no GTK3 compatibility layer.\n"
-        "\n"
-        "Editor core: Scintilla %s (GTK4 backend) and Lexilla %s. Upstream "
-        "Scintilla's GTK4 support is incomplete, so the vendored copy "
-        "carries %d local patches that finish it — among them the GTK4 "
-        "autocomplete list box, line markers, mouse-wheel scrolling, "
-        "popover teardown and full-text painting.",
-        __DATE__, __TIME__,
-        gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version(),
-        NPP_SCI_VERSION, NPP_LEX_VERSION, NPP_SCI_PATCHES);
+        "Scintilla and Lexilla.", TRUE), FALSE, 0);
 
-    /* macOS shows the GPL notice inline; GtkAboutDialog gives it its own
-     * License view, reached from the dialog. Same text either way. */
-    const char *license =
-        "GNU General Public Licence\n\n"
+    /* The two facts specific to this port. */
+    char *tech = g_markup_printf_escaped(
+        "Built on GTK %d.%d.%d with libadwaita, written in C11 — a full "
+        "GTK4 application.\n\n"
+        "Full Scintilla GTK4 support was added to Nextpad++ to make the "
+        "application fully GTK4 (Scintilla %s, Lexilla %s).",
+        gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version(),
+        NPP_SCI_VERSION, NPP_LEX_VERSION);
+    npp_box_pack(GTK_BOX(col), about_line(tech, TRUE), FALSE, 0);
+    g_free(tech);
+
+    npp_box_pack(GTK_BOX(col), about_line("<b>GNU General Public Licence</b>",
+                                          FALSE), FALSE, 0);
+    npp_box_pack(GTK_BOX(col), about_line(
         "This program is free software; you can redistribute it and/or "
-        "modify it under the terms of the GNU General Public License "
-        "as published by the Free Software Foundation; either version 3 "
-        "of the License, or at your option any later version.\n\n"
+        "modify it under the terms of the GNU General Public License as "
+        "published by the Free Software Foundation; either version 3 of "
+        "the License, or at your option any later version.\n\n"
         "This program is distributed in the hope that it will be useful, "
         "but WITHOUT ANY WARRANTY; without even the implied warranty of "
         "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the "
         "GNU General Public License for more details.\n\n"
-        "You should have received a copy of the GNU General Public "
-        "License along with this program. If not, see\n"
-        "<https://www.gnu.org/licenses/>.";
+        "You should have received a copy of the GNU General Public License "
+        "along with this program. If not, see "
+        "&lt;https://www.gnu.org/licenses/&gt;.", TRUE), FALSE, 0);
 
-    gtk_show_about_dialog(GTK_WINDOW(g_window),
-        "program-name", APP_NAME " Linux",
-        "version",      version,
-        "comments",     comments,
-        "website",      "https://nextpad.org",
-        "website-label","https://nextpad.org",
-        "copyright",    "© 2026 Andrey Letov",
-        "license",      license,
-        "license-type", GTK_LICENSE_CUSTOM,
-        "wrap-license", TRUE,
-        "logo",         logo,
-        NULL);
-    g_free(version);
-    g_free(comments);
-    if (logo) g_object_unref(logo);
+    npp_box_pack(GTK_BOX(col), about_line("© 2026 Andrey Letov", FALSE), FALSE, 0);
+
+    gtk_widget_show_all(dlg);
+    gtk_dialog_run(GTK_DIALOG(dlg));
+    gtk_widget_destroy(dlg);
 }
+
 
 
 /* ──────────────────────────────────────────────────────────────────────
