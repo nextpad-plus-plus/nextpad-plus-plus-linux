@@ -1002,6 +1002,19 @@ static void build_modern_toolbar(GtkWidget *tb, GtkWidget *parent_window)
                 kCapsules[k].build(tb, parent_window);
 }
 
+/* GAP-102 — trailing + ▾ ✕ tab controls, right-aligned at the end of the
+ * toolbar. macOS appends kTBTabControls after a FlexibleSpace in BOTH
+ * _classicDefaultItemIdentifiers and _tahoeDefaultItemIdentifiers, so this
+ * runs for both appearance styles. The hexpand spacer is the GTK
+ * equivalent of NSToolbarFlexibleSpaceItemIdentifier. */
+static void append_tab_controls(GtkWidget *tb)
+{
+    GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(spacer, TRUE);
+    gtk_box_append(GTK_BOX(tb), spacer);
+    gtk_box_append(GTK_BOX(tb), editor_make_tab_controls());
+}
+
 GtkWidget *toolbar_init(GtkWidget *parent_window)
 {
     s_window = parent_window;
@@ -1016,6 +1029,7 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
      * flat Classic strip. Same widgets and behavior, different grouping. */
     if (g_prefs.appearance_style == 1) {
         build_modern_toolbar(tb, parent_window);
+        append_tab_controls(tb);
         toolbar_update_macro_buttons();
         return tb;
     }
@@ -1108,6 +1122,7 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
 
 #undef ADD
 
+    append_tab_controls(tb);           /* GAP-102 — right-aligned + ▾ ✕ */
     toolbar_update_macro_buttons();
     return tb;
 }

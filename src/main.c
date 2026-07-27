@@ -5482,23 +5482,6 @@ static void install_tab_color_css(void) {
         "notebook.npp-editor-tabs > header > tabs > tab.tab-color-4:checked { box-shadow: inset 0 3px 0 0 #F5B67A; }\n"
         "notebook.npp-editor-tabs > header > tabs > tab.tab-color-5,\n"
         "notebook.npp-editor-tabs > header > tabs > tab.tab-color-5:checked { box-shadow: inset 0 3px 0 0 #F08CF0; }\n"
-        /* Editor tab strip geometry. All selectors are scoped to the
-         * editor notebook (.npp-editor-tabs) so Preferences / Plugin Admin
-         * / Find-dialog notebooks keep their default theme tabs.
-         * Inactive tabs sit 3px lower (margin-top) and are 3px shorter
-         * than the active tab — the macOS NppTabBar kActiveBoost.
-         * No bottom margin: every tab sits flush on the header's #cccccc
-         * base line. */
-        "notebook.npp-editor-tabs > header > tabs > tab {"
-        "  min-height: 18px;"
-        "  padding-top: 2px;"
-        "  padding-bottom: 2px;"
-        "  margin: 3px 0 0 0;"
-        "}\n"
-        "notebook.npp-editor-tabs > header > tabs > tab:checked {"
-        "  min-height: 21px;"
-        "  margin-top: 0;"
-        "}\n"
         "notebook.npp-editor-tabs > header > tabs > tab button {"
         "  min-height: 0;"
         "  min-width: 0;"
@@ -5515,7 +5498,52 @@ static void install_tab_color_css(void) {
         "  background-image: none;"
         "  box-shadow: none;"
         "  border: none;"
+        "}\n"
+        /* GAP-102 — the trailing + ▾ ✕ controls now live in the toolbar
+         * (macOS kTBTabControls), not in the notebook header, so no editor
+         * tab strip carries an action widget and every view's header
+         * measures identically. Keep them visually flat like the rest of
+         * the toolbar. */
+        ".npp-tab-controls button,\n"
+        ".npp-tab-controls menubutton > button {"
+        "  padding: 2px 4px;"
+        "  margin: 0;"
         "}\n");
+
+    /* GAP-105 — editor tab strip geometry. Scoped to .npp-editor-tabs so
+     * Preferences / Plugin Admin / Find-dialog notebooks keep their default
+     * theme tabs, and applied to BOTH the primary and split notebooks (they
+     * share the class) so the two views always agree.
+     *
+     * Inactive tabs sit 3px lower (margin-top) and are 3px shorter than the
+     * active tab — the macOS NppTabBar kActiveBoost = 3.0, preserved in both
+     * appearance styles. No bottom margin: every tab sits flush on the
+     * header's #cccccc base line.
+     *
+     * Heights are per-style, because the two styles use different box
+     * metrics: Classic pads 2px/2px (painted = min-height + 5), while the
+     * Tahoe rules in theme.c re-pad to 1px/1px (painted = min-height + 2)
+     * and carry the boost in the margin as well (6px inactive / 3px active),
+     * which is what keeps the bottoms flush there.
+     *
+     * Classic keeps its original metrics — 18/21 → 23px/26px painted, close
+     * to macOS's 19px/22px. Tahoe runs a taller strip by request — 25/28 →
+     * 27px/30px painted, i.e. a 30px active tab, which also restores the
+     * ~34px strip the Modern panel title bar's 36px min-height was tuned
+     * against (see theme.c .nextpad-panel-frame-titlebar). */
+    const int tab_min    = (g_prefs.appearance_style == 1) ? 25 : 18;
+    const int tab_min_on = tab_min + 3;          /* macOS kActiveBoost */
+    g_string_append_printf(css,
+        "notebook.npp-editor-tabs > header > tabs > tab {"
+        "  min-height: %dpx;"
+        "  padding-top: 2px;"
+        "  padding-bottom: 2px;"
+        "  margin: 3px 0 0 0;"
+        "}\n"
+        "notebook.npp-editor-tabs > header > tabs > tab:checked {"
+        "  min-height: %dpx;"
+        "  margin-top: 0;"
+        "}\n", tab_min, tab_min_on);
 
     /* macOS NppTabBar styling — light mode only; dark keeps the Yaru
      * theme tabs. Values mirror NppThemeManager: #f0f0f0 strip, white

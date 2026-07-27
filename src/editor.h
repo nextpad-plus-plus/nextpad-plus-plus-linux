@@ -54,6 +54,9 @@ GPtrArray *editor_all_docs(void);
 int        editor_page_count(void);
 int        editor_current_page(void);
 GtkWidget *editor_get_notebook(void);
+/* GAP-102 — the + / tab-list / close controls, hosted by the toolbar
+ * (both appearance styles), mirroring the macOS kTBTabControls item. */
+GtkWidget *editor_make_tab_controls(void);
 
 /* File operations (dialogs shown when path is NULL / as appropriate) */
 void       editor_new_doc(void);

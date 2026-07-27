@@ -858,8 +858,7 @@ static void on_close_btn_clicked(GtkWidget *btn, gpointer data)
 
 static void cb_tabmenu_close(GtkButton *m, gpointer d) {
     (void)m;
-    int page = sci_page_num(GTK_WIDGET(d));
-    editor_close_page(page);
+    editor_close_sci(GTK_WIDGET(d));   /* GAP-103 — exact tab, any view */
 }
 /* A FALSE return from editor_close_page means the user cancelled a save
  * prompt — abort the batch. Pinned tabs are skipped up front so they
@@ -931,17 +930,19 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
     GtkWidget *sci = GTK_WIDGET(d);
     guint button = gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
 
-    /* Middle-click closes this tab. */
+    /* Middle-click closes this tab. GAP-103: close the exact widget, not
+     * sci_page_num()→editor_close_page(). The former is an index in the
+     * tab's OWN notebook while the latter resolves indices against the
+     * PRIMARY one, so in a split view middle-clicking a secondary tab
+     * closed whatever primary tab happened to share that index. */
     if (button == 2) {
-        int page = sci_page_num(sci);
-        editor_close_page(page);
+        editor_close_sci(sci);
         return;
     }
 
     /* P3 — double-click to close, gated on the pref. */
     if (g_prefs.double_click_tab_close && button == 1 && n_press == 2) {
-        int page = sci_page_num(sci);
-        editor_close_page(page);
+        editor_close_sci(sci);
         return;
     }
 
@@ -954,6 +955,17 @@ static void on_tab_button_press(GtkGestureClick *gesture, int n_press,
         GtkNotebook *nb = notebook_of(sci);
         if (nb && page >= 0)
             gtk_notebook_set_current_page(nb, page);
+        /* GAP-103 — and make that tab's VIEW the active one. Every item in
+         * the (XML-driven) tab menu is a main-menu action that operates on
+         * the current document, so without this the menu acted on whichever
+         * pane last held the caret: right-clicking a tab in one view while
+         * the other was focused made "Move to Other Vertical View" move the
+         * OTHER view's file back to the primary, emptying the secondary and
+         * collapsing the whole split. set_current_page above is a no-op when
+         * the clicked tab is already current in its own notebook, so the
+         * assignment cannot be left to the switch-page handler. macOS gets
+         * this via menuForEvent: → _selectAction → didSelectEditor. */
+        if (nb) s_active_notebook = GTK_WIDGET(nb);
 
         /* P5 — build from tabContextMenu.xml. Fall back to the hardcoded
          * set if the XML produced an empty menu (parser error etc.). */
@@ -1191,6 +1203,44 @@ static void tab_list_popup(GtkMenuButton *mb, gpointer u)
     GtkWidget *pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
     g_object_unref(menu);
     gtk_menu_button_set_popover(mb, pop);
+}
+
+/* GAP-102 — the trailing tab controls (+ new · ▾ tab list · ✕ close).
+ *
+ * These live in the TOOLBAR, right-aligned, in BOTH appearance styles —
+ * mirroring macOS, where they are an NSToolbarItem (kTBTabControls) that
+ * both _classicDefaultItemIdentifiers and _tahoeDefaultItemIdentifiers
+ * append after a flexible space. They used to be a GtkNotebook action
+ * widget on the primary notebook, which (a) hid them in Classic and
+ * (b) made the primary's tab header 10px taller than a split view's,
+ * misaligning the two editors. Keeping them out of the notebook makes
+ * every editor header measure identically by construction. */
+GtkWidget *editor_make_tab_controls(void)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(box, "npp-tab-controls");
+
+    GtkWidget *bnew = gtk_button_new_from_icon_name("list-add-symbolic");
+    gtk_button_set_has_frame(GTK_BUTTON(bnew), FALSE);
+    gtk_widget_set_tooltip_text(bnew, T("toolbar.NewTab", "New Tab"));
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(bnew), "app.new");
+    gtk_box_append(GTK_BOX(box), bnew);
+
+    GtkWidget *blist = gtk_menu_button_new();
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(blist), "pan-down-symbolic");
+    gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(blist), FALSE);
+    gtk_widget_set_tooltip_text(blist, T("toolbar.TabList", "Tab List"));
+    gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(blist),
+                                          tab_list_popup, NULL, NULL);
+    gtk_box_append(GTK_BOX(box), blist);
+
+    GtkWidget *bclose = gtk_button_new_from_icon_name("window-close-symbolic");
+    gtk_button_set_has_frame(GTK_BUTTON(bclose), FALSE);
+    gtk_widget_set_tooltip_text(bclose, T("toolbar.CloseActiveTab", "Close Active Tab"));
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(bclose), "app.close");
+    gtk_box_append(GTK_BOX(box), bclose);
+
+    return box;
 }
 
 static void on_page_removed(GtkNotebook *nb, GtkWidget *child, guint page,
@@ -1903,7 +1953,18 @@ static gboolean notify_buffer_activated_idle(gpointer data)
 static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
                            guint page_num, gpointer data)
 {
-    (void)nb; (void)data; (void)page_num;
+    (void)data; (void)page_num;
+    /* GAP-103 — selecting a tab makes ITS view the active one. macOS does
+     * exactly this in tabManager:didSelectEditor: (_activeTabManager =
+     * tabManager); on Linux s_active_notebook used to follow ONLY Scintilla
+     * keyboard focus, so picking a tab in one view while the caret sat in
+     * the other left editor_current_doc() resolving to the wrong pane —
+     * every current-document command (the whole tab context menu included)
+     * then acted on the wrong file. Deliberately no grab_focus() here:
+     * programmatic page switches (find-in-all-documents, session restore)
+     * also land in this handler and must not yank focus out of the Find
+     * window. */
+    if (nb) s_active_notebook = GTK_WIDGET(nb);
     GtkWidget *sci = page_to_sci(page);
     statusbar_update_from_sci(sci);
     statusbar_set_language(lexer_display_name(
@@ -2200,37 +2261,10 @@ GtkWidget *editor_init(GtkWidget *window)
                      G_CALLBACK(on_page_removed), NULL);
     g_signal_connect(s_notebook, "page-reordered",
                      G_CALLBACK(on_page_reordered), NULL);
-    /* GAP-70 — Tahoe: trailing tab-bar controls (+ new · ▾ tab list ·
-     * ✕ close current), mirroring the macOS Tahoe tab bar. */
-    if (g_prefs.appearance_style == 1) {
-        GtkWidget *tbx = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-        gtk_widget_add_css_class(tbx, "npp-tab-controls");
-
-        GtkWidget *bnew = gtk_button_new_from_icon_name("list-add-symbolic");
-        gtk_button_set_has_frame(GTK_BUTTON(bnew), FALSE);
-        gtk_widget_set_tooltip_text(bnew, "New Document");
-        gtk_actionable_set_action_name(GTK_ACTIONABLE(bnew), "app.new");
-        gtk_box_append(GTK_BOX(tbx), bnew);
-
-        GtkWidget *blist = gtk_menu_button_new();
-        gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(blist),
-                                      "pan-down-symbolic");
-        gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(blist), FALSE);
-        gtk_widget_set_tooltip_text(blist, "Open Documents");
-        gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(blist),
-                                              tab_list_popup, NULL, NULL);
-        gtk_box_append(GTK_BOX(tbx), blist);
-
-        GtkWidget *bclose =
-            gtk_button_new_from_icon_name("window-close-symbolic");
-        gtk_button_set_has_frame(GTK_BUTTON(bclose), FALSE);
-        gtk_widget_set_tooltip_text(bclose, "Close Document");
-        gtk_actionable_set_action_name(GTK_ACTIONABLE(bclose), "app.close");
-        gtk_box_append(GTK_BOX(tbx), bclose);
-
-        gtk_notebook_set_action_widget(GTK_NOTEBOOK(s_notebook), tbx,
-                                       GTK_PACK_END);
-    }
+    /* GAP-102 — the trailing + ▾ ✕ controls are NOT a notebook action
+     * widget any more: they live in the toolbar (both appearance styles),
+     * exactly as macOS ships them (kTBTabControls). See
+     * editor_make_tab_controls(). */
     editor_new_doc();
 
     /* Incremental search bar — hidden by default, shown via Ctrl+I */
