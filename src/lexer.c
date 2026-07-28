@@ -28,7 +28,11 @@ static const ExtLang kExtLang[] = {
     {"m",   "objc"},  {"mm",  "objc"},
     {"cs",  "cs"},
     {"java","java"},
-    {"js",  "javascript"}, {"mjs","javascript"}, {"jsx","javascript"},
+    /* GAP-112 — "javascript.js" is the canonical Windows/langs.xml internal
+     * name (macOS: "matches the Language menu entry — keeps the active-
+     * language checkmark correct"); "javascript" survives only as a lexer
+     * alias for pre-fix sessions. */
+    {"js",  "javascript.js"}, {"mjs","javascript.js"}, {"jsx","javascript.js"},
     {"ts",  "typescript"}, {"tsx","typescript"},
     {"swift","swift"},
     {"rc",  "rc"},
@@ -137,7 +141,8 @@ static const LangLexer kLangLexer[] = {
     {"objc",        "cpp"},
     {"cs",          "cpp"},
     {"java",        "cpp"},
-    {"javascript",  "cpp"},
+    {"javascript",  "cpp"},   /* pre-fix alias (old sessions)          */
+    {"javascript.js","cpp"},   /* canonical langs.xml / Windows name     */
     {"typescript",  "cpp"},
     {"swift",       "cpp"},
     {"rc",          "cpp"},
@@ -149,6 +154,8 @@ static const LangLexer kLangLexer[] = {
     {"xml",         "xml"},
     {"css",         "css"},
     {"json",        "json"},
+    {"json5",       "json"},
+    {"jsp",         "hypertext"},
     {"php",         "phpscript"},
     /* Scripting */
     {"python",      "python"},
@@ -220,6 +227,21 @@ static const LangLexer kLangLexer[] = {
     {"csound",      "csound"},
     {"escript",     "escript"},
     {"spice",       "spice"},
+    /* GAP-112 — canonical langs.xml names that had no lexer mapping, so
+     * their files opened as plain text (.js was the headline victim via
+     * "javascript.js" above). Lexer choices copied from the macOS
+     * single-source table NppBuiltinLanguages.mm. "nfo" maps to the null
+     * lexer on purpose: stylers.xml carries an MS-DOS Style block for it. */
+    {"asn1",        "asn1"},
+    {"errorlist",   "errorlist"},
+    {"gui4cli",     "gui4cli"},
+    {"ihex",        "ihex"},
+    {"mmixal",      "mmixal"},
+    {"nfo",         "null"},
+    {"rebol",       "rebol"},
+    {"srec",        "srec"},
+    {"tehex",       "tehex"},
+    {"txt2tags",    "txt2tags"},
     {NULL, NULL}
 };
 
@@ -245,6 +267,11 @@ static const char *ext_to_lang(const char *ext)
      * table is now just a fallback for any extension langs.xml doesn't
      * cover (and provides built-in defaults if the user deleted langs.xml). */
     const char *user_lang = langsmgr_ext_to_lang(low);
+    /* langs.xml maps txt → "normal" (the Windows L_TEXT internal name).
+     * Linux's plain-text key is "" everywhere (set-language "", npp-lang
+     * ""), so normalize here — otherwise .txt buffers carry a language
+     * name no menu entry or lexer knows. */
+    if (user_lang && strcmp(user_lang, "normal") == 0) return "";
     if (user_lang) return user_lang;
 
     for (const ExtLang *e = kExtLang; e->ext; e++)
@@ -374,6 +401,7 @@ const char *lexer_get_keywords(const char *lang_name)
     const char *kw_lang = lang_name;
     if (strcmp(kw_lang, "c") == 0 || strcmp(kw_lang, "objc") == 0) kw_lang = "cpp";
     if (strcmp(kw_lang, "typescript") == 0) kw_lang = "javascript";
+    if (strcmp(kw_lang, "javascript.js") == 0) kw_lang = "javascript";
     for (const LangKeywords *k = kKeywords; k->lang; k++)
         if (strcmp(k->lang, kw_lang) == 0) return k->keywords;
     return NULL;
@@ -505,6 +533,7 @@ void lexer_apply_from_path(GtkWidget *sci, const char *path)
     const char *ext   = (dot && dot > base) ? dot + 1 : "";
 
     const char *lang = ext_to_lang(ext);
+    if (lang && !*lang) { lexer_apply(sci, NULL); return; }   /* "normal" */
     if (!lang) {
         udl_load_all();
         int udl_idx = udl_find_by_ext(ext);
@@ -520,5 +549,24 @@ const char *lexer_display_name(const char *lang_name)
 {
     if (!lang_name || !*lang_name) return "Normal Text";
     if (strncmp(lang_name, "udl:", 4) == 0) return lang_name + 4;
+    /* GAP-112 — canonical internal names whose display caption differs
+     * (from macOS NppBuiltinLanguages.mm); keeps "javascript.js" and
+     * friends out of the status bar. */
+    static const struct { const char *key, *disp; } kDisp[] = {
+        { "javascript.js", "JavaScript" },
+        { "json5",         "JSON5" },
+        { "jsp",           "JSP" },
+        { "nfo",           "MS-DOS Style" },
+        { "asn1",          "ASN.1" },
+        { "errorlist",     "ErrorList" },
+        { "gui4cli",       "Gui4Cli" },
+        { "ihex",          "Intel HEX" },
+        { "mmixal",        "MMIXAL" },
+        { "rebol",         "REBOL" },
+        { "srec",          "S-Record" },
+        { "tehex",         "Tektronix extended HEX" },
+    };
+    for (size_t i = 0; i < G_N_ELEMENTS(kDisp); i++)
+        if (strcmp(lang_name, kDisp[i].key) == 0) return kDisp[i].disp;
     return lang_name;
 }

@@ -2551,8 +2551,20 @@ gboolean editor_open_path(const char *path)
     sci_msg(sci, SCI_SETREADONLY, access(path, W_OK) == 0 ? 0 : 1, 0);
 
     lexer_apply_from_path(sci, path);
-    statusbar_set_language(lexer_display_name(
-        (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang")));
+    {
+        const char *nl = (const char *)g_object_get_data(G_OBJECT(sci),
+                                                         "npp-lang");
+        statusbar_set_language(lexer_display_name(nl));
+        /* GAP-112 — sync the Language menu radio too. The status bar and
+         * the menu state were updated in different places: this open path
+         * only set the former, relying on the set_current_page below to
+         * fire switch-page (whose handler syncs). When the file opens
+         * INTO the current empty untitled tab, that call is a no-op — no
+         * switch-page, menu stuck on "None" (same trap as GAP-103). The
+         * Save-As re-detect and UDL-swap sites already pair both calls. */
+        extern void main_sync_language_menu(const char *);
+        main_sync_language_menu(nl ? nl : "");
+    }
 
     refresh_tab_label(page);
     gtk_notebook_set_current_page(GTK_NOTEBOOK(s_notebook), page);

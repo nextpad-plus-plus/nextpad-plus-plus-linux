@@ -416,10 +416,40 @@ void main_sync_encoding_menu(const char *enc) {
 /* #4: sync the Language menu's radio check with the active document's
  * language (set on every tab switch / file open via on_switch_page). */
 static GSimpleAction *g_lang_action = NULL;
+/* GAP-112 — Language menu content, letter-grouped like macOS
+ * MenuBuilder.mm. `current_key` marks the letter submenu that contains the
+ * active language with a trailing check glyph — the GTK equivalent of macOS
+ * _refreshLanguagesMenuParentHeaders (NSMenuItem.state on the letter
+ * header): GMenu submenu rows cannot carry a checkmark, so the mark is part
+ * of the label. Declared before kLangs is defined, hence the forwards. */
+struct LangEntryFwd { const char *display, *key; };
+static void populate_language_menu(GMenu *lang, const char *current_key);
+static char main_lang_letter_for_key(const char *key);
+static GMenu *g_language_menu;   /* shared: menubar + status-bar popup */
+
 void main_sync_language_menu(const char *key) {
     if (!g_lang_action) return;
     g_simple_action_set_state(g_lang_action,
                               g_variant_new_string(key ? key : ""));
+    /* Letter-parent mark (GAP-112). Rebuild the shared Language menu model
+     * only when the marked letter actually changes — the menubar and the
+     * status-bar popup both reference g_language_menu, so mutating it in
+     * place updates every consumer. macOS does this in menuWillOpen:; GMenu
+     * has no per-open hook, so we refresh on language change instead. */
+    if (g_language_menu) {
+        /* Remember the marked letter ON the menu object (not a static):
+         * a menubar rebuild produces a fresh, unmarked menu, and stale
+         * function-state would then skip the refresh. */
+        char want = main_lang_letter_for_key(key);
+        char have = (char)GPOINTER_TO_INT(
+            g_object_get_data(G_OBJECT(g_language_menu), "npp-marked-letter"));
+        if (want != have) {
+            g_object_set_data(G_OBJECT(g_language_menu), "npp-marked-letter",
+                              GINT_TO_POINTER((int)want));
+            g_menu_remove_all(g_language_menu);
+            populate_language_menu(g_language_menu, key);
+        }
+    }
 }
 
 /* G4 — printing. The real GtkPrintOperation runner is defined further
@@ -1452,12 +1482,16 @@ static const LangEntry kLangs[] = {
     /* A */
     { "Ada",          "ada"        },
     { "ActionScript", "actionscript"},
+    { "ASN.1",        "asn1"       },
     { "ASP",          "asp"        },
     { "Assembly",     "asm"        },
     { "AutoIt",       "autoit"     },
+    { "AviSynth",     "avs"        },
     /* B */
+    { "BaanC",        "baanc"      },
     { "Bash",         "bash"       },
     { "Batch",        "batch"      },
+    { "Blitzbasic",   "blitzbasic" },
     /* C */
     { "C",            "c"          },
     { "C#",           "cs"         },
@@ -1466,6 +1500,7 @@ static const LangEntry kLangs[] = {
     { "CMake",        "cmake"      },
     { "COBOL",        "cobol"      },
     { "CoffeeScript", "coffeescript"},
+    { "CSound",       "csound"     },
     { "CSS",          "css"        },
     /* D */
     { "D",            "d"          },
@@ -1474,22 +1509,33 @@ static const LangEntry kLangs[] = {
     /* E */
     { "Elixir",       "elixir"     },
     { "Erlang",       "erlang"     },
+    { "ErrorList",    "errorlist"  },
+    { "ESCRIPT",      "escript"    },
     /* F */
+    { "Forth",        "forth"      },
     { "Fortran",      "fortran"    },
+    { "Fortran (fixed form)", "fortran77" },
     { "FreeBASIC",    "freebasic"  },
     /* G */
+    { "GDScript",     "gdscript"   },
     { "Go",           "go"         },
     { "Groovy",       "groovy"     },
+    { "Gui4Cli",      "gui4cli"    },
     /* H */
     { "Haskell",      "haskell"    },
+    { "Hollywood",    "hollywood"  },
     { "HTML",         "html"       },
     /* I */
     { "INI",          "ini"        },
+    { "Inno Setup",   "inno"       },
+    { "Intel HEX",    "ihex"       },
     /* J */
     { "Java",         "java"       },
-    { "JavaScript",   "javascript" },
+    { "JavaScript",   "javascript.js" },
     { "Julia",        "julia"      },
     { "JSON",         "json"       },
+    { "JSON5",        "json5"      },
+    { "JSP",          "jsp"        },
     /* K */
     { "KIXtart",      "kix"        },
     { "Kotlin",       "kotlin"     },
@@ -1500,37 +1546,54 @@ static const LangEntry kLangs[] = {
     /* M */
     { "Makefile",     "makefile"   },
     { "MATLAB",       "matlab"     },
+    { "Microsoft Transact-SQL", "mssql" },
+    { "MMIXAL",       "mmixal"     },
+    { "MS-DOS Style", "nfo"        },
     /* N */
     { "Nim",          "nim"        },
+    { "Nncrontab",    "nncrontab"  },
     { "NSIS",         "nsis"       },
     /* O */
     { "Objective-C",  "objc"       },
     { "OCaml",        "ocaml"      },
+    { "OScript",      "oscript"    },
     /* P */
     { "Pascal",       "pascal"     },
     { "Perl",         "perl"       },
     { "PHP",          "php"        },
-    { "PostScript",   "ps"         },
+    { "PostScript",   "postscript" },
     { "PowerShell",   "powershell" },
     { "Properties",   "props"      },
+    { "Purebasic",    "purebasic"  },
     { "Python",       "python"     },
     /* R */
     { "R",            "r"          },
+    { "Raku",         "raku"       },
+    { "REBOL",        "rebol"      },
+    { "Registry",     "registry"   },
+    { "Resource file","rc"         },
     { "Ruby",         "ruby"       },
     { "Rust",         "rust"       },
     /* S */
+    { "S-Record",     "srec"       },
+    { "SAS",          "sas"        },
     { "Scheme",       "scheme"     },
     { "Smalltalk",    "smalltalk"  },
+    { "Spice",        "spice"      },
     { "SQL",          "sql"        },
     { "Swift",        "swift"      },
     /* T */
     { "Tcl",          "tcl"        },
+    { "Tektronix extended HEX", "tehex" },
+    { "TeX",          "tex"        },
     { "TOML",         "toml"       },
+    { "txt2tags",     "txt2tags"   },
     { "TypeScript",   "typescript" },
     /* V */
     { "VBScript",     "vb"         },
     { "Verilog",      "verilog"    },
     { "VHDL",         "vhdl"       },
+    { "Visual Prolog","visualprolog" },
     { "Visual Basic", "vb"         },
     /* X */
     { "XML",          "xml"        },
@@ -1540,6 +1603,103 @@ static const LangEntry kLangs[] = {
     { "Zig",          "zig"        },
 };
 static const int kLangsCount = (int)(sizeof(kLangs) / sizeof(kLangs[0]));
+
+/* GAP-112 — uppercased first letter of the display name whose key matches,
+ * or 0 when the key names no built-in entry (Normal Text, UDLs). */
+static char main_lang_letter_for_key(const char *key)
+{
+    if (!key || !*key) return 0;
+    for (int i = 0; i < kLangsCount; i++) {
+        if (strcmp(kLangs[i].key, key) == 0) {
+            char c = kLangs[i].display[0];
+            return (char)((c >= 'a' && c <= 'z') ? c - 'a' + 'A' : c);
+        }
+    }
+    return 0;
+}
+
+/* Fill `lang` (assumed empty) with the full Language-menu content:
+ * None row, letter-grouped built-ins, the UDL submenu/admin, and one row
+ * per loaded UDL. The letter submenu containing `current_key` gets a
+ * trailing check glyph in its label (see main_sync_language_menu). */
+static void populate_language_menu(GMenu *lang, const char *current_key)
+{
+    char marked = main_lang_letter_for_key(current_key);
+    {
+        GMenu *none_grp = g_menu_new();
+        GMenuItem *mi = g_menu_item_new("None (Normal Text)", NULL);
+        g_menu_item_set_action_and_target(mi, "app.set-language", "s", "");
+        g_menu_append_item(none_grp, mi);
+        g_object_unref(mi);
+        g_menu_append_section(lang, NULL, G_MENU_MODEL(none_grp));
+        g_object_unref(none_grp);
+    }
+    {
+        char letter = 0;
+        GMenu *letter_grp = NULL;
+        char letter_label[8];
+        for (int i = 0; i < kLangsCount; i++) {
+            char first = (char)((kLangs[i].display[0] >= 'a' && kLangs[i].display[0] <= 'z')
+                                ? (kLangs[i].display[0] - 'a' + 'A')
+                                : kLangs[i].display[0]);
+            if (first != letter) {
+                if (letter_grp) {
+                    g_menu_append_submenu(lang, letter_label, G_MENU_MODEL(letter_grp));
+                    g_object_unref(letter_grp);
+                }
+                letter = first;
+                g_snprintf(letter_label, sizeof letter_label,
+                           (letter == marked) ? "%c   ✓" : "%c", letter);
+                letter_grp = g_menu_new();
+            }
+            GMenuItem *mi = g_menu_item_new(kLangs[i].display, NULL);
+            g_menu_item_set_action_and_target(mi, "app.set-language", "s",
+                                              kLangs[i].key);
+            g_menu_append_item(letter_grp, mi);
+            g_object_unref(mi);
+        }
+        if (letter_grp) {
+            g_menu_append_submenu(lang, letter_label, G_MENU_MODEL(letter_grp));
+            g_object_unref(letter_grp);
+        }
+    }
+    /* Q-fix Language → User Defined Language submenu (matches macOS — 3 items). */
+    {
+        GMenu *udl = g_menu_new();
+        g_menu_append(udl, "Define your language…",                "app.udl-define");
+        g_menu_append(udl, "Open User Defined Language Folder…",   "app.udl-open-folder");
+        g_menu_append(udl, "Nextpad++ User Defined Languages Collection", "app.udl-collection");
+        g_menu_append_submenu(lang, "User Defined Language", G_MENU_MODEL(udl));
+        g_object_unref(udl);
+        /* Top-level Admin entry, no separator (macOS 426b88c/ad33623). */
+        g_menu_append(lang, "User Defined Language Admin…", "app.udl-admin");
+    }
+    /* #4 — every loaded User Defined Language as a selectable, radio-checked
+     * Language-menu entry (macOS lists them after the UDL submenu, from
+     * ~/.nextpad++/userDefineLangs/). */
+    {
+        extern void udl_load_all(void);
+        extern int  udl_count(void);
+        extern const char *udl_name(int);
+        extern const char *udl_key(int);
+        udl_load_all();
+        int nudl = udl_count();
+        if (nudl > 0) {
+            GMenu *udls = g_menu_new();
+            for (int i = 0; i < nudl; i++) {
+                const char *nm = udl_name(i), *ky = udl_key(i);
+                if (!nm || !ky) continue;
+                GMenuItem *mi = g_menu_item_new(nm, NULL);
+                g_menu_item_set_action_and_target(mi, "app.set-language",
+                                                  "s", ky);
+                g_menu_append_item(udls, mi);
+                g_object_unref(mi);
+            }
+            g_menu_append_section(lang, NULL, G_MENU_MODEL(udls));
+            g_object_unref(udls);
+        }
+    }
+}
 
 /* set-language is a stateful (radio) action: the Language-menu item whose
  * target equals the current state shows the check mark. change-state is
@@ -6388,7 +6548,6 @@ void main_rebuild_menubar(void)
 
 /* The Language submenu's model, shared with the status bar's
  * double-click popup (macOS #174). Set by build_menu_model. */
-static GMenu *g_language_menu;
 
 static GMenuModel *build_menu_model(void)
 {
@@ -7184,81 +7343,11 @@ static GMenuModel *build_menu_model(void)
     g_menu_append_submenu(bar, "_Encoding", G_MENU_MODEL(enc_menu));
     g_object_unref(enc_menu);
 
-    /* Language — alphabetical letter-grouped submenus. */
+    /* Language — alphabetical letter-grouped submenus; populated by
+     * populate_language_menu() so the letter-mark refresh (GAP-112) can
+     * rebuild it in place on every language change. */
     GMenu *lang = g_menu_new();
-    {
-        GMenu *none_grp = g_menu_new();
-        GMenuItem *mi = g_menu_item_new("None (Normal Text)", NULL);
-        g_menu_item_set_action_and_target(mi, "app.set-language", "s", "");
-        g_menu_append_item(none_grp, mi);
-        g_object_unref(mi);
-        g_menu_append_section(lang, NULL, G_MENU_MODEL(none_grp));
-        g_object_unref(none_grp);
-    }
-    {
-        char letter = 0;
-        GMenu *letter_grp = NULL;
-        char letter_label[2] = { 0, 0 };
-        for (int i = 0; i < kLangsCount; i++) {
-            char first = (char)((kLangs[i].display[0] >= 'a' && kLangs[i].display[0] <= 'z')
-                                ? (kLangs[i].display[0] - 'a' + 'A')
-                                : kLangs[i].display[0]);
-            if (first != letter) {
-                if (letter_grp) {
-                    g_menu_append_submenu(lang, letter_label, G_MENU_MODEL(letter_grp));
-                    g_object_unref(letter_grp);
-                }
-                letter = first;
-                letter_label[0] = first;
-                letter_grp = g_menu_new();
-            }
-            GMenuItem *mi = g_menu_item_new(kLangs[i].display, NULL);
-            g_menu_item_set_action_and_target(mi, "app.set-language", "s",
-                                              kLangs[i].key);
-            g_menu_append_item(letter_grp, mi);
-            g_object_unref(mi);
-        }
-        if (letter_grp) {
-            g_menu_append_submenu(lang, letter_label, G_MENU_MODEL(letter_grp));
-            g_object_unref(letter_grp);
-        }
-    }
-    /* Q-fix Language → User Defined Language submenu (matches macOS — 3 items). */
-    {
-        GMenu *udl = g_menu_new();
-        g_menu_append(udl, "Define your language…",                "app.udl-define");
-        g_menu_append(udl, "Open User Defined Language Folder…",   "app.udl-open-folder");
-        g_menu_append(udl, "Nextpad++ User Defined Languages Collection", "app.udl-collection");
-        g_menu_append_submenu(lang, "User Defined Language", G_MENU_MODEL(udl));
-        g_object_unref(udl);
-        /* Top-level Admin entry, no separator (macOS 426b88c/ad33623). */
-        g_menu_append(lang, "User Defined Language Admin…", "app.udl-admin");
-    }
-    /* #4 — every loaded User Defined Language as a selectable, radio-checked
-     * Language-menu entry (macOS lists them after the UDL submenu, from
-     * ~/.nextpad++/userDefineLangs/). */
-    {
-        extern void udl_load_all(void);
-        extern int  udl_count(void);
-        extern const char *udl_name(int);
-        extern const char *udl_key(int);
-        udl_load_all();
-        int nudl = udl_count();
-        if (nudl > 0) {
-            GMenu *udls = g_menu_new();
-            for (int i = 0; i < nudl; i++) {
-                const char *nm = udl_name(i), *ky = udl_key(i);
-                if (!nm || !ky) continue;
-                GMenuItem *mi = g_menu_item_new(nm, NULL);
-                g_menu_item_set_action_and_target(mi, "app.set-language",
-                                                  "s", ky);
-                g_menu_append_item(udls, mi);
-                g_object_unref(mi);
-            }
-            g_menu_append_section(lang, NULL, G_MENU_MODEL(udls));
-            g_object_unref(udls);
-        }
-    }
+    populate_language_menu(lang, NULL);
     g_menu_append_submenu(bar, "_Language", G_MENU_MODEL(lang));
     /* Keep a ref for the status bar's double-click popup (macOS #174):
      * the model is shared, so dynamic UDL entries stay in sync. */
