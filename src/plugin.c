@@ -571,20 +571,25 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     case NPPM_GETAPPDATAPLUGINSALLOWED:
         return 1L;
 
-    /* ── Caret position ──────────────────────────────────────────────── */
+    /* ── Caret position ──────────────────────────────────────────────────
+     * ZERO-BASED, like Windows NppBigSwitch and macOS NppPluginManager.mm
+     * (both return a bare SCI_LINEFROMPOSITION / SCI_GETCOLUMN). These used
+     * to add 1, which reads as a display line/column number but is not what
+     * the plugin SDK promises — a plugin comparing this against its own
+     * SCI_LINEFROMPOSITION result is then off by one on every line. */
     case NPPM_GETCURRENTLINE: {
         NppDoc *doc = editor_current_doc();
         if (!doc) return 0;
         sptr_t pos = scintilla_send_message(SCINTILLA(doc->sci), SCI_GETCURRENTPOS, 0, 0);
         return (long)scintilla_send_message(SCINTILLA(doc->sci),
-            SCI_LINEFROMPOSITION, pos, 0) + 1;
+            SCI_LINEFROMPOSITION, pos, 0);
     }
     case NPPM_GETCURRENTCOLUMN: {
         NppDoc *doc = editor_current_doc();
         if (!doc) return 0;
         sptr_t pos = scintilla_send_message(SCINTILLA(doc->sci), SCI_GETCURRENTPOS, 0, 0);
         return (long)scintilla_send_message(SCINTILLA(doc->sci),
-            SCI_GETCOLUMN, pos, 0) + 1;
+            SCI_GETCOLUMN, pos, 0);
     }
     case NPPM_GETCURRENTDIRECTORY:
         /* Synonym for GETDIRECTORYPATH (path of current doc's containing dir) */
