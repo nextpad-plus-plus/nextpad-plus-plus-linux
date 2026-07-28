@@ -425,6 +425,7 @@ static GSimpleAction *g_lang_action = NULL;
 struct LangEntryFwd { const char *display, *key; };
 static void populate_language_menu(GMenu *lang, const char *current_key);
 static char main_lang_letter_for_key(const char *key);
+void main_retranslate_menu(void);            /* defined later in this file */
 static GMenu *g_language_menu;   /* shared: menubar + status-bar popup */
 
 void main_sync_language_menu(const char *key) {
@@ -437,17 +438,21 @@ void main_sync_language_menu(const char *key) {
      * place updates every consumer. macOS does this in menuWillOpen:; GMenu
      * has no per-open hook, so we refresh on language change instead. */
     if (g_language_menu) {
-        /* Remember the marked letter ON the menu object (not a static):
-         * a menubar rebuild produces a fresh, unmarked menu, and stale
-         * function-state would then skip the refresh. */
+        /* The marked letter is remembered ON the menu object (stamped by
+         * populate_language_menu): a menubar rebuild produces a fresh
+         * menu, and stale function-state would then skip the refresh. */
         char want = main_lang_letter_for_key(key);
         char have = (char)GPOINTER_TO_INT(
             g_object_get_data(G_OBJECT(g_language_menu), "npp-marked-letter"));
         if (want != have) {
-            g_object_set_data(G_OBJECT(g_language_menu), "npp-marked-letter",
-                              GINT_TO_POINTER((int)want));
             g_menu_remove_all(g_language_menu);
             populate_language_menu(g_language_menu, key);
+            /* The menubar does NOT display g_language_menu — it always
+             * shows an i18n_translate_menu() deep copy (set at startup
+             * and re-set by every main_rebuild_menubar). Mutating the
+             * live model is invisible until a fresh copy is pushed, so
+             * push one — the exact idiom set_update_badge uses. */
+            main_retranslate_menu();
         }
     }
 }
@@ -1625,6 +1630,8 @@ static char main_lang_letter_for_key(const char *key)
 static void populate_language_menu(GMenu *lang, const char *current_key)
 {
     char marked = main_lang_letter_for_key(current_key);
+    g_object_set_data(G_OBJECT(lang), "npp-marked-letter",
+                      GINT_TO_POINTER((int)marked));
     {
         GMenu *none_grp = g_menu_new();
         GMenuItem *mi = g_menu_item_new("None (Normal Text)", NULL);
@@ -7347,7 +7354,14 @@ static GMenuModel *build_menu_model(void)
      * populate_language_menu() so the letter-mark refresh (GAP-112) can
      * rebuild it in place on every language change. */
     GMenu *lang = g_menu_new();
-    populate_language_menu(lang, NULL);
+    {
+        const char *cur = NULL;
+        GVariant *st = g_lang_action
+                     ? g_action_get_state(G_ACTION(g_lang_action)) : NULL;
+        if (st) cur = g_variant_get_string(st, NULL);
+        populate_language_menu(lang, cur);
+        if (st) g_variant_unref(st);
+    }
     g_menu_append_submenu(bar, "_Language", G_MENU_MODEL(lang));
     /* Keep a ref for the status bar's double-click popup (macOS #174):
      * the model is shared, so dynamic UDL entries stay in sync. */
