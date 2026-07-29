@@ -773,6 +773,14 @@ static void setup_sci(GtkWidget *sci)
     sci_msg(sci, SCI_SETCARETWIDTH,      (uptr_t)g_prefs.caret_width, 0);
     sci_msg(sci, SCI_SETCARETPERIOD,     (uptr_t)g_prefs.caret_blink_rate, 0);
     sci_msg(sci, SCI_SETENDATLASTLINE,   g_prefs.scroll_beyond_last_line ? 0 : 1, 0);
+    /* GAP-114 — zoom is a session-wide, persisted setting, exactly as on
+     * macOS (applyPreferencesFromDefaults issues this same SCI_SETZOOM on
+     * every editor it configures). Without it the level round-tripped to
+     * config.xml and back into g_prefs but was never pushed into any
+     * view, so a restored session and every new tab opened at zoom 0.
+     * Runs before "sci-notify" is connected at each creation site, so it
+     * cannot re-enter the SCN_ZOOM propagation below. */
+    sci_msg(sci, SCI_SETZOOM,            (uptr_t)g_prefs.zoom_level, 0);
     /* Apply theme: STYLE_DEFAULT must be set before STYLECLEARALL */
     stylestore_apply_default(sci);
     sci_msg(sci, SCI_STYLECLEARALL, 0, 0);
@@ -1606,6 +1614,26 @@ static void update_window_title(void)
 /* Scintilla notification handler                                      */
 /* ------------------------------------------------------------------ */
 
+/* GAP-114 — debounced zoom persistence. A wheel spin raises one SCN_ZOOM
+ * per notch; writing config.xml on every one would be a dozen file writes
+ * per gesture, so coalesce them into a single save once the gesture
+ * settles. g_prefs.zoom_level itself is updated synchronously, so a quit
+ * before the timer fires still persists the right value (action_quit
+ * saves), and a timer pending at exit simply never runs. */
+static guint s_zoom_save_id = 0;
+static gboolean zoom_save_timeout(gpointer d)
+{
+    (void)d;
+    s_zoom_save_id = 0;
+    prefs_save();
+    return G_SOURCE_REMOVE;
+}
+static void zoom_save_schedule(void)
+{
+    if (s_zoom_save_id) g_source_remove(s_zoom_save_id);
+    s_zoom_save_id = g_timeout_add(600, zoom_save_timeout, NULL);
+}
+
 /* GTK4 "sci-notify" passes one boxed SCNotification* — no GTK3 `id` arg. */
 /* ================================================================== */
 /* Auto-Insert matched pairs (GAP-12) — port of Windows                */
@@ -1849,6 +1877,32 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
                           SC_UPDATE_H_SCROLL))
             link_update_schedule(sci);
     } else if (code == SCN_ZOOM) {
+        /* GAP-114 — zoom is session-wide and persisted (macOS does the
+         * same in _propagateEditorZoom: plus a kPrefZoomLevel write on
+         * every zoom command). SCN_ZOOM is the single point EVERY zoom
+         * path reaches — View ▸ Zoom, Ctrl+wheel, Ctrl+±/0, Ctrl+keypad,
+         * plugin SCI_SETZOOM — so mirroring here covers them all.
+         *
+         * The re-entrancy guard is required: each SCI_SETZOOM below
+         * raises SCN_ZOOM on its own view. Scintilla notifies only on an
+         * ACTUAL change (Editor.cxx Message::SetZoom → SetAppearance),
+         * so already-synced views stay silent and this converges in one
+         * pass — the guard just makes that independent of that detail. */
+        static gboolean zoom_propagating = FALSE;
+        if (!zoom_propagating) {
+            zoom_propagating = TRUE;
+            int z = (int)sci_msg(sci, SCI_GETZOOM, 0, 0);
+            g_prefs.zoom_level = z;
+            GPtrArray *docs = editor_all_docs();
+            for (guint i = 0; i < docs->len; i++) {
+                NppDoc *d = g_ptr_array_index(docs, i);
+                if (d->sci && d->sci != sci)
+                    sci_msg(d->sci, SCI_SETZOOM, (uptr_t)z, 0);
+            }
+            g_ptr_array_free(docs, TRUE);
+            zoom_save_schedule();
+            zoom_propagating = FALSE;
+        }
         /* GAP-31 — tabs follow the editor zoom when the pref is on. */
         if (g_prefs.tab_follow_zoom)
             editor_refresh_all_tab_labels();
