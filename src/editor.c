@@ -413,22 +413,6 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
 #define SCI_ZOOMOUT 2334
 #endif
 
-static gboolean on_sci_zoom_key(GtkEventControllerKey *ctl, guint keyval,
-                                guint keycode, GdkModifierType state, gpointer d)
-{
-    (void)ctl; (void)keycode; (void)d;
-    if (!(state & GDK_CONTROL_MASK)) return FALSE;
-    switch (keyval) {
-    case GDK_KEY_plus:  case GDK_KEY_equal:  case GDK_KEY_KP_Add:
-        editor_send(SCI_ZOOMIN,  0, 0); return TRUE;
-    case GDK_KEY_minus: case GDK_KEY_KP_Subtract:
-        editor_send(SCI_ZOOMOUT, 0, 0); return TRUE;
-    case GDK_KEY_0:     case GDK_KEY_KP_0:
-        editor_send(SCI_SETZOOM, 0, 0); return TRUE;
-    }
-    return FALSE;
-}
-
 /* GAP-41 — convert a rectangular selection to a stream multi-selection
  * before Scintilla processes keys that should act per caret (N++'s
  * _columnSel2MultiEdit, macOS fec18f1). Alt is the rectangular-selection
@@ -821,12 +805,6 @@ static void setup_sci(GtkWidget *sci)
             GTK_EVENT_CONTROLLER(gc), GTK_PHASE_CAPTURE);
         g_signal_connect(gc, "pressed", G_CALLBACK(on_sci_button_press), NULL);
         gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(gc));
-    }
-    {
-        /* Focus-scoped editor zoom: Ctrl +/-/0. */
-        GtkEventController *zc = gtk_event_controller_key_new();
-        g_signal_connect(zc, "key-pressed", G_CALLBACK(on_sci_zoom_key), NULL);
-        gtk_widget_add_controller(sci, GTK_EVENT_CONTROLLER(zc));
     }
     {
         /* GAP-41 — "column selection to multi-editing" (N++ parity, macOS

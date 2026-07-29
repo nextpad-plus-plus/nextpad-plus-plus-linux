@@ -23,6 +23,11 @@
  *    itself.
  * The returned widget OWNS `content` (parented inside it). Show / hide /
  * pack the returned widget into your layout. */
+/* GAP-115 — if `focus` is inside a panel frame, apply a zoom step to that
+ * panel (+1 in, -1 out, 0 reset) and return TRUE; FALSE = not in a panel
+ * (caller zooms the editor instead). macOS _focusedZoomablePanel port. */
+gboolean panel_frame_zoom_from_focus(GtkWidget *focus, int step);
+
 GtkWidget *panel_frame_new(const char *name,
                            const char *title,
                            GtkWidget   *content,

@@ -921,15 +921,30 @@ static void action_show_wrap_symbol(GSimpleAction *a, GVariant *p, gpointer u) {
                                           : SC_WRAPVISUALFLAG_END, 0);
 }
 
-/* G11.3 View → Zoom */
+/* G11.3 View → Zoom.
+ * GAP-115 — macOS routing (zoomIn:/zoomOut:/resetZoom:): a focused
+ * zoomable PANEL takes priority; otherwise the editor zooms. The zoom
+ * accelerators are application-global (they fire from any window,
+ * including floating panels — hence active-window focus, not g_window),
+ * so the routing lives here rather than in per-widget key controllers. */
+static gboolean zoom_focused_panel(int step) {
+    GtkApplication *app =
+        GTK_APPLICATION(g_application_get_default());
+    GtkWindow *win = app ? gtk_application_get_active_window(app) : NULL;
+    GtkWidget *focus = win ? gtk_window_get_focus(win) : NULL;
+    return focus && panel_frame_zoom_from_focus(focus, step);
+}
 static void action_zoom_in(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a;(void)p;(void)u; sci_send(SCI_ZOOMIN, 0, 0);
+    (void)a;(void)p;(void)u;
+    if (!zoom_focused_panel(+1)) sci_send(SCI_ZOOMIN, 0, 0);
 }
 static void action_zoom_out(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a;(void)p;(void)u; sci_send(SCI_ZOOMOUT, 0, 0);
+    (void)a;(void)p;(void)u;
+    if (!zoom_focused_panel(-1)) sci_send(SCI_ZOOMOUT, 0, 0);
 }
 static void action_zoom_reset(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a;(void)p;(void)u; sci_send(SCI_SETZOOM, 0, 0);
+    (void)a;(void)p;(void)u;
+    if (!zoom_focused_panel(0)) sci_send(SCI_SETZOOM, 0, 0);
 }
 
 /* G11.5 View → Fold All / Unfold All */
@@ -8527,12 +8542,25 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.macro-stop",   "<Primary>F9");
     set_accel(app, "app.macro-play",   "<Primary>F10");
     /* G11 accelerators.
-     * Zoom (Ctrl +/-/0) is intentionally NOT a global accelerator: it must
-     * act on whatever is focused — the editor or a panel. A window-level
-     * accelerator always wins over a focused widget, and "<Primary>plus"
-     * never matches the real keystroke (Ctrl+Shift+= on most layouts).
-     * Editor zoom is handled by a key controller on the Scintilla view
-     * (editor.c); panel zoom by one in panel_frame.c. */
+     * GAP-115 — Zoom (Ctrl +/-/0) IS a global accelerator now, displayed
+     * on the View ▸ Zoom items and live from any focus (panels included,
+     * matching macOS ⌘+/⌘−/⌘0). The old focus problem is solved the way
+     * macOS solves it: the ACTIONS route to the focused zoomable panel
+     * first (zoom_focused_panel above), editor otherwise. "equal" leads
+     * each list because Ctrl+= is the real unshifted keystroke on most
+     * layouts ("plus" alone never matches); keypad variants keep
+     * Scintilla's traditional bindings working from any focus. The
+     * per-panel key controller in panel_frame.c stays as a fallback —
+     * when the accelerator consumes the key it never runs. */
+    {
+        const char *zi[] = { "<Primary>equal", "<Primary>plus",
+                             "<Primary>KP_Add", NULL };
+        const char *zo[] = { "<Primary>minus", "<Primary>KP_Subtract", NULL };
+        const char *zr[] = { "<Primary>0", "<Primary>KP_0", NULL };
+        gtk_application_set_accels_for_action(app, "app.zoom-in",    zi);
+        gtk_application_set_accels_for_action(app, "app.zoom-out",   zo);
+        gtk_application_set_accels_for_action(app, "app.zoom-reset", zr);
+    }
     set_accel(app, "app.word-wrap",    "<Primary><Alt>w");
     set_accel(app, "app.fullscreen",   "F11");
     set_accel(app, "app.tab-next",     "<Primary>Page_Down");

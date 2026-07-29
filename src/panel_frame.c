@@ -371,6 +371,27 @@ static gboolean pf_on_key(GtkEventControllerKey *ctl, guint keyval,
     return FALSE;
 }
 
+/* GAP-115 — macOS _focusedZoomablePanel routing: walk up from the focused
+ * widget; if it lives inside a panel frame, zoom THAT panel and report
+ * handled. Called by the app.zoom-* actions (main.c) so the global
+ * Ctrl+±/0 accelerators act on the focused panel exactly like the macOS
+ * zoomIn:/zoomOut:/resetZoom: selectors do. pf_on_key above stays as a
+ * fallback; when the accelerator consumes the keystroke it never runs,
+ * so the two paths cannot double-fire. */
+gboolean panel_frame_zoom_from_focus(GtkWidget *focus, int step)
+{
+    for (GtkWidget *w = focus; w; w = gtk_widget_get_parent(w)) {
+        PanelFrameState *st = pf_state(w);
+        if (!st) continue;
+        if (!st->zoom_css) return FALSE;
+        if (step == 0) st->zoom = 0;
+        else           st->zoom += step;
+        pf_apply_zoom(st);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 /* ─────────────────────────────────────────────────────────────────────── */
 /* Construction                                                           */
 /* ─────────────────────────────────────────────────────────────────────── */
