@@ -1434,7 +1434,11 @@ static void build_ui(GtkWidget *parent) {
 
     /* Filter search bar */
     G->search = gtk_search_entry_new();
+#if GTK_CHECK_VERSION(4, 10, 0)
     gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(G->search), "Filter");
+#else
+    npp_search_entry_placeholder(G->search, "Filter");
+#endif
     g_signal_connect(G->search, "search-changed",
                      G_CALLBACK(on_search_changed), NULL);
     npp_box_pack(GTK_BOX(root), G->search, FALSE, 0);

@@ -1527,8 +1527,13 @@ static AdminUI *adminui_create(GtkWindow *parent) {
     /* Top row: search + refresh */
     GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     ui->search = gtk_search_entry_new();
+#if GTK_CHECK_VERSION(4, 10, 0)
     gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(ui->search),
         "Filter plugins (name / description / author)…");
+#else
+    npp_search_entry_placeholder(ui->search,
+        "Filter plugins (name / description / author)…");
+#endif
     g_signal_connect(ui->search, "search-changed",
         G_CALLBACK(on_search_changed), ui);
     npp_box_pack(GTK_BOX(top), ui->search, TRUE, 0);

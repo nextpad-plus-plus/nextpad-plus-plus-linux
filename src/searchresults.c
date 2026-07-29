@@ -559,8 +559,12 @@ GtkWidget *searchresults_init(void)
     gtk_widget_set_margin_bottom(s_filter_bar, 2);
     npp_box_pack(GTK_BOX(s_filter_bar), gtk_label_new("Find:"), FALSE, 0);
     s_filter_entry = gtk_search_entry_new();
+#if GTK_CHECK_VERSION(4, 10, 0)
     gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(s_filter_entry),
                                           "Type to search…");
+#else
+    npp_search_entry_placeholder(s_filter_entry, "Type to search…");
+#endif
     g_signal_connect(s_filter_entry, "search-changed",
                      G_CALLBACK(on_filter_changed), NULL);
     g_signal_connect(s_filter_entry, "stop-search",

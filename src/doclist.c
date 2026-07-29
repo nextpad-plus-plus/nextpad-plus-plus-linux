@@ -431,7 +431,11 @@ static void install_doclist_css_once(void)
         "  color: inherit;"
         "}";
     GtkCssProvider *p = gtk_css_provider_new();
+#if GTK_CHECK_VERSION(4, 12, 0)
     gtk_css_provider_load_from_string(p, css);
+#else
+    gtk_css_provider_load_from_data(p, css, -1);   /* pre-4.12 API */
+#endif
     gtk_style_context_add_provider_for_display(gdk_display_get_default(),
                                                GTK_STYLE_PROVIDER(p),
                                                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);

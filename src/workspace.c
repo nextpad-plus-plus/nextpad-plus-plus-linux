@@ -515,8 +515,12 @@ GtkWidget *workspace_init(GtkWidget *parent_window)
     gtk_widget_set_margin_top(toolbar, 4);
 
     s_filter_entry = gtk_search_entry_new();
+#if GTK_CHECK_VERSION(4, 10, 0)
     gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(s_filter_entry),
                                    "Filter file/folder name…");
+#else
+    npp_search_entry_placeholder(s_filter_entry, "Filter file/folder name…");
+#endif
     gtk_widget_set_hexpand(s_filter_entry, TRUE);
     g_signal_connect(s_filter_entry, "search-changed",
                      G_CALLBACK(workspace_on_filter_changed), NULL);

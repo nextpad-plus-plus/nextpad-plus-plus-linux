@@ -367,4 +367,24 @@ static inline void npp_fc_set_filename(GtkFileChooser *c, const char *path)
         ((void)(err), gtk_show_uri((parent), (uri), (ts)))
 #define gtk_label_set_line_wrap(l, w)            gtk_label_set_wrap((l), (w))
 
+/* ── GTK < 4.10 legacy-build helper (Jammy tier — docs/08 §4d) ──────────
+ * Compiled ONLY against pre-4.10 GTK headers; the primary 24.04+ builds
+ * (GTK 4.14) discard this whole block in the preprocessor, so it cannot
+ * affect them. */
+#if !GTK_CHECK_VERSION(4, 10, 0)
+/* gtk_search_entry_set_placeholder_text() is 4.10 — set it on the
+ * entry's internal GtkText child (NOT the first child: that can be the
+ * search icon). */
+static inline void npp_search_entry_placeholder(GtkWidget *entry,
+                                                const char *text)
+{
+    for (GtkWidget *c = gtk_widget_get_first_child(entry); c;
+         c = gtk_widget_get_next_sibling(c))
+        if (GTK_IS_TEXT(c)) {
+            gtk_text_set_placeholder_text(GTK_TEXT(c), text);
+            break;
+        }
+}
+#endif
+
 #endif /* GTK_COMPAT_H */

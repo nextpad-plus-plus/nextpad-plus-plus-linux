@@ -533,7 +533,11 @@ GtkWidget *funclist_init(void)
     gtk_widget_set_margin_top(toolbar, 4);
 
     s_search = gtk_search_entry_new();
+#if GTK_CHECK_VERSION(4, 10, 0)
     gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(s_search), "Search function…");
+#else
+    npp_search_entry_placeholder(s_search, "Search function…");
+#endif
     gtk_widget_set_hexpand(s_search, TRUE);
     g_signal_connect(s_search, "search-changed",
                      G_CALLBACK(on_search_changed), NULL);

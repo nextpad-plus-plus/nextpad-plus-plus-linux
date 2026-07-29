@@ -2792,10 +2792,25 @@ static void action_edit_popup_ctxmenu(GSimpleAction *a, GVariant *p, gpointer u)
 
 /* Simple modal info dialog (GTK4 GtkAlertDialog). */
 static void npp_info_dialog(const char *msg, const char *detail) {
+#if GTK_CHECK_VERSION(4, 10, 0)
     GtkAlertDialog *d = gtk_alert_dialog_new("%s", msg);
     if (detail) gtk_alert_dialog_set_detail(d, detail);
     gtk_alert_dialog_show(d, g_window ? GTK_WINDOW(g_window) : NULL);
     g_object_unref(d);
+#else
+    /* GTK < 4.10 (docs/08 §4c): GtkAlertDialog is 4.10 — use
+     * GtkMessageDialog (present in all GTK4; deprecated only FROM 4.10,
+     * and this branch never compiles there). */
+    GtkWidget *d = gtk_message_dialog_new(
+        g_window ? GTK_WINDOW(g_window) : NULL,
+        GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s", msg);
+    if (detail)
+        gtk_message_dialog_format_secondary_text(
+            GTK_MESSAGE_DIALOG(d), "%s", detail);
+    g_signal_connect_swapped(d, "response",
+                             G_CALLBACK(gtk_window_destroy), d);
+    gtk_window_present(GTK_WINDOW(d));
+#endif
 }
 
 /* The Help section holding the "Check for Updates" item — kept so its
