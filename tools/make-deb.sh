@@ -16,15 +16,28 @@ cd "$(dirname "$0")/.."
 VER=$(sed -n 's/#define APP_VERSION *"\(.*\)"/\1/p' src/branding.h)
 [ -n "$VER" ] || { echo "APP_VERSION not found in src/branding.h" >&2; exit 1; }
 ARCH=$(dpkg --print-architecture)
+
+# Memory-aware job cap. An unbounded parallel build once OOM-killed a whole
+# desktop session (~122 lexilla TUs at ~50-60 MB per cc1plus), and the build
+# VMs have as little as 1.9 GB RAM. Budget 500 MB per job, never exceed
+# nproc. Override with NPP_JOBS=<n>.
+if [ -n "${NPP_JOBS:-}" ]; then
+    JOBS=$NPP_JOBS
+else
+    MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+    JOBS=$(nproc); CAP=$(( MEM_MB / 500 )); [ "$CAP" -lt 1 ] && CAP=1
+    [ "$JOBS" -gt "$CAP" ] && JOBS=$CAP
+fi
+
 STAGE=$(mktemp -d /tmp/npp-pkg-XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
 
-echo "── Building Nextpad++ $VER ($ARCH)"
+echo "── Building Nextpad++ $VER ($ARCH, -j$JOBS)"
 cmake -B build-pkg -S . \
       -DCMAKE_BUILD_TYPE=Release \
       -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
       -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build-pkg -j"$(nproc)"
+cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null
 
 mkdir -p "$STAGE/DEBIAN"
