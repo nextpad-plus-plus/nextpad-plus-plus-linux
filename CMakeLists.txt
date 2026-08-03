@@ -219,7 +219,20 @@ set_source_files_properties("${SRC}/lexilla_bridge.cpp" PROPERTIES
 
 # libscintilla.so lives next to the build tree; embed an rpath so the binary
 # finds it without an install step.
-set_target_properties(nextpad_pp PROPERTIES BUILD_RPATH "${SCI_ROOT}/bin")
+#
+# INSTALL_RPATH is a DIFFERENT path on purpose. libscintilla.so is a private
+# bundled library, and installing it into CMAKE_INSTALL_LIBDIR put it in
+# Debian's multiarch dir (lib/x86_64-linux-gnu) because that is what
+# GNUInstallDirs picks on the BUILD host — a directory Fedora's linker never
+# searches, so the .rpm installed fine and then failed with
+# "libscintilla.so: cannot open shared object file" (caught 2026-08-02 by a
+# real dnf install in a Fedora 43 container). It now goes to a private
+# directory found via a RELOCATABLE $ORIGIN rpath, which resolves identically
+# on every distro and under any CMAKE_INSTALL_PREFIX. This also stops the
+# developer's absolute build path from being baked into shipped binaries.
+set_target_properties(nextpad_pp PROPERTIES
+    BUILD_RPATH   "${SCI_ROOT}/bin"
+    INSTALL_RPATH "$ORIGIN/../lib/nextpad-plus-plus")
 
 target_link_libraries(nextpad_pp PRIVATE
     "${SCI_SO}"
@@ -245,7 +258,10 @@ install(CODE "
                   \"Nextpad++\"
                   \"\$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}/nextpad-plus-plus\")
 ")
-install(FILES "${SCI_SO}" DESTINATION ${CMAKE_INSTALL_LIBDIR})
+# Private libdir (NOT CMAKE_INSTALL_LIBDIR — see the INSTALL_RPATH note
+# above): a plain "lib/nextpad-plus-plus" is valid on both Debian- and
+# RPM-family layouts, and the $ORIGIN rpath points straight at it.
+install(FILES "${SCI_SO}" DESTINATION lib/nextpad-plus-plus)
 # Install the contents of resources/ directly under .../nextpad-plus-plus
 # so the tree matches RESOURCES_DIR (= NPP_RES_DIR) baked into the binary.
 install(DIRECTORY resources/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nextpad-plus-plus
