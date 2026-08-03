@@ -465,6 +465,9 @@ void main_sync_language_menu(const char *key) {
  * registered only as the menu-less "print-real" action. */
 static void run_print_operation(gboolean with_dialog);
 void main_do_print(void) { run_print_operation(FALSE); }
+/* Toolbar Print + File > Print show the system print dialog; Print Now
+ * and -quickPrint go straight to the default printer (main_do_print). */
+void main_do_print_dialog(void) { run_print_operation(TRUE); }
 
 /* G29 — Markdown preview: pull current buffer text and push to renderer.
  * Called on toggle, on tab switch, and when a markdown buffer is modified. */
@@ -4540,64 +4543,123 @@ static void action_replace_in_selection(GSimpleAction *a, GVariant *p, gpointer 
  * G37 Print — basic GtkPrintOperation wrapping Scintilla SCI_FORMATRANGE
  * ────────────────────────────────────────────────────────────────────── */
 
-/* P12 — paginated print. Context object held for the duration of one
- * GtkPrintOperation run. Built in begin_print, used by draw_page. */
+/* P12 / GAP-127 — styled, coloured printing via SCI_FORMATRANGEFULL.
+ *
+ * The old engine rendered plain Pango monospace (no syntax colours, no
+ * size control). This one hands Scintilla a GtkSnapshot as the print
+ * surface (enabled by scintilla-patches/0011), lets FORMATRANGEFULL draw
+ * the real styled page into it, then replays the snapshot's render node
+ * onto the print cairo — the macOS NppPrintView approach, GTK4-native.
+ *
+ * Scintilla lays out and draws in *pixels* at the editor widget's Pango
+ * resolution; the print cairo is in *points* (72/inch). render_scale
+ * (px per point) bridges them: rc is built in pixels, the node is drawn
+ * back at 1/render_scale so a 10 pt style prints at 10 pt. */
 typedef struct {
-    char     *text;           /* whole-doc text, owned */
-    gsize     text_len;
-    int       n_pages;        /* total */
-    /* Page break offsets — page i renders bytes [pages[i], pages[i+1]). */
-    GArray   *pages;          /* gsize */
-    char     *filename;       /* short basename for header, owned */
+    GtkWidget   *sci;             /* editor being printed (borrowed) */
+    char        *filename;        /* header basename, owned */
+    int          magnification;   /* SCI_SETPRINTMAGNIFICATION (pt delta) */
+    int          n_pages;
+    GArray      *page_starts;     /* Sci_Position, first char of each page */
+    Sci_Position doc_len;
+    double       render_scale;    /* pixels per point */
+    double       header_h;        /* points reserved at top */
+    double       footer_h;        /* points reserved at bottom */
 } PrintCtx;
 
 static void print_ctx_free(PrintCtx *pc) {
     if (!pc) return;
-    g_free(pc->text);
     g_free(pc->filename);
-    if (pc->pages) g_array_free(pc->pages, TRUE);
+    if (pc->page_starts) g_array_free(pc->page_starts, TRUE);
     g_free(pc);
+}
+
+/* Body rectangle handed to FORMATRANGEFULL, in Scintilla PIXELS
+ * (points * render_scale), with the header/footer bands reserved. */
+static void print_body_rc(GtkPrintContext *ctx, PrintCtx *pc,
+                          struct Sci_Rectangle *rc,
+                          struct Sci_Rectangle *rcPage) {
+    double w_pt = gtk_print_context_get_width(ctx);
+    double h_pt = gtk_print_context_get_height(ctx);
+    double sc   = pc->render_scale;
+    rcPage->left = 0; rcPage->top = 0;
+    rcPage->right  = (int)(w_pt * sc);
+    rcPage->bottom = (int)(h_pt * sc);
+    rc->left   = 0;
+    rc->right  = (int)(w_pt * sc);
+    rc->top    = (int)(pc->header_h * sc);
+    rc->bottom = (int)((h_pt - pc->footer_h) * sc);
 }
 
 static void on_print_begin(GtkPrintOperation *op, GtkPrintContext *ctx,
                             gpointer user) {
     PrintCtx *pc = (PrintCtx *)user;
-    /* Build a Pango layout sized to the page body (minus header/footer)
-     * and let it figure out where each page break falls. */
-    PangoLayout *layout = gtk_print_context_create_pango_layout(ctx);
-    PangoFontDescription *fd = pango_font_description_from_string("Monospace 10");
-    pango_layout_set_font_description(layout, fd);
-    pango_font_description_free(fd);
-    pango_layout_set_text(layout, pc->text, (int)pc->text_len);
-    double page_w = gtk_print_context_get_width(ctx);
-    double page_h = gtk_print_context_get_height(ctx);
-    /* Reserve ~36pt header + footer. */
-    double body_h = page_h - 36 - 36;
-    pango_layout_set_width(layout, (int)(page_w * PANGO_SCALE));
+    ScintillaObject *s = SCINTILLA(pc->sci);
 
-    int n_lines = pango_layout_get_line_count(layout);
-    pc->pages = g_array_new(FALSE, FALSE, sizeof(gsize));
-    gsize first_byte = 0;
-    g_array_append_val(pc->pages, first_byte);
+    /* Colours on a white page (dark themes must not ink the whole sheet);
+     * size delta from the Text Size tab / editor zoom. */
+    scintilla_send_message(s, SCI_SETPRINTCOLOURMODE, SC_PRINT_COLOURONWHITE, 0);
+    scintilla_send_message(s, SCI_SETPRINTMAGNIFICATION,
+                           (uptr_t)pc->magnification, 0);
 
-    double running_h = 0;
-    for (int i = 0; i < n_lines; i++) {
-        PangoLayoutLine *line = pango_layout_get_line_readonly(layout, i);
-        PangoRectangle rect;
-        pango_layout_line_get_extents(line, NULL, &rect);
-        double line_h = (double)rect.height / PANGO_SCALE;
-        if (running_h + line_h > body_h) {
-            /* Start a new page at this line's byte offset. */
-            gsize page_start = (gsize)line->start_index;
-            g_array_append_val(pc->pages, page_start);
-            running_h = line_h;
-        } else {
-            running_h += line_h;
-        }
+    struct Sci_Rectangle rc, rcPage;
+    print_body_rc(ctx, pc, &rc, &rcPage);
+
+    /* Pagination: repeatedly FORMATRANGEFULL with draw=0; each call
+     * returns the first character that did NOT fit, i.e. the next page's
+     * start. A no-progress guard prevents an infinite loop on a giant
+     * unbreakable token. */
+    pc->page_starts = g_array_new(FALSE, FALSE, sizeof(Sci_Position));
+    Sci_Position start = 0;
+    int guard = 0;
+    while (start < pc->doc_len && guard < 100000) {
+        g_array_append_val(pc->page_starts, start);
+        GtkSnapshot *snap = gtk_snapshot_new();
+        struct Sci_RangeToFormatFull frr;
+        frr.hdc = (Sci_SurfaceID)snap;
+        frr.hdcTarget = (Sci_SurfaceID)snap;
+        frr.rc = rc; frr.rcPage = rcPage;
+        frr.chrg.cpMin = start; frr.chrg.cpMax = pc->doc_len;
+        Sci_Position next = (Sci_Position)scintilla_send_message(
+            s, SCI_FORMATRANGEFULL, 0 /* measure only */, (sptr_t)&frr);
+        g_object_unref(snap);              /* draw=0 leaves it empty */
+        if (next <= start) break;          /* no progress */
+        start = next; guard++;
     }
-    g_object_unref(layout);
-    pc->n_pages = (int)pc->pages->len;
+    if (pc->page_starts->len == 0) {
+        Sci_Position zero = 0;
+        g_array_append_val(pc->page_starts, zero);
+    }
+    pc->n_pages = (int)pc->page_starts->len;
     gtk_print_operation_set_n_pages(op, pc->n_pages);
+}
+
+static void print_hdr_ftr(GtkPrintContext *ctx, cairo_t *cr, PrintCtx *pc,
+                          int page_nr) {
+    double w_pt = gtk_print_context_get_width(ctx);
+    double h_pt = gtk_print_context_get_height(ctx);
+    /* Header: filename left, page X/N right. */
+    PangoLayout *h = gtk_print_context_create_pango_layout(ctx);
+    PangoFontDescription *fd = pango_font_description_from_string("Sans 9");
+    pango_layout_set_font_description(h, fd);
+    gchar *hdr = g_strdup_printf("%s    —    Page %d / %d",
+        pc->filename ? pc->filename : "Untitled", page_nr + 1, pc->n_pages);
+    pango_layout_set_text(h, hdr, -1);
+    cairo_save(cr); cairo_move_to(cr, 0, 4);
+    pango_cairo_show_layout(cr, h); cairo_restore(cr);
+    g_free(hdr); g_object_unref(h);
+    /* Footer: timestamp right-aligned. */
+    PangoLayout *f = gtk_print_context_create_pango_layout(ctx);
+    pango_layout_set_font_description(f, fd);
+    time_t now = time(NULL); char ts[64];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M", localtime(&now));
+    pango_layout_set_text(f, ts, -1);
+    pango_layout_set_alignment(f, PANGO_ALIGN_RIGHT);
+    pango_layout_set_width(f, (int)(w_pt * PANGO_SCALE));
+    cairo_save(cr); cairo_move_to(cr, 0, h_pt - 14);
+    pango_cairo_show_layout(cr, f); cairo_restore(cr);
+    g_object_unref(f);
+    pango_font_description_free(fd);
 }
 
 static void on_print_draw(GtkPrintOperation *op, GtkPrintContext *ctx,
@@ -4605,66 +4667,34 @@ static void on_print_draw(GtkPrintOperation *op, GtkPrintContext *ctx,
     (void)op;
     PrintCtx *pc = (PrintCtx *)user;
     if (!pc || page_nr >= pc->n_pages) return;
-
+    ScintillaObject *s = SCINTILLA(pc->sci);
     cairo_t *cr = gtk_print_context_get_cairo_context(ctx);
-    double page_w = gtk_print_context_get_width(ctx);
-    double page_h = gtk_print_context_get_height(ctx);
 
-    /* Header: filename left, page X/N right. */
-    {
-        PangoLayout *h = gtk_print_context_create_pango_layout(ctx);
-        PangoFontDescription *fd = pango_font_description_from_string("Sans 9");
-        pango_layout_set_font_description(h, fd);
-        pango_font_description_free(fd);
-        gchar *hdr = g_strdup_printf("%s    —    Page %d / %d",
-            pc->filename ? pc->filename : "Untitled",
-            page_nr + 1, pc->n_pages);
-        pango_layout_set_text(h, hdr, -1);
+    print_hdr_ftr(ctx, cr, pc, page_nr);
+
+    struct Sci_Rectangle rc, rcPage;
+    print_body_rc(ctx, pc, &rc, &rcPage);
+    Sci_Position start = g_array_index(pc->page_starts, Sci_Position, page_nr);
+
+    /* Draw this page's styled content into a snapshot, then replay the
+     * render node onto the print cairo scaled back to points. */
+    GtkSnapshot *snap = gtk_snapshot_new();
+    struct Sci_RangeToFormatFull frr;
+    frr.hdc = (Sci_SurfaceID)snap;
+    frr.hdcTarget = (Sci_SurfaceID)snap;
+    frr.rc = rc; frr.rcPage = rcPage;
+    frr.chrg.cpMin = start; frr.chrg.cpMax = pc->doc_len;
+    scintilla_send_message(s, SCI_FORMATRANGEFULL, 1 /* draw */, (sptr_t)&frr);
+
+    GskRenderNode *node = gtk_snapshot_to_node(snap);
+    if (node) {
         cairo_save(cr);
-        cairo_move_to(cr, 0, 0);
-        pango_cairo_show_layout(cr, h);
+        cairo_scale(cr, 1.0 / pc->render_scale, 1.0 / pc->render_scale);
+        gsk_render_node_draw(node, cr);
         cairo_restore(cr);
-        g_free(hdr);
-        g_object_unref(h);
+        gsk_render_node_unref(node);
     }
-
-    /* Body slice. */
-    gsize start = g_array_index(pc->pages, gsize, page_nr);
-    gsize end   = (page_nr + 1 < pc->n_pages)
-                  ? g_array_index(pc->pages, gsize, page_nr + 1)
-                  : pc->text_len;
-    if (end < start) end = start;
-
-    PangoLayout *body = gtk_print_context_create_pango_layout(ctx);
-    PangoFontDescription *fd = pango_font_description_from_string("Monospace 10");
-    pango_layout_set_font_description(body, fd);
-    pango_font_description_free(fd);
-    pango_layout_set_width(body, (int)(page_w * PANGO_SCALE));
-    pango_layout_set_text(body, pc->text + start, (int)(end - start));
-
-    cairo_save(cr);
-    cairo_move_to(cr, 0, 36);          /* below header */
-    pango_cairo_show_layout(cr, body);
-    cairo_restore(cr);
-    g_object_unref(body);
-
-    /* Footer: timestamp right-aligned. */
-    {
-        PangoLayout *f = gtk_print_context_create_pango_layout(ctx);
-        PangoFontDescription *fd = pango_font_description_from_string("Sans 9");
-        pango_layout_set_font_description(f, fd);
-        pango_font_description_free(fd);
-        time_t now = time(NULL);
-        char ts[64]; strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M", localtime(&now));
-        pango_layout_set_text(f, ts, -1);
-        pango_layout_set_alignment(f, PANGO_ALIGN_RIGHT);
-        pango_layout_set_width(f, (int)(page_w * PANGO_SCALE));
-        cairo_save(cr);
-        cairo_move_to(cr, 0, page_h - 24);
-        pango_cairo_show_layout(cr, f);
-        cairo_restore(cr);
-        g_object_unref(f);
-    }
+    g_object_unref(snap);
 }
 
 static void on_print_end(GtkPrintOperation *op, GtkPrintContext *ctx, gpointer user) {
@@ -4691,6 +4721,37 @@ static void action_panel_toggle(GSimpleAction *a, GVariant *p, gpointer u) {
  * the app session. */
 static GtkPageSetup *g_page_setup = NULL;
 
+/* GAP-127 — "Text Size" tab in the print dialog: a ± point spin that
+ * feeds SCI_SETPRINTMAGNIFICATION, defaulting to the editor's current
+ * zoom (macOS NppPrintView parity — "zoom out on screen = smaller
+ * print, fit more per page"). */
+static GtkWidget *g_print_size_spin = NULL;   /* lives for one dialog run */
+
+static GtkWidget *on_print_create_size_tab(GtkPrintOperation *op, gpointer user) {
+    (void)op;
+    PrintCtx *pc = (PrintCtx *)user;
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(box, 12);   gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 12); gtk_widget_set_margin_end(box, 12);
+    GtkWidget *lbl = gtk_label_new("Print text size (points, relative to the editor):");
+    g_print_size_spin = gtk_spin_button_new_with_range(-10, 20, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(g_print_size_spin), pc->magnification);
+    npp_box_pack(GTK_BOX(box), lbl, FALSE, 0);
+    npp_box_pack(GTK_BOX(box), g_print_size_spin, FALSE, 0);
+    gtk_widget_set_visible(box, TRUE);
+    return box;
+}
+
+static void on_print_apply_size_tab(GtkPrintOperation *op, GtkWidget *widget,
+                                    gpointer user) {
+    (void)op; (void)widget;
+    PrintCtx *pc = (PrintCtx *)user;
+    if (g_print_size_spin)
+        pc->magnification =
+            (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(g_print_size_spin));
+    g_print_size_spin = NULL;
+}
+
 /* with_dialog FALSE = straight to the default printer (Print Now,
  * -quickPrint); TRUE = show the print dialog first. */
 static void run_print_operation(gboolean with_dialog) {
@@ -4698,13 +4759,19 @@ static void run_print_operation(gboolean with_dialog) {
 
     PrintCtx *pc = g_new0(PrintCtx, 1);
     ScintillaObject *s = SCINTILLA(sci);
-    pc->text_len = (gsize)scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
-    pc->text = g_malloc(pc->text_len + 1);
-    if (pc->text_len > 0) {
-        struct Sci_TextRangeFull tr = {{0, (Sci_Position)pc->text_len}, pc->text};
-        scintilla_send_message(s, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
-    }
-    pc->text[pc->text_len] = '\0';
+    pc->sci     = sci;
+    pc->doc_len = (Sci_Position)scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
+    pc->header_h = 18.0;   /* points */
+    pc->footer_h = 18.0;
+    /* Exact px-per-point: read the DPI Scintilla itself renders at (the
+     * editor widget's Pango resolution), so a 10 pt style prints at 10 pt. */
+    double dpi = pango_cairo_context_get_resolution(
+        gtk_widget_get_pango_context(sci));
+    if (dpi <= 0.0) dpi = 96.0;
+    pc->render_scale = dpi / 72.0;
+    /* Default magnification = current editor zoom, as on macOS. */
+    pc->magnification = (int)scintilla_send_message(s, SCI_GETZOOM, 0, 0);
+
     NppDoc *d = editor_current_doc();
     pc->filename = d && d->filepath
         ? g_path_get_basename(d->filepath)
@@ -4713,13 +4780,29 @@ static void run_print_operation(gboolean with_dialog) {
     GtkPrintOperation *op = gtk_print_operation_new();
     if (g_page_setup)
         gtk_print_operation_set_default_page_setup(op, g_page_setup);
+    if (with_dialog) {
+        gtk_print_operation_set_custom_tab_label(op, "Text Size");
+        g_signal_connect(op, "create-custom-widget",
+                         G_CALLBACK(on_print_create_size_tab), pc);
+        g_signal_connect(op, "custom-widget-apply",
+                         G_CALLBACK(on_print_apply_size_tab), pc);
+    }
     g_signal_connect(op, "begin-print", G_CALLBACK(on_print_begin), pc);
     g_signal_connect(op, "draw-page",   G_CALLBACK(on_print_draw),  pc);
     g_signal_connect(op, "end-print",   G_CALLBACK(on_print_end),   pc);
-    gtk_print_operation_run(op,
-        with_dialog ? GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG
-                    : GTK_PRINT_OPERATION_ACTION_PRINT,
-        GTK_WINDOW(g_window), NULL);
+    /* Test/verification hook: NPP_PRINT_TO_PDF=<path> exports instead of
+     * printing, so the styled output can be inspected headlessly. */
+    const char *pdf = g_getenv("NPP_PRINT_TO_PDF");
+    if (pdf && *pdf) {
+        gtk_print_operation_set_export_filename(op, pdf);
+        gtk_print_operation_run(op, GTK_PRINT_OPERATION_ACTION_EXPORT,
+                                GTK_WINDOW(g_window), NULL);
+    } else {
+        gtk_print_operation_run(op,
+            with_dialog ? GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG
+                        : GTK_PRINT_OPERATION_ACTION_PRINT,
+            GTK_WINDOW(g_window), NULL);
+    }
     g_object_unref(op);
 }
 

@@ -491,7 +491,10 @@ static void on_indent(GtkToggleButton *item, gpointer d)
 static void on_print(GtkButton *i, gpointer d)
 {
     (void)i; (void)d;
-    main_do_print();
+    /* GAP-127: the toolbar Print icon showed no dialog — it called the
+     * no-dialog Print-Now path, so with no default printer configured it
+     * appeared to do nothing. Match macOS printDocument: / File > Print. */
+    main_do_print_dialog();
 }
 
 /* Sync vertical/horizontal scrolling between the split views (#5). */
