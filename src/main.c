@@ -8069,6 +8069,17 @@ static void statusbar_open_language_menu(GtkWidget *anchor)
     gtk_popover_popup(GTK_POPOVER(pop));
 }
 
+#if !GLIB_CHECK_VERSION(2, 74, 0)
+/* One-shot timeout shim for glib < 2.74 — see the call site in
+ * build_main_window (docs/08 legacy tier). */
+static gboolean npp_restore_plugins_once(gpointer d)
+{
+    (void)d;
+    panelstate_restore_plugins();
+    return G_SOURCE_REMOVE;
+}
+#endif
+
 static void build_main_window(GtkApplication *app)
 {
     g_window = GTK_APPLICATION_WINDOW(gtk_application_window_new(app));
@@ -8412,8 +8423,17 @@ static void build_main_window(GtkApplication *app)
     /* GAP-81 — phase 2 of panel restore: PLUGIN panels, 500 ms after
      * READY (macOS AppDelegate timing) so plugins that self-restore in
      * READY win and the host ladder no-ops on them. */
+#if GLIB_CHECK_VERSION(2, 74, 0)
     g_timeout_add_once(500, (GSourceOnceFunc)panelstate_restore_plugins,
                        NULL);
+#else
+    /* glib < 2.74 (Ubuntu 22.04 legacy tier — docs/08): neither
+     * g_timeout_add_once nor GSourceOnceFunc exists. A plain
+     * g_timeout_add with a self-removing wrapper is the same one-shot.
+     * (The cast above is also UB-adjacent on the modern path; the
+     * wrapper keeps the legacy path strictly typed.) */
+    g_timeout_add(500, npp_restore_plugins_once, NULL);
+#endif
 
     /* G3.7: accept file drops from Nautilus / other apps. */
     {

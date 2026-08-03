@@ -367,6 +367,16 @@ static inline void npp_fc_set_filename(GtkFileChooser *c, const char *path)
         ((void)(err), gtk_show_uri((parent), (uri), (ts)))
 #define gtk_label_set_line_wrap(l, w)            gtk_label_set_wrap((l), (w))
 
+/* ── glib < 2.74 legacy-build shim (Jammy tier — docs/08) ───────────────
+ * G_MARKUP_DEFAULT_FLAGS is an ENUMERATOR added in glib 2.74, documented
+ * as "no special behaviour" and defined as 0. Ubuntu 22.04 ships glib
+ * 2.72, where the name does not exist. Both users (stylestore.c, udl.c)
+ * already include this header. Note this is an ENUM, not a function —
+ * the class of symbol the original docs/08 audit missed. */
+#if !GLIB_CHECK_VERSION(2, 74, 0)
+#  define G_MARKUP_DEFAULT_FLAGS ((GMarkupParseFlags) 0)
+#endif
+
 /* ── GTK < 4.10 legacy-build helper (Jammy tier — docs/08 §4d) ──────────
  * Compiled ONLY against pre-4.10 GTK headers; the primary 24.04+ builds
  * (GTK 4.14) discard this whole block in the preprocessor, so it cannot
