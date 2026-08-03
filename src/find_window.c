@@ -309,14 +309,73 @@ static void on_fif_find_all(GtkButton *b, gpointer u) {
         TRUE  /* recursive */);
     searchresults_set_visible(TRUE);
 }
+/* GAP-122 — one-shot Replace in Files (macOS _replaceInFiles: parity:
+ * confirm → worker-thread walk → atomic writes → counts credited only
+ * for what reached disk → capped failure summary). */
+static void fif_replace_done(int total_replacements, int changed_files,
+                             GPtrArray *failures, gpointer user) {
+    (void)user;
+    FW *w = s_fw; if (!w) return;
+    gchar *msg = g_strdup_printf(
+        "Replace in Files: %d replacement(s) in %d file(s).",
+        total_replacements, changed_files);
+    gtk_label_set_text(GTK_LABEL(w->status), msg);
+    g_free(msg);
+
+    if (failures && failures->len > 0) {
+        /* macOS 6028ce4: capped, user-visible failure summary. */
+        GString *body = g_string_new(NULL);
+        guint shown = MIN(failures->len, 10u);
+        for (guint i = 0; i < shown; i++) {
+            if (i) g_string_append_c(body, '\n');
+            g_string_append(body, (const char *)g_ptr_array_index(failures, i));
+        }
+        if (failures->len > shown)
+            g_string_append_printf(body, "\n…and %u more",
+                                   failures->len - shown);
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(w->window),
+            GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_OK,
+            "Some files could not be replaced");
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d),
+                                                 "%s", body->str);
+        gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
+        g_string_free(body, TRUE);
+    }
+}
+
 static void on_fif_replace(GtkButton *b, gpointer u) {
     (void)b; (void)u;
-    GtkWidget *d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
-        GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
-        "Replace in Files: review hits in Search Results, then use\n"
-        "Find in Files → Find All to confirm matches before replacing.\n"
-        "(Replace-in-files isn't yet implemented as a one-shot.)");
-    gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
+    FW *w = s_fw; if (!w) return;
+    const char *needle = combo_text(w->fif_find);
+    const char *repl   = combo_text(w->fif_repl);
+    const char *dir    = combo_text(w->fif_dir);
+    const char *filt   = combo_text(w->fif_filters);
+    if (!needle || !*needle || !dir || !*dir) {
+        gtk_label_set_text(GTK_LABEL(w->status),
+            "Enter a search term and pick a directory.");
+        return;
+    }
+    /* Confirmation, exactly as macOS: this cannot be undone. */
+    GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(w->window),
+        GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
+        "Replace in Files");
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d),
+        "Replace all occurrences of \"%s\" with \"%s\" in directory:\n%s\n\n"
+        "This cannot be undone.", needle, repl ? repl : "", dir);
+    gtk_dialog_add_button(GTK_DIALOG(d), "_Replace", GTK_RESPONSE_OK);
+    gtk_dialog_add_button(GTK_DIALOG(d), "_Cancel",  GTK_RESPONSE_CANCEL);
+    gtk_dialog_set_default_response(GTK_DIALOG(d), GTK_RESPONSE_CANCEL);
+    int resp = gtk_dialog_run(GTK_DIALOG(d));
+    gtk_widget_destroy(d);
+    if (resp != GTK_RESPONSE_OK) return;
+
+    gtk_label_set_text(GTK_LABEL(w->status), "Replacing in files…");
+    findinfiles_replace_run(needle, repl, dir, filt,
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fif_case)),
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fif_word)),
+        get_search_mode(w->fif_rb_normal, w->fif_rb_ext, w->fif_rb_regex),
+        TRUE /* recursive */,
+        fif_replace_done, NULL);
 }
 
 /* ── Find in Projects actions ──────────────────────────────────────── */

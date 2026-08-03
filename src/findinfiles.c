@@ -1,5 +1,7 @@
 /* findinfiles.c — Find in Files dialog for the GTK3 Linux port. */
 #include "findinfiles.h"
+#include "findreplace.h"   /* findreplace_expand_extended (GAP-122) */
+#include <glib/gstdio.h>  /* g_stat — preserve file mode on replace */
 #include "gtk_compat.h"
 #include "searchresults.h"
 #include "editor.h"
@@ -78,9 +80,51 @@ typedef struct {
     gboolean  match_case;
     gboolean  whole_word;
     gboolean  subdirs;
+    int       mode;        /* 0=Normal 1=Extended 2=Regex (GAP-122) */
     GPtrArray *hits;       /* output: array of FifHit* */
     int        file_count; /* output */
+    /* ── Replace in Files (GAP-122) ── */
+    char      *replacement;        /* NULL = search job */
+    int        total_replacements; /* only replacements that reached disk */
+    int        changed_files;      /* files actually written */
+    GPtrArray *write_failures;     /* char*: "path: error" */
+    FifReplaceDone on_done;        /* main-thread completion */
+    gpointer   on_done_user;
 } FifJob;
+
+/* Build the search regex honouring the Normal/Extended/Regex mode.
+ * (Previously the mode was accepted by findinfiles_run and then DROPPED —
+ * the needle was always regex-escaped, so the Regex and Extended radios
+ * silently did nothing for Find in Files. Fixed as part of GAP-122; both
+ * search and replace now share this.)
+ * Whole-word wraps \b only for non-regex modes, as in Windows N++.
+ * MULTILINE keeps ^/$ line-anchored for regex replace on whole files. */
+static GRegex *fif_build_regex(FifJob *job, GError **err)
+{
+    GRegexCompileFlags cflags =
+        (job->match_case ? 0 : G_REGEX_CASELESS) | G_REGEX_MULTILINE;
+    gchar *pattern = NULL;
+    if (job->mode == 2) {                       /* Regex — raw pattern */
+        pattern = g_strdup(job->needle);
+    } else {
+        char *expanded = (job->mode == 1)
+            ? findreplace_expand_extended(job->needle)
+            : (char *)job->needle;
+        gchar *escaped = g_regex_escape_string(expanded, -1);
+        pattern = job->whole_word
+                  ? g_strdup_printf("\\b%s\\b", escaped)
+                  : g_strdup(escaped);
+        g_free(escaped);
+        if (expanded != job->needle) free(expanded);
+    }
+    if (job->mode == 2 && job->whole_word) {
+        gchar *wrapped = g_strdup_printf("\\b(?:%s)\\b", pattern);
+        g_free(pattern); pattern = wrapped;
+    }
+    GRegex *rx = g_regex_new(pattern, cflags, 0, err);
+    g_free(pattern);
+    return rx;
+}
 
 static void search_file(const char *filepath, FifJob *job, GRegex *regex)
 {
@@ -133,20 +177,156 @@ static void search_dir(const char *dirpath, FifJob *job, GRegex *regex)
 
 static gboolean post_results(gpointer data);
 
+/* ────────────────────────────────────────────────────────────────────
+ * GAP-122 — Replace in Files engine
+ * ──────────────────────────────────────────────────────────────────── */
+typedef struct {
+    const char *replacement;
+    gboolean    literal;   /* Normal/Extended: append verbatim */
+    int         count;
+} FifReplEval;
+
+/* g_regex_replace_eval callback: count every match and append either the
+ * literal replacement or the backreference-expanded one (regex mode —
+ * GLib expands \1 / \g<1> via g_match_info_expand_references, the same
+ * syntax N++ uses). */
+static gboolean fif_repl_eval(const GMatchInfo *mi, GString *out, gpointer d)
+{
+    FifReplEval *ev = d;
+    ev->count++;
+    if (ev->literal) {
+        g_string_append(out, ev->replacement);
+    } else {
+        GError *err = NULL;
+        char *x = g_match_info_expand_references(mi, ev->replacement, &err);
+        if (x) { g_string_append(out, x); g_free(x); }
+        else if (err) g_error_free(err);
+    }
+    return FALSE;
+}
+
+static void replace_file(const char *filepath, FifJob *job, GRegex *regex)
+{
+    gchar *contents = NULL;
+    gsize  length   = 0;
+    /* Unreadable → skip, mirroring the search side (macOS: `continue`). */
+    if (!g_file_get_contents(filepath, &contents, &length, NULL))
+        return;
+
+    /* Binary / non-UTF-8 → skip SILENTLY, not as a failure. GRegex refuses
+     * invalid UTF-8 ("isolated byte with 0x80 bit set"), and reporting that
+     * as a write failure floods the summary with every PNG/binary in the
+     * tree (observed live). macOS gets this for free: stringWithContents-
+     * OfFile:NSUTF8StringEncoding returns nil and the loop does `continue`.
+     * A default "*.*" filter makes this the common case, not a corner. */
+    if (!g_utf8_validate(contents, (gssize)length, NULL)) {
+        g_free(contents);
+        return;
+    }
+
+    FifReplEval ev = { job->replacement, job->mode != 2, 0 };
+    GError *err = NULL;
+    char *replaced = g_regex_replace_eval(regex, contents, (gssize)length, 0,
+                                          0, fif_repl_eval, &ev, &err);
+    if (!replaced) {
+        if (err) {
+            g_ptr_array_add(job->write_failures,
+                g_strdup_printf("%s: %s", filepath, err->message));
+            g_error_free(err);
+        }
+        g_free(contents);
+        return;
+    }
+
+    /* e033363 — skip writes when the replacement is a textual no-op
+     * ("foo"->"foo", regex (foo)->\1): no mtime bump (timestamp build
+     * systems, spurious file-changed prompts), and the file reports 0
+     * replacements, matching what actually reached disk. */
+    size_t new_len = strlen(replaced);
+    if (ev.count > 0 &&
+        !(new_len == length && memcmp(replaced, contents, length) == 0)) {
+        GError *werr = NULL;
+        /* Atomic write-temp + rename (as macOS writeToFile:atomically:YES),
+         * but the mode MUST be carried over explicitly: the rename installs
+         * a brand-new inode, so a plain g_file_set_contents() would reset
+         * permissions to 0666&~umask — verified to turn a 755 shell script
+         * into 664, silently making it non-executable. That matters far
+         * more on Linux than on macOS, so we preserve the original mode
+         * (g_file_set_contents_full, glib >= 2.66; Jammy has 2.72).
+         * Counts are credited only on a successful write. */
+        GStatBuf st;
+        int fmode = (g_stat(filepath, &st) == 0) ? (int)(st.st_mode & 07777)
+                                                 : 0644;
+        if (g_file_set_contents_full(filepath, replaced, (gssize)new_len,
+                                     G_FILE_SET_CONTENTS_CONSISTENT,
+                                     fmode, &werr)) {
+            job->total_replacements += ev.count;
+            job->changed_files++;
+        } else {
+            g_ptr_array_add(job->write_failures,
+                g_strdup_printf("%s: %s", filepath,
+                                werr ? werr->message : "unknown write error"));
+            if (werr) g_error_free(werr);
+        }
+    }
+    g_free(replaced);
+    g_free(contents);
+}
+
+static void replace_dir(const char *dirpath, FifJob *job, GRegex *regex)
+{
+    GDir *dir = g_dir_open(dirpath, 0, NULL);
+    if (!dir) return;
+    const gchar *name;
+    while ((name = g_dir_read_name(dir))) {
+        gchar *full = g_build_filename(dirpath, name, NULL);
+        if (g_file_test(full, G_FILE_TEST_IS_DIR)) {
+            if (job->subdirs && name[0] != '.')
+                replace_dir(full, job, regex);
+        } else if (name_matches_filter(name, job->filter)) {
+            replace_file(full, job, regex);
+        }
+        g_free(full);
+    }
+    g_dir_close(dir);
+}
+
+static gboolean replace_done_idle(gpointer data)
+{
+    FifJob *job = data;
+    if (job->on_done)
+        job->on_done(job->total_replacements, job->changed_files,
+                     job->write_failures, job->on_done_user);
+    g_ptr_array_free(job->write_failures, TRUE);
+    g_free(job->needle); g_free(job->replacement);
+    g_free(job->directory); g_free(job->filter);
+    g_free(job);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer replace_thread(gpointer data)
+{
+    FifJob *job = data;
+    GError *err = NULL;
+    GRegex *regex = fif_build_regex(job, &err);
+    if (regex) {
+        replace_dir(job->directory, job, regex);
+        g_regex_unref(regex);
+    } else if (err) {
+        g_ptr_array_add(job->write_failures,
+            g_strdup_printf("pattern: %s", err->message));
+        g_error_free(err);
+    }
+    g_idle_add(replace_done_idle, job);
+    return NULL;
+}
+
 static gpointer search_thread(gpointer data)
 {
     FifJob *job = data;
 
-    GRegexCompileFlags cflags = job->match_case ? 0 : G_REGEX_CASELESS;
-    gchar *escaped = g_regex_escape_string(job->needle, -1);
-    gchar *pattern = job->whole_word
-                     ? g_strdup_printf("\\b%s\\b", escaped)
-                     : g_strdup(escaped);
-    g_free(escaped);
-
     GError *err   = NULL;
-    GRegex *regex = g_regex_new(pattern, cflags, 0, &err);
-    g_free(pattern);
+    GRegex *regex = fif_build_regex(job, &err);
 
     if (regex) {
         search_dir(job->directory, job, regex);
@@ -504,7 +684,6 @@ void findinfiles_run(const char *needle, const char *directory,
                      const char *filter, gboolean match_case,
                      gboolean whole_word, int mode, gboolean subdirs)
 {
-    (void)mode;   /* Regex flag honoured via build_flags inside worker */
     if (!needle || !*needle || !directory || !*directory) return;
 
     FifJob *job      = g_new0(FifJob, 1);
@@ -514,7 +693,39 @@ void findinfiles_run(const char *needle, const char *directory,
     job->match_case  = match_case;
     job->whole_word  = whole_word;
     job->subdirs     = subdirs;
+    job->mode        = mode;   /* was silently dropped pre-GAP-122 */
     job->hits        = g_ptr_array_new_with_free_func(fif_hit_free);
     job->file_count  = 0;
     g_thread_new("fif-search", search_thread, job);
+}
+
+void findinfiles_replace_run(const char *needle, const char *replacement,
+                             const char *directory, const char *filter,
+                             gboolean match_case, gboolean whole_word,
+                             int mode, gboolean subdirs,
+                             FifReplaceDone done, gpointer user)
+{
+    if (!needle || !*needle || !directory || !*directory) return;
+
+    FifJob *job      = g_new0(FifJob, 1);
+    job->needle      = g_strdup(needle);
+    job->replacement = g_strdup(replacement ? replacement : "");
+    job->directory   = g_strdup(directory);
+    job->filter      = g_strdup((filter && *filter) ? filter : "*.*");
+    job->match_case  = match_case;
+    job->whole_word  = whole_word;
+    job->subdirs     = subdirs;
+    job->mode        = mode;
+    job->write_failures = g_ptr_array_new_with_free_func(g_free);
+    job->on_done     = done;
+    job->on_done_user = user;
+    /* Extended mode expands escapes in the REPLACEMENT too (\n, \t…) —
+     * same as this app's in-buffer Replace and macOS. */
+    if (mode == 1) {
+        char *r = findreplace_expand_extended(job->replacement);
+        g_free(job->replacement);
+        job->replacement = g_strdup(r);
+        free(r);
+    }
+    g_thread_new("fif-replace", replace_thread, job);
 }

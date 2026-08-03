@@ -47,4 +47,8 @@ int  findreplace_replace_all(void);          /* returns replaced count  */
 int  findreplace_mark_all(void);             /* returns mark count      */
 void findreplace_clear_marks(void);
 
+/* GAP-122 — Extended-mode escape expansion (\n \t \xNN…), shared
+ * with Replace in Files. Caller frees. */
+char *findreplace_expand_extended(const char *s);
+
 #endif /* FINDREPLACE_H */

@@ -16,4 +16,23 @@ void findinfiles_run(const char *needle, const char *directory,
                      const char *filter, gboolean match_case,
                      gboolean whole_word, int mode, gboolean subdirs);
 
+/* GAP-122 — Replace in Files, one shot (macOS _replaceInFiles: parity).
+ * Runs on a worker thread; `done` is invoked on the main thread with
+ *   total_replacements — only replacements that actually reached disk
+ *   changed_files      — files successfully written
+ *   failures           — GPtrArray of char* "path: error" (owned by the
+ *                        callee; valid only during the callback)
+ * Semantics (macOS 2eaac03 + 6028ce4 + e033363):
+ *   - counts credited only after a successful ATOMIC write
+ *   - textual no-op replacements ("foo"->"foo", regex (foo)->\1) skip
+ *     the write entirely — mtime untouched, 0 reported for that file
+ *   - unreadable files are skipped (same as the search side)           */
+typedef void (*FifReplaceDone)(int total_replacements, int changed_files,
+                               GPtrArray *failures, gpointer user);
+void findinfiles_replace_run(const char *needle, const char *replacement,
+                             const char *directory, const char *filter,
+                             gboolean match_case, gboolean whole_word,
+                             int mode, gboolean subdirs,
+                             FifReplaceDone done, gpointer user);
+
 #endif /* FINDINFILES_H */

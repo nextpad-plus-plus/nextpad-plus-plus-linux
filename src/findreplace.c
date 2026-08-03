@@ -63,7 +63,12 @@ static sptr_t sci_msg(GtkWidget *sci, unsigned int m, uptr_t w, sptr_t l)
     return scintilla_send_message(SCINTILLA(sci), m, w, l);
 }
 
-/* Expand extended escape sequences: \n \r \t \0 \xNN */
+/* Expand extended escape sequences: \n \r \t \0 \xNN.
+ * Exported (findreplace_expand_extended) for Replace in Files (GAP-122),
+ * which shares the Extended-mode semantics of this window. */
+char *findreplace_expand_extended(const char *s);
+static char *expand_extended(const char *s);
+char *findreplace_expand_extended(const char *s) { return expand_extended(s); }
 static char *expand_extended(const char *s)
 {
     size_t len = strlen(s);
