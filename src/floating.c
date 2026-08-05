@@ -240,9 +240,12 @@ void floating_popout(const char *name) {
          * edge (FloatingPanelWindow accessory). pack_end order: first
          * packed lands rightmost, so pop-in goes in first. */
         GtkWidget *popin = gtk_button_new();
+        /* GAP-123 chrome restyle — dock-back = arrow.down.forward.square
+         * (macOS 2ccf0d9 uses the same symbol family in the float
+         * titlebar; the pop_in PNG is retired). */
         gtk_button_set_child(GTK_BUTTON(popin),
-            panel_frame_icon_image("panels/toolbar/pop_in", 16,
-                                   FALSE, "go-down"));
+            panel_frame_sfsymbol_image("arrow.down.forward.square", 16,
+                                       "go-down"));
         gtk_button_set_has_frame(GTK_BUTTON(popin), FALSE);
         gtk_widget_set_tooltip_text(popin, "Dock back");
         g_signal_connect(popin, "clicked",

@@ -44,6 +44,15 @@ int  panelstate_saved_width(GtkWidget *frame);
  * suspended or when width < 150. */
 void panelstate_note_width(int width);
 
+/* GAP-123 — same, but only for panels docked inside `host` (two-host
+ * layout: save the width of whichever pane was dragged). */
+void panelstate_note_width_host(int width, GtkWidget *host);
+
+/* GAP-123 — per-panel dock side, persisted as the PanelDockSides
+ * GUIConfig ("name=left …"; absent = right). */
+gboolean panelstate_side_left(const char *name);
+void     panelstate_note_side(const char *name, gboolean left);
+
 /* Replay the saved open/popped state (call once, at startup, after the
  * panels and floating registry are built). Gated by panel_keep_state.
  * Also seeds floating.c geometry/pin from FloatingPanels, un-suspends

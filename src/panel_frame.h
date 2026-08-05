@@ -55,6 +55,15 @@ void panel_frame_simulate_close(GtkWidget *frame);
  * by floating.c after dock-backs that bypass the frame's pop button. */
 void panel_frame_refresh_pop_icon(GtkWidget *frame);
 
+/* GAP-123 (macOS 2ccf0d9) — left↔right dock moving. The frame owns only
+ * the title-bar move button and its side flag; main.c installs the hook
+ * that actually reparents between the two side hosts. */
+void panel_frame_set_move_hook(void (*hook)(GtkWidget *frame));
+void panel_frame_set_movable(GtkWidget *frame, gboolean movable);
+void panel_frame_set_dock_side(GtkWidget *frame, gboolean left);
+gboolean panel_frame_dock_side_left(GtkWidget *frame);
+const char *panel_frame_get_name(GtkWidget *frame);
+
 /* GAP-101 — themed icon loader for the float-window header buttons:
  * resources/icons/<standard|dark>/<subpath>.png pre-scaled to px×px.
  * force_standard pins the standard asset even in dark mode (macOS does
@@ -63,5 +72,10 @@ void panel_frame_refresh_pop_icon(GtkWidget *frame);
 GtkWidget *panel_frame_icon_image(const char *subpath, int px,
                                   gboolean force_standard,
                                   const char *fallback_icon);
+
+/* GAP-123 — SF Symbol PNG loader: resources/icons/<light|dark>/sfsymbols/
+ * <symbol>.png pre-scaled to fit px×px (aspect preserved). */
+GtkWidget *panel_frame_sfsymbol_image(const char *symbol, int px,
+                                      const char *fallback_icon);
 
 #endif /* PANEL_FRAME_H */

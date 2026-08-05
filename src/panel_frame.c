@@ -44,6 +44,9 @@ typedef struct {
     GtkWidget *title_label;
     GtkWidget *pop_button;
     GtkWidget *pop_image;     /* GtkImage inside pop_button */
+    GtkWidget *move_button;   /* GAP-123 — move-dock (left↔right) button */
+    GtkWidget *move_image;
+    gboolean   on_left;       /* GAP-123 — currently docked on the left  */
     GtkWidget *close_button;
     GtkWidget *separator;
     GtkWidget *content;
@@ -52,6 +55,10 @@ typedef struct {
     int             zoom;       /* per-panel zoom level, steps from 0     */
     GtkCssProvider *zoom_css;   /* font-size scaler, scoped to content    */
 } PanelFrameState;
+
+/* GAP-123 — main.c installs the actual host-move logic; the frame only
+ * owns the button + icon. */
+static void (*s_move_hook)(GtkWidget *frame);
 
 #define PF_STATE_KEY "nextpad-panel-frame-state"
 
@@ -184,44 +191,54 @@ static void pf_apply_css(GtkWidget *target) {
 #  define RESOURCES_DIR "resources"
 #endif
 
-/* Pop-out icon: rendered 16×16 (macOS spec). The pop_out/pop_in PNGs are
- * bilevel 48px; 16 is exactly 48/3, a clean integer downscale (no
- * fractional-sample blur). */
-#define PF_POP_ICON_PX 16
-/* Pop-out button box size (matches the macOS _PFPopButton). */
-#define PF_POP_BTN_PX  16
-/* Margin around the pop-out button — macOS renders it with a 4pt inset. */
+/* GAP-123 chrome sizes — the title-bar tool buttons (move-dock, detach)
+ * match the close ✕ button exactly per design: 17×17 button, 14px icon. */
+#define PF_POP_ICON_PX 14
+#define PF_POP_BTN_PX  17
+/* Margin around the title-bar tool buttons. */
 #define PF_POP_BTN_MARGIN 4
 
-static GtkWidget *pf_make_pop_image(gboolean popped) {
-    const char *theme_subdir = pf_is_dark() ? "dark" : "standard";
-    const char *icon_name    = popped ? "pop_in" : "pop_out";
+/* GAP-123 — SF Symbol PNG loader. The macOS 2ccf0d9 chrome uses SF
+ * Symbols; the author exported them as PNGs under
+ * resources/icons/<light|dark>/sfsymbols/<symbol name>.png (note: this
+ * icon set uses "light", not the "standard" dir the other assets use).
+ * Pre-scaled to the target size (sharp 1:1 blit, aspect preserved — the
+ * inset.* rectangles are wider than tall). */
+static GtkWidget *pf_sfsymbol_image(const char *symbol, int px,
+                                    const char *fallback_icon) {
+    const char *theme_subdir = pf_is_dark() ? "dark" : "light";
     char path[1024];
-    g_snprintf(path, sizeof(path),
-               "%s/icons/%s/panels/toolbar/%s.png",
-               RESOURCES_DIR, theme_subdir, icon_name);
-
-    /* Match the GTK3 port exactly — its pop icon renders sharp. Scale the
-     * source to the FINAL pixel size up front with
-     * gdk_pixbuf_new_from_file_at_size, then gtk_image_new_from_pixbuf.
-     * The image is created already at the target size, so it is blitted
-     * 1:1 with no draw-time GSK rescale (the soft step our texture +
-     * set_pixel_size approach was doing). */
+    g_snprintf(path, sizeof(path), "%s/icons/%s/sfsymbols/%s.png",
+               RESOURCES_DIR, theme_subdir, symbol);
     if (g_file_test(path, G_FILE_TEST_EXISTS)) {
-        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(
-            path, PF_POP_ICON_PX, PF_POP_ICON_PX, NULL);
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(path, px, px, NULL);
         if (pb) {
             GtkWidget *img = gtk_image_new_from_pixbuf(pb);
             g_object_unref(pb);
             return img;
         }
     }
-
-    /* Fallback to stock icons. */
-    GtkWidget *img = gtk_image_new_from_icon_name(
-        popped ? "go-down" : "go-up");
-    gtk_image_set_pixel_size(GTK_IMAGE(img), PF_POP_ICON_PX);
+    GtkWidget *img = gtk_image_new_from_icon_name(fallback_icon);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), px);
     return img;
+}
+
+/* Public wrapper — floating.c uses it for the float-header dock-back
+ * button so the whole chrome shares one icon set. */
+GtkWidget *panel_frame_sfsymbol_image(const char *symbol, int px,
+                                      const char *fallback_icon) {
+    return pf_sfsymbol_image(symbol, px, fallback_icon);
+}
+
+/* GAP-123 chrome restyle (macOS 2ccf0d9): Detach = arrow.up.right.square,
+ * docked-back state = arrow.down.forward.square. The old pop_out/pop_in
+ * PNG pair is retired. */
+static GtkWidget *pf_make_pop_image(gboolean popped) {
+    return popped
+        ? pf_sfsymbol_image("arrow.down.forward.square", PF_POP_ICON_PX,
+                            "go-down")
+        : pf_sfsymbol_image("arrow.up.right.square", PF_POP_ICON_PX,
+                            "go-up");
 }
 
 /* GAP-101 — shared with floating.c for the float-window header chrome:
@@ -315,6 +332,60 @@ static void on_pop_clicked(GtkButton *btn, gpointer ud) {
     if (!st) return;
     floating_toggle(st->name);
     pf_refresh_pop_icon(st);
+}
+
+/* ── GAP-123 — move-dock button (macOS 2ccf0d9) ──────────────────────── */
+
+/* Right-docked panels show the "move left" symbol, left-docked ones the
+ * mirror — the icon depicts the DESTINATION, like macOS. */
+static void pf_refresh_move_icon(PanelFrameState *st) {
+    if (!st->move_button) return;
+    GtkWidget *img = st->on_left
+        ? pf_sfsymbol_image("inset.filled.righthalf.arrow.right.rectangle",
+                            PF_POP_ICON_PX, "go-next")
+        : pf_sfsymbol_image("inset.filled.lefthalf.arrow.left.rectangle",
+                            PF_POP_ICON_PX, "go-previous");
+    if (st->move_image)
+        gtk_container_remove(GTK_CONTAINER(st->move_button), st->move_image);
+    st->move_image = img;
+    gtk_container_add(GTK_CONTAINER(st->move_button), st->move_image);
+    gtk_widget_show(st->move_image);
+    gtk_widget_set_tooltip_text(st->move_button,
+        st->on_left ? "Move to the right side" : "Move to the left side");
+}
+
+static void on_move_clicked(GtkButton *btn, gpointer ud) {
+    (void)btn;
+    if (s_move_hook) s_move_hook(GTK_WIDGET(ud));
+}
+
+void panel_frame_set_move_hook(void (*hook)(GtkWidget *frame)) {
+    s_move_hook = hook;
+}
+
+/* Only frames docked in the side hosts get the button (Search Results
+ * lives in the bottom pane — not movable). */
+void panel_frame_set_movable(GtkWidget *frame, gboolean movable) {
+    PanelFrameState *st = pf_state(frame);
+    if (st && st->move_button)
+        gtk_widget_set_visible(st->move_button, movable);
+}
+
+void panel_frame_set_dock_side(GtkWidget *frame, gboolean left) {
+    PanelFrameState *st = pf_state(frame);
+    if (!st) return;
+    st->on_left = left;
+    pf_refresh_move_icon(st);
+}
+
+gboolean panel_frame_dock_side_left(GtkWidget *frame) {
+    PanelFrameState *st = pf_state(frame);
+    return st ? st->on_left : FALSE;
+}
+
+const char *panel_frame_get_name(GtkWidget *frame) {
+    PanelFrameState *st = pf_state(frame);
+    return st ? st->name : NULL;
 }
 
 /* Mirror the content widget's visibility onto the wrapper so existing
@@ -472,7 +543,27 @@ GtkWidget *panel_frame_new(const char *name,
         "nextpad-panel-frame-title");
     pf_apply_css(st->title_label);
 
-    /* Pop-out button — 16×16 with a 4px margin on every side (macOS spec). */
+    /* GAP-123 — move-dock button, left of Detach (macOS 2ccf0d9). Same
+     * box/icon size as the close ✕ (17×17 / 14px, per design). Hidden
+     * until main.c marks the frame movable (side-host panels only). */
+    st->move_button = gtk_button_new();
+    gtk_button_set_has_frame(GTK_BUTTON(st->move_button), FALSE);
+    gtk_widget_set_focus_on_click(st->move_button, FALSE);
+    gtk_widget_set_size_request(st->move_button, PF_POP_BTN_PX, PF_POP_BTN_PX);
+    gtk_widget_set_valign(st->move_button, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(st->move_button,    PF_POP_BTN_MARGIN);
+    gtk_widget_set_margin_bottom(st->move_button, PF_POP_BTN_MARGIN);
+    gtk_widget_set_margin_start(st->move_button,  PF_POP_BTN_MARGIN);
+    gtk_style_context_add_class(
+        gtk_widget_get_style_context(st->move_button),
+        "nextpad-panel-frame-button");
+    pf_apply_css(st->move_button);
+    g_signal_connect(st->move_button, "clicked",
+                     G_CALLBACK(on_move_clicked), frame);
+    pf_refresh_move_icon(st);
+    gtk_widget_set_visible(st->move_button, FALSE);
+
+    /* Pop-out (detach) button — same 17×17 box as the close ✕. */
     st->pop_button = gtk_button_new();
     gtk_button_set_has_frame(GTK_BUTTON(st->pop_button), FALSE);
     gtk_widget_set_focus_on_click(st->pop_button, FALSE);
@@ -519,6 +610,7 @@ GtkWidget *panel_frame_new(const char *name,
                      G_CALLBACK(on_close_clicked), frame);
 
     npp_box_pack(GTK_BOX(st->title_bar), st->title_label, TRUE, 0);
+    npp_box_pack(GTK_BOX(st->title_bar), st->move_button, FALSE, 0);
     npp_box_pack(GTK_BOX(st->title_bar), st->pop_button, FALSE, 0);
     npp_box_pack(GTK_BOX(st->title_bar), st->close_button, FALSE, 0);
 

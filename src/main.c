@@ -7806,10 +7806,23 @@ static gboolean on_files_dropped(GtkDropTarget *dt, const GValue *value,
 /* GAP-49 — plugin panels dock into the same right-side host. Stored
  * here so plugin.c can attach frames after build time. */
 static GtkWidget *g_side_panel_host;
+/* GAP-123 (macOS 2ccf0d9) — second host on the LEFT edge; panels move
+ * between the two via the title-bar move-dock button. */
+static GtkWidget *g_side_panel_host_left;
+
+/* GAP-123 — a frame's host is wherever it currently sits (frames move
+ * between the two hosts), never the connect-time user_data. */
+static GtkWidget *frame_current_host(GtkWidget *frame) {
+    if (g_side_panel_host_left &&
+        gtk_widget_is_ancestor(frame, g_side_panel_host_left))
+        return g_side_panel_host_left;
+    return g_side_panel_host;
+}
 
 static void on_panel_frame_show(GtkWidget *frame, gpointer user_data);
 static void on_panel_frame_hide(GtkWidget *frame, gpointer user_data);
 static void side_dock_register_frame(GtkWidget *frame);   /* GAP-99 */
+static void panel_apply_dock_side(GtkWidget *frame);      /* GAP-123 */
 
 GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
                                     GtkWidget *content)
@@ -7828,6 +7841,7 @@ GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
     g_signal_connect(frame, "hide",
                      G_CALLBACK(on_panel_frame_hide), g_side_panel_host);
     side_dock_register_frame(frame);   /* GAP-99 */
+    panel_apply_dock_side(frame);      /* GAP-123 — movable + saved side */
     return frame;
 }
 
@@ -7859,7 +7873,13 @@ static void on_hpaned_release(GtkGestureClick *g, int n_press,
  * restore runs during build_main_window, before the window maps): the
  * width target can't be computed yet, so apply it once the paned is
  * laid out. 50 ms poll, ~5 s give-up. */
-typedef struct { GtkWidget *paned; int width; int tries; } PendingPanedPos;
+typedef struct {
+    GtkWidget *paned;
+    int        width;
+    int        tries;
+    int        settle;  /* GAP-123 — re-assert rounds after first apply */
+    gboolean   left;    /* GAP-123 — panel pane is the paned's START child */
+} PendingPanedPos;
 
 static gboolean apply_pending_paned_pos(gpointer data) {
     PendingPanedPos *pp = data;
@@ -7871,10 +7891,19 @@ static gboolean apply_pending_paned_pos(gpointer data) {
         g_free(pp);
         return G_SOURCE_REMOVE;   /* never mapped — give up */
     }
-    int target = a.width - pp->width >= 200 ? a.width - pp->width : a.width / 2;
+    int target = a.width - pp->width >= 200
+        ? (pp->left ? pp->width : a.width - pp->width)
+        : a.width / 2;
     s_paned_programmatic = TRUE;
     gtk_paned_set_position(GTK_PANED(pp->paned), target);
     s_paned_programmatic = FALSE;
+    /* GAP-123 — with two side paneds nested ([left | [editor | right]])
+     * the inner paned's allocation changes when the outer one takes its
+     * position, invalidating a target computed from the early
+     * allocation. Re-assert from the LIVE allocation for a few more
+     * ticks so both panes converge on their saved widths regardless of
+     * which timer fires first. */
+    if (++pp->settle < 4) return G_SOURCE_CONTINUE;
     g_object_set_data(G_OBJECT(pp->paned), "npp-pending-pos", NULL);
     g_free(pp);
     return G_SOURCE_REMOVE;
@@ -7922,11 +7951,25 @@ static gboolean side_host_any_visible(GtkWidget *host) {
 #define MAX_DOCK_FRAMES 64
 static GtkWidget *s_dock_frames[MAX_DOCK_FRAMES]; /* registration = stack order */
 static int        s_dock_frame_n;
-static GtkWidget *s_chain_root;                   /* paned chain when N ≥ 2 */
-static GtkWidget *s_last_set[MAX_DOCK_FRAMES];    /* set at last rebuild */
-static int        s_last_set_n;
-static guint      s_redist_source;
-static int        s_redist_tries;
+
+/* GAP-123 — the chain state is PER HOST now that panels can dock on
+ * either side; it hangs off the host box as object data. */
+typedef struct {
+    GtkWidget *chain_root;                 /* paned chain when N ≥ 2 */
+    GtkWidget *last_set[MAX_DOCK_FRAMES];  /* set at last rebuild */
+    int        last_set_n;
+    guint      redist_source;
+    int        redist_tries;
+} DockChain;
+
+static DockChain *host_chain(GtkWidget *host) {
+    DockChain *dc = g_object_get_data(G_OBJECT(host), "npp-dock-chain");
+    if (!dc) {
+        dc = g_new0(DockChain, 1);
+        g_object_set_data_full(G_OBJECT(host), "npp-dock-chain", dc, g_free);
+    }
+    return dc;
+}
 
 static void side_dock_register_frame(GtkWidget *frame) {
     if (!frame || s_dock_frame_n >= MAX_DOCK_FRAMES) return;
@@ -7941,56 +7984,59 @@ static void side_dock_register_frame(GtkWidget *frame) {
  * wait for the inner paneds' own allocations. Retries until the chain
  * root is allocated (startup restore runs before the window maps). */
 static gboolean side_dock_redistribute_cb(gpointer d) {
-    (void)d;
-    if (!s_chain_root) { s_redist_source = 0; return G_SOURCE_REMOVE; }
+    DockChain *dc = d;
+    if (!dc->chain_root) { dc->redist_source = 0; return G_SOURCE_REMOVE; }
     GtkAllocation a;
-    gtk_widget_get_allocation(s_chain_root, &a);
+    gtk_widget_get_allocation(dc->chain_root, &a);
     if (a.height <= 1) {
-        if (++s_redist_tries < 600) return G_SOURCE_CONTINUE;
-        s_redist_source = 0;
+        if (++dc->redist_tries < 600) return G_SOURCE_CONTINUE;
+        dc->redist_source = 0;
         return G_SOURCE_REMOVE;   /* never mapped — give up */
     }
     int m = 1;
-    for (GtkWidget *p = s_chain_root; GTK_IS_PANED(p);
+    for (GtkWidget *p = dc->chain_root; GTK_IS_PANED(p);
          p = gtk_paned_get_end_child(GTK_PANED(p)))
         m++;
     int slice = a.height / m;
-    for (GtkWidget *p = s_chain_root; GTK_IS_PANED(p);
+    for (GtkWidget *p = dc->chain_root; GTK_IS_PANED(p);
          p = gtk_paned_get_end_child(GTK_PANED(p)))
         gtk_paned_set_position(GTK_PANED(p), slice);
-    s_redist_source = 0;
+    dc->redist_source = 0;
     return G_SOURCE_REMOVE;
 }
 
-static void side_dock_schedule_redistribute(void) {
-    if (s_redist_source) g_source_remove(s_redist_source);
-    s_redist_tries  = 0;
-    s_redist_source = g_timeout_add(16, side_dock_redistribute_cb, NULL);
+static void side_dock_schedule_redistribute(DockChain *dc) {
+    if (dc->redist_source) g_source_remove(dc->redist_source);
+    dc->redist_tries  = 0;
+    dc->redist_source = g_timeout_add(16, side_dock_redistribute_cb, dc);
 }
 
 static void side_dock_chain_rebuild(GtkWidget *host) {
+    DockChain *dc = host_chain(host);
     GtkWidget *vis[MAX_DOCK_FRAMES];
     int n = 0;
     for (int i = 0; i < s_dock_frame_n; i++) {
         GtkWidget *f = s_dock_frames[i];
         GtkWidget *p = f ? gtk_widget_get_parent(f) : NULL;
         if (!p || !gtk_widget_get_visible(f)) continue;
-        /* Docked = in the host box or inside the current chain; a
-         * floating frame's parent is its float window — excluded. */
-        if (p != host && !(s_chain_root && gtk_widget_is_ancestor(f, s_chain_root)))
+        /* Docked = in THIS host box or inside THIS host's chain; a
+         * floating frame's parent is its float window, and a frame
+         * docked on the other side fails both tests — excluded. */
+        if (p != host &&
+            !(dc->chain_root && gtk_widget_is_ancestor(f, dc->chain_root)))
             continue;
         vis[n++] = f;
     }
 
     /* Unchanged set → keep the user's divider drags (the macOS rule). */
-    if (n == s_last_set_n) {
+    if (n == dc->last_set_n) {
         gboolean same = TRUE;
         for (int i = 0; i < n; i++)
-            if (vis[i] != s_last_set[i]) { same = FALSE; break; }
+            if (vis[i] != dc->last_set[i]) { same = FALSE; break; }
         if (same) return;
     }
-    memcpy(s_last_set, vis, sizeof(vis[0]) * (size_t)n);
-    s_last_set_n = n;
+    memcpy(dc->last_set, vis, sizeof(vis[0]) * (size_t)n);
+    dc->last_set_n = n;
 
     /* GAP-102 — the rebuild unparents frames; if the window's focused
      * widget sits inside the dock, GTK clears the focus chain across
@@ -8013,17 +8059,17 @@ static void side_dock_chain_rebuild(GtkWidget *host) {
      * that just went hidden is not in vis[] but still sits in the old
      * chain; dropping the root without rescuing it would finalize the
      * frame (and the panel content) with the paneds. */
-    if (s_chain_root) {
+    if (dc->chain_root) {
         for (int i = 0; i < s_dock_frame_n; i++) {
             GtkWidget *f = s_dock_frames[i];
-            if (!f || !gtk_widget_is_ancestor(f, s_chain_root)) continue;
+            if (!f || !gtk_widget_is_ancestor(f, dc->chain_root)) continue;
             g_object_ref(f);
             gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(f)), f);
             npp_box_pack(GTK_BOX(host), f, TRUE, 0);
             g_object_unref(f);
         }
-        gtk_box_remove(GTK_BOX(host), s_chain_root);
-        s_chain_root = NULL;
+        gtk_box_remove(GTK_BOX(host), dc->chain_root);
+        dc->chain_root = NULL;
     }
     if (n < 2) return;   /* 0/1 panels: no dividers; the box handles it */
 
@@ -8038,7 +8084,7 @@ static void side_dock_chain_rebuild(GtkWidget *host) {
         gtk_paned_set_resize_start_child(GTK_PANED(pd), FALSE);
         gtk_paned_set_resize_end_child(GTK_PANED(pd), TRUE);
         if (tail) gtk_paned_set_end_child(GTK_PANED(tail), pd);
-        else      s_chain_root = pd;
+        else      dc->chain_root = pd;
         g_object_ref(vis[i]);
         gtk_box_remove(GTK_BOX(host), vis[i]);
         gtk_paned_set_start_child(GTK_PANED(pd), vis[i]);
@@ -8049,8 +8095,8 @@ static void side_dock_chain_rebuild(GtkWidget *host) {
     gtk_box_remove(GTK_BOX(host), vis[n - 1]);
     gtk_paned_set_end_child(GTK_PANED(tail), vis[n - 1]);
     g_object_unref(vis[n - 1]);
-    npp_box_pack(GTK_BOX(host), s_chain_root, TRUE, 0);
-    side_dock_schedule_redistribute();
+    npp_box_pack(GTK_BOX(host), dc->chain_root, TRUE, 0);
+    side_dock_schedule_redistribute(dc);
 }
 
 static void side_host_recount(GtkWidget *host, GtkWidget *opened_frame) {
@@ -8073,21 +8119,30 @@ static void side_host_recount(GtkWidget *host, GtkWidget *opened_frame) {
              * paned.width - position, same formula the save side uses, so
              * the handle bias cancels out. */
             int w = panelstate_saved_width(frame);
+            /* GAP-123 — the left host is the paned's START child, so
+             * its width IS the divider position (the right host's is
+             * paned.width − position). */
+            gboolean left =
+                g_object_get_data(G_OBJECT(host), "npp-dock-left") != NULL;
             if (a.width <= 1) {
                 /* Paned not laid out yet (startup restore) — defer. */
                 PendingPanedPos *pp = g_object_get_data(G_OBJECT(paned),
                                                         "npp-pending-pos");
                 if (pp) {
                     pp->width = w;   /* newer open wins */
+                    pp->left  = left;
                 } else {
                     pp = g_new0(PendingPanedPos, 1);
                     pp->paned = paned;
                     pp->width = w;
+                    pp->left  = left;
                     g_object_set_data(G_OBJECT(paned), "npp-pending-pos", pp);
                     g_timeout_add(50, apply_pending_paned_pos, pp);
                 }
             } else {
-                int target = a.width - w >= 200 ? a.width - w : a.width / 2;
+                int target = a.width - w >= 200
+                    ? (left ? w : a.width - w)
+                    : a.width / 2;
                 s_paned_programmatic = TRUE;
                 gtk_paned_set_position(GTK_PANED(paned), target);
                 s_paned_programmatic = FALSE;
@@ -8101,19 +8156,76 @@ static void side_host_recount(GtkWidget *host, GtkWidget *opened_frame) {
 }
 
 static void on_panel_frame_show(GtkWidget *frame, gpointer user_data) {
-    side_host_recount(GTK_WIDGET(user_data), frame);
+    (void)user_data;   /* GAP-123 — resolve the CURRENT host, not the
+                        * connect-time one; frames move between hosts. */
+    side_host_recount(frame_current_host(frame), frame);
 }
 
 static void on_panel_frame_hide(GtkWidget *frame, gpointer user_data) {
-    (void)frame;
-    side_host_recount(GTK_WIDGET(user_data), NULL);
+    (void)user_data;
+    /* A hidden frame is still parented in its host (box or chain), so
+     * the ancestor walk resolves the right side. */
+    side_host_recount(frame_current_host(frame), NULL);
 }
 
 /* GAP-98 — floating.c moves frames in/out of the dock without any
- * show/hide emission; it calls this hook after each transition. */
+ * show/hide emission; it calls this hook after each transition.
+ * GAP-123: recount BOTH hosts — a pop-out from the left host must
+ * collapse the left pane even though dock-back targets the right. */
 static void side_host_dock_changed(GtkWidget *frame_or_null) {
     if (g_side_panel_host)
         side_host_recount(g_side_panel_host, frame_or_null);
+    if (g_side_panel_host_left)
+        side_host_recount(g_side_panel_host_left, NULL);
+}
+
+/* GAP-123 — the panel_frame move-dock button hook: reparent the frame
+ * into the other host, persist the side, refresh the icon. Popped
+ * frames never show the button (chrome collapses), so the frame is
+ * always docked here. */
+static void panel_move_dock_side(GtkWidget *frame) {
+    if (!g_side_panel_host_left || !frame) return;
+    GtkWidget *src = frame_current_host(frame);
+    gboolean to_left = (src != g_side_panel_host_left);
+    GtkWidget *dst = to_left ? g_side_panel_host_left : g_side_panel_host;
+    if (src == dst) return;
+
+    /* Same focus rescue as the chain rebuild — the reparent unparents
+     * the frame with the focus chain live. */
+    GtkRoot *root = gtk_widget_get_root(frame);
+    if (GTK_IS_WINDOW(root)) {
+        GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(root));
+        if (focus && gtk_widget_is_ancestor(focus, frame)) {
+            GtkWidget *sci = current_sci();
+            if (sci) gtk_widget_grab_focus(sci);
+            else     gtk_window_set_focus(GTK_WINDOW(root), NULL);
+        }
+    }
+
+    g_object_ref(frame);
+    gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(frame)), frame);
+    npp_box_pack(GTK_BOX(dst), frame, TRUE, 0);
+    g_object_unref(frame);
+
+    panel_frame_set_dock_side(frame, to_left);
+    const char *nm = panel_frame_get_name(frame);
+    if (nm) panelstate_note_side(nm, to_left);
+
+    side_host_recount(src, NULL);
+    side_host_recount(dst, gtk_widget_get_visible(frame) ? frame : NULL);
+}
+
+/* GAP-123 — apply a persisted left-side choice to a (hidden, box-packed)
+ * frame at build/attach time, and enable its move button. */
+static void panel_apply_dock_side(GtkWidget *frame) {
+    panel_frame_set_movable(frame, TRUE);
+    const char *nm = panel_frame_get_name(frame);
+    if (!nm || !panelstate_side_left(nm) || !g_side_panel_host_left) return;
+    g_object_ref(frame);
+    gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(frame)), frame);
+    npp_box_pack(GTK_BOX(g_side_panel_host_left), frame, TRUE, 0);
+    g_object_unref(frame);
+    panel_frame_set_dock_side(frame, TRUE);
 }
 
 /* GAP-82 — a user drag of the hpaned divider resized the side pane:
@@ -8127,8 +8239,14 @@ static void on_hpaned_position(GObject *paned, GParamSpec *pspec,
     if (!gtk_widget_get_visible(GTK_WIDGET(host))) return;
     GtkAllocation a;
     gtk_widget_get_allocation(GTK_WIDGET(paned), &a);
-    int w = a.width - gtk_paned_get_position(GTK_PANED(paned));
-    panelstate_note_width(w);
+    /* GAP-123 — the left host is the paned's START child: its width IS
+     * the position; the right host's is width − position. Widths save
+     * only to panels docked in the dragged host. */
+    gboolean left =
+        g_object_get_data(G_OBJECT(host), "npp-dock-left") != NULL;
+    int pos = gtk_paned_get_position(GTK_PANED(paned));
+    panelstate_note_width_host(left ? pos : a.width - pos,
+                               GTK_WIDGET(host));
 }
 
 /* ------------------------------------------------------------------ */
@@ -8357,6 +8475,33 @@ static void build_main_window(GtkApplication *app)
     g_signal_connect(hpaned1, "notify::position",
                      G_CALLBACK(on_hpaned_position), side_panel_host);
 
+    /* GAP-123 (macOS 2ccf0d9) — second host on the LEFT edge. The macOS
+     * 3-subview split [left | editor | right] becomes two nested paneds:
+     * hpaned0 = [left host | hpaned1] where hpaned1 = [editor | right].
+     * Both edge panes collapse when empty; panels move between hosts via
+     * the title-bar move-dock button. */
+    GtkWidget *side_panel_host_left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    g_side_panel_host_left = side_panel_host_left;
+    g_object_set_data(G_OBJECT(side_panel_host_left), "npp-dock-left",
+                      GINT_TO_POINTER(1));
+    GtkWidget *hpaned0 = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_paned_pack1(GTK_PANED(hpaned0), side_panel_host_left, FALSE, TRUE);
+    gtk_paned_pack2(GTK_PANED(hpaned0), hpaned1,              TRUE,  FALSE);
+    g_object_set_data(G_OBJECT(side_panel_host_left), "npp-hpaned", hpaned0);
+    {
+        GtkGesture *g = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(g), GDK_BUTTON_PRIMARY);
+        gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(g),
+                                                   GTK_PHASE_CAPTURE);
+        g_signal_connect(g, "pressed",  G_CALLBACK(on_hpaned_press),   hpaned0);
+        g_signal_connect(g, "released", G_CALLBACK(on_hpaned_release), hpaned0);
+        gtk_widget_add_controller(hpaned0, GTK_EVENT_CONTROLLER(g));
+    }
+    g_signal_connect(hpaned0, "notify::position",
+                     G_CALLBACK(on_hpaned_position), side_panel_host_left);
+    /* Starts empty — collapse until a panel moves in. */
+    gtk_widget_hide(side_panel_host_left);
+
     /* Q14 — wire each frame's show/hide to the host visibility counter. */
     GtkWidget *side_frames[] = {
         doclist_frame, workspace_frame, funclist_frame,
@@ -8425,7 +8570,7 @@ static void build_main_window(GtkApplication *app)
     }
 
     if (toolbar)   npp_box_pack(GTK_BOX(vbox), toolbar, FALSE, 0);
-    npp_box_pack(GTK_BOX(vbox), hpaned1, TRUE, 0);
+    npp_box_pack(GTK_BOX(vbox), hpaned0, TRUE, 0);   /* GAP-123 */
     npp_box_pack(GTK_BOX(vbox), g_isearch_revealer, FALSE, 0);
     if (statusbar) npp_box_pack(GTK_BOX(vbox), statusbar, FALSE, 0);
     gtk_container_add(GTK_CONTAINER(g_window), vbox);
@@ -8515,6 +8660,14 @@ static void build_main_window(GtkApplication *app)
     panelstate_register("gitpanel",    gitpanel_frame,    FALSE);
     floating_set_layout_hook(panelstate_layout_changed);
     floating_set_dock_hook(side_host_dock_changed);   /* GAP-98 */
+    /* GAP-123 — enable the move-dock button on every side-host frame and
+     * replay each panel's persisted side BEFORE the open-state restore,
+     * so a left-docked panel opens straight into the left host. Frames
+     * are hidden box children at this point — the move is a plain
+     * reparent. */
+    panel_frame_set_move_hook(panel_move_dock_side);
+    for (size_t i = 0; i < G_N_ELEMENTS(side_frames); i++)
+        if (side_frames[i]) panel_apply_dock_side(side_frames[i]);
     /* Replay the saved open/popped panel layout (gated on the
      * "Remember panel visibility" pref inside). Panels are built,
      * hidden and registered by now; this also un-suspends state

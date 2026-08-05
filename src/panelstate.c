@@ -124,13 +124,67 @@ static int docked_visible(GtkWidget **out, int cap)
 
 void panelstate_note_width(int width)
 {
+    panelstate_note_width_host(width, NULL);
+}
+
+/* GAP-123 — with two side hosts, a divider drag must save the width only
+ * to the panels docked in THAT host (macOS: "per-panel width dict saves
+ * whichever pane was dragged"). host == NULL means no filtering. */
+void panelstate_note_width_host(int width, GtkWidget *host)
+{
     if (s_suspended || s_frozen || width < 150) return;
     GtkWidget *vis[MAX_PANELS];
     int n = docked_visible(vis, MAX_PANELS);
+    if (host) {
+        int m = 0;
+        for (int i = 0; i < n; i++)
+            if (gtk_widget_is_ancestor(vis[i], host)) vis[m++] = vis[i];
+        n = m;
+    }
     if (n > 0) widths_update(vis, n, width);
     /* No prefs_save here: notify::position fires continuously during a
      * drag. The string is flushed by the next open/close/pop event or
      * the quit freeze — both call prefs_save. */
+}
+
+/* ── GAP-123 — per-panel dock side ("name=left …"; absent = right, so
+ * the default layout is unchanged — the macOS PanelDockSides rule). ── */
+
+gboolean panelstate_side_left(const char *name)
+{
+    if (!name || !*name) return FALSE;
+    gchar **tok = g_strsplit(g_prefs.panel_dock_sides, " ", -1);
+    gboolean left = FALSE;
+    gsize len = strlen(name);
+    for (int i = 0; tok[i]; i++) {
+        if (strncmp(tok[i], name, len) == 0 && tok[i][len] == '=' &&
+            strcmp(tok[i] + len + 1, "left") == 0) { left = TRUE; break; }
+    }
+    g_strfreev(tok);
+    return left;
+}
+
+void panelstate_note_side(const char *name, gboolean left)
+{
+    if (!name || !*name || s_frozen) return;
+    gchar **tok = g_strsplit(g_prefs.panel_dock_sides, " ", -1);
+    GString *out = g_string_new(NULL);
+    gsize len = strlen(name);
+    for (int i = 0; tok[i]; i++) {
+        if (!*tok[i]) continue;
+        if (strncmp(tok[i], name, len) == 0 && tok[i][len] == '=') continue;
+        if (out->len) g_string_append_c(out, ' ');
+        g_string_append(out, tok[i]);
+    }
+    g_strfreev(tok);
+    if (left) {   /* right is the absent-default — never stored */
+        if (out->len) g_string_append_c(out, ' ');
+        g_string_append_printf(out, "%s=left", name);
+    }
+    g_strlcpy(g_prefs.panel_dock_sides, out->str,
+              sizeof(g_prefs.panel_dock_sides));
+    g_string_free(out, TRUE);
+    prefs_save();
 }
 
 /* ── FloatingPanels ("name=WxH:pinned|free …") ──────────────────────── */
@@ -299,25 +353,34 @@ void panelstate_freeze(void)
 {
     if (s_frozen) return;
     /* Backstop width capture: the pane may have been resized without a
-     * drag ever being noted (e.g. programmatic layout drift). */
+     * drag ever being noted (e.g. programmatic layout drift).
+     * GAP-123 — resolved PER FRAME now that two hosts exist: walk up to
+     * the ancestor carrying the "npp-hpaned" key (the host box; works
+     * from inside the GAP-99 paned chain too, which the old
+     * parent-of-parent probe missed), read that host's own paned, and
+     * apply the side-correct width formula — the left host is the
+     * paned's START child so its width IS the position; the right
+     * host's is paned.width − position. One width per frame: panels on
+     * different sides genuinely have different widths. */
     GtkWidget *vis[MAX_PANELS];
     int n = docked_visible(vis, MAX_PANELS);
-    if (n > 0) {
-        GtkWidget *host  = gtk_widget_get_parent(vis[0]);
-        GtkWidget *paned = host ? gtk_widget_get_parent(host) : NULL;
-        if (host && gtk_widget_get_visible(host) && GTK_IS_PANED(paned)) {
-            /* Same width convention as the save/restore pair
-             * (paned.width - position) — mixing in the host ALLOCATION
-             * here would differ by the handle width and shrink the pane
-             * a few px on every quit/relaunch cycle. */
-            GtkAllocation a;
-            gtk_widget_get_allocation(paned, &a);
-            int pos = gtk_paned_get_position(GTK_PANED(paned));
-            int w   = a.width - pos;
-            /* pos <= 1 means the divider was never positioned (unmapped
-             * layout) — a "width" of the whole window is not user intent. */
-            if (pos > 1 && w >= 150) widths_update(vis, n, w);
-        }
+    for (int i = 0; i < n; i++) {
+        GtkWidget *host = gtk_widget_get_parent(vis[i]);
+        while (host && !g_object_get_data(G_OBJECT(host), "npp-hpaned"))
+            host = gtk_widget_get_parent(host);
+        if (!host || !gtk_widget_get_visible(host)) continue;
+        GtkWidget *paned = g_object_get_data(G_OBJECT(host), "npp-hpaned");
+        if (!GTK_IS_PANED(paned)) continue;
+        gboolean left =
+            g_object_get_data(G_OBJECT(host), "npp-dock-left") != NULL;
+        GtkAllocation a;
+        gtk_widget_get_allocation(paned, &a);
+        int pos = gtk_paned_get_position(GTK_PANED(paned));
+        int w   = left ? pos : a.width - pos;
+        /* A degenerate position (never laid out / collapsed) is not
+         * user intent: require a real pane on BOTH sides of the
+         * divider. */
+        if (w >= 150 && a.width - w >= 150) widths_update(&vis[i], 1, w);
     }
     floating_capture_geometry();   /* live float windows → entry w/h */
     floats_capture_to_prefs();

@@ -524,6 +524,10 @@ static void apply_text(const char *group, const char *text) {
         g_strlcpy(g_prefs.floating_panels, t,
                   sizeof(g_prefs.floating_panels));
     }
+    else if (!strcmp(group, "PanelDockSides")) {           /* GAP-123 */
+        g_strlcpy(g_prefs.panel_dock_sides, t,
+                  sizeof(g_prefs.panel_dock_sides));
+    }
     else if (!strcmp(group, "NewDocDefaultLanguage")) {
         strncpy(g_prefs.default_language, t, sizeof(g_prefs.default_language) - 1);
         g_prefs.default_language[sizeof(g_prefs.default_language) - 1] = '\0';
@@ -848,6 +852,9 @@ g_prefs.tab_max_label_width,
     g_string_append_printf(b,
         "        <GUIConfig name=\"FloatingPanels\">%s</GUIConfig>\n",
         g_prefs.floating_panels);
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"PanelDockSides\">%s</GUIConfig>\n",
+        g_prefs.panel_dock_sides);
 
     /* ScintillaPrimaryView */
     char edgeCol[32], edgeModeAttr[32];
