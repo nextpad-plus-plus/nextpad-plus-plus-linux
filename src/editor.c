@@ -6,6 +6,13 @@
 #include "prefs.h"
 #include <unistd.h>  /* access() for read-only detection */
 #include <sys/stat.h>
+#include <stdbool.h> /* GAP-119 — the CJK-wrap gate is a C++ `extern "C" bool` */
+
+/* GAP-119 (macOS c020d4b #275) — CJK-friendly word wrap hook exported by
+ * the vendored Scintilla (scintilla-patches/0012). App-global; returns
+ * the previous value. Seeded at editor_init, flipped by
+ * editor_apply_prefs. */
+extern bool NextpadSetCJKFriendlyWrap(bool enabled);
 #include "statusbar.h"
 #include "lexer.h"
 #include "langsmgr.h"
@@ -2384,6 +2391,10 @@ GtkWidget *editor_init(GtkWidget *window)
 {
     stylestore_init(NULL);
     s_window   = window;
+    /* GAP-119 — seed the vendored-Scintilla CJK-wrap gate from the pref
+     * BEFORE any view lays out (editor_apply_prefs is not called at
+     * startup — the GAP-114 lesson). */
+    NextpadSetCJKFriendlyWrap(g_prefs.cjk_wrap);
     /* GAP-120 — deferred file-changed prompts fire when the window
      * becomes active again (the tab-visibility half re-checks on
      * switch-page). */
@@ -3658,6 +3669,13 @@ void editor_apply_prefs(void)
             gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nbs[k]),
                                        !g_prefs.hide_tab_bar);
 
+    /* GAP-119 — flip the global CJK-wrap gate; when the effective value
+     * changed, each wrapped view below is forced through a NONE→WORD
+     * re-layout (SCI_SETWRAPMODE early-outs on an unchanged mode, so a
+     * plain re-set would not re-wrap). */
+    const gboolean cjk_flip =
+        NextpadSetCJKFriendlyWrap(g_prefs.cjk_wrap) != (bool)g_prefs.cjk_wrap;
+
     /* ALL docs — primary + splits (tabs moved to a split view must
      * receive pref changes too). */
     GPtrArray *docs = editor_all_docs();
@@ -3680,6 +3698,8 @@ void editor_apply_prefs(void)
         sci_msg(sci, SCI_SETZOOM,             (uptr_t)g_prefs.zoom_level, 0);
 
         /* Wrap + virtual space + drag/drop */
+        if (cjk_flip)   /* GAP-119 — force re-layout under the new gate */
+            sci_msg(sci, SCI_SETWRAPMODE, 0, 0);
         sci_msg(sci, SCI_SETWRAPMODE,         g_prefs.word_wrap ? 1 : 0, 0);
         sci_msg(sci, SCI_SETVIRTUALSPACEOPTIONS,
                 g_prefs.virtual_space ? (SCVS_RECTANGULARSELECTION | SCVS_USERACCESSIBLE) : 0, 0);

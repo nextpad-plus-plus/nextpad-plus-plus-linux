@@ -58,6 +58,10 @@ typedef struct {
     int      caret_blink_rate;        /* ms, 0 = no blink, default 600 */
     gboolean scroll_beyond_last_line; /* default FALSE */
     gboolean word_wrap;               /* default FALSE */
+    gboolean cjk_wrap;                /* GAP-119 — CJK-friendly word wrap
+                                       * (macOS c020d4b #275), default TRUE;
+                                       * gates the scintilla-patches/0012
+                                       * break-opportunity logic. */
     /* Auto-Insert matched pairs (macOS efbb0a7 / Windows
      * AutoCompletion::insertMatchedChars). */
     gboolean ai_parens;               /* ( )  default FALSE */
