@@ -760,7 +760,12 @@ int findreplace_find_all_current(void) {
     if (!prep_search(&needle, &needle_raw, &needle_len, &flags, &mode)) return 0;
 
     NppDoc *doc = editor_current_doc();
-    const char *path = (doc && doc->filepath) ? doc->filepath : "(untitled)";
+    /* GAP-117: record an unsaved tab under its display name ("new 1") so
+     * result navigation can resolve it back to the tab by name. */
+    char nbuf[128];
+    const char *path = (doc && doc->filepath) ? doc->filepath
+                     : doc ? editor_doc_display_name(doc, nbuf, sizeof nbuf)
+                           : "(untitled)";
 
     if (mode == (int)MODE_FUZZY) {
         gboolean mc = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_case));

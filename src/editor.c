@@ -3756,12 +3756,42 @@ void editor_goto_line_dialog(void)
 
 void editor_open_and_goto(const char *path, int line)
 {
-    editor_open_path(path);
-    NppDoc *doc = editor_current_doc();
-    if (doc && line > 0) {
-        sci_msg(doc->sci, SCI_GOTOLINE,    (uptr_t)(line - 1), 0);
-        sci_msg(doc->sci, SCI_SCROLLCARET, 0, 0);
-        gtk_widget_grab_focus(doc->sci);
+    if (!path || !*path) return;
+
+    /* GAP-117 (macOS 3c6854a): resolve the result's origin first. Disk
+     * results always carry absolute paths; results recorded from unsaved
+     * tabs carry the tab's DISPLAY NAME ("new 1"). Funneling a display
+     * name into editor_open_path created a bogus buffer named "new 1" and
+     * then jumped the line in it — the wrong document. Absolute paths
+     * open from disk with the line jump gated on the open having
+     * succeeded; anything else activates the matching untitled tab
+     * (Windows NPP behaviour — untitled names are unique per window),
+     * and a result whose tab has closed since the search beeps. */
+    NppDoc *target = NULL;
+    if (g_path_is_absolute(path)) {
+        editor_open_path(path);
+        NppDoc *doc = editor_current_doc();
+        if (doc && doc->filepath && strcmp(doc->filepath, path) == 0)
+            target = doc;
+    } else {
+        GPtrArray *docs = editor_all_docs();
+        for (guint i = 0; i < docs->len; i++) {
+            NppDoc *d = g_ptr_array_index(docs, i);
+            char buf[128];
+            if (d && !d->filepath &&
+                strcmp(editor_doc_display_name(d, buf, sizeof buf), path) == 0) {
+                editor_activate_doc(d);
+                target = d;
+                break;
+            }
+        }
+        g_ptr_array_free(docs, TRUE);
+        if (!target) { npp_beep(); return; }
+    }
+    if (target && line > 0) {
+        sci_msg(target->sci, SCI_GOTOLINE,    (uptr_t)(line - 1), 0);
+        sci_msg(target->sci, SCI_SCROLLCARET, 0, 0);
+        gtk_widget_grab_focus(target->sci);
     }
 }
 
