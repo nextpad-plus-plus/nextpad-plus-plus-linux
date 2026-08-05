@@ -36,6 +36,8 @@
 #include "updatecheck.h"
 #include "updatecard.h"
 #include "recent.h"
+#include "langsmgr.h"
+#include "macrobatch.h"
 #include "session.h"
 #include "backup.h"
 #include "doclist.h"
@@ -3874,32 +3876,74 @@ static void action_comment_line_remove(GSimpleAction *a, GVariant *p, gpointer u
 /* Block comment add/remove — use language-specific delimiters from langs.xml
  * via lexer.h; fall back to /* */
 /**/
+/* Per-language stream-comment delimiters — macOS _blockCommentDelimiters
+ * (EditorView.mm:3404) parity, found by the c2c85ec re-scan: this
+ * command previously hardcoded C-style markers for EVERY language, so
+ * commenting HTML/Lua/etc. inserted wrong delimiters. langs.xml first
+ * (37 languages carry commentStart/commentEnd; the user-editable copy
+ * may define non-ASCII delimiters — everything below stays in byte
+ * space); then macOS's hardcoded fallback; no delimiters → the command
+ * is a no-op, exactly like macOS (including for Normal Text). */
+static gboolean block_comment_delims(GtkWidget *sci,
+                                     const char **open, const char **close)
+{
+    const char *lang = g_object_get_data(G_OBJECT(sci), "npp-lang");
+    if (!lang || !*lang) return FALSE;
+    const char *cs = langsmgr_comment_start(lang);
+    const char *ce = langsmgr_comment_end(lang);
+    if (cs && *cs && ce && *ce) { *open = cs; *close = ce; return TRUE; }
+    static const struct { const char *lang, *open, *close; } fb[] = {
+        { "c", "/*", "*/" },          { "cpp", "/*", "*/" },
+        { "objc", "/*", "*/" },       { "javascript", "/*", "*/" },
+        { "javascript.js", "/*", "*/" }, { "typescript", "/*", "*/" },
+        { "swift", "/*", "*/" },      { "css", "/*", "*/" },
+        { "sql", "/*", "*/" },        { "lua", "--[[", "]]" },
+        { "html", "<!--", "-->" },    { "xml", "<!--", "-->" },
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(fb); i++)
+        if (strcmp(lang, fb[i].lang) == 0) {
+            *open = fb[i].open; *close = fb[i].close;
+            return TRUE;
+        }
+    return FALSE;
+}
+
 static void block_comment_apply(int op_add) {
     GtkWidget *sci = current_sci(); if (!sci) return;
+    const char *open, *close;
+    if (!block_comment_delims(sci, &open, &close)) return;
     ScintillaObject *s = SCINTILLA(sci);
     sptr_t a = scintilla_send_message(s, SCI_GETSELECTIONSTART, 0, 0);
     sptr_t b = scintilla_send_message(s, SCI_GETSELECTIONEND,   0, 0);
     if (a == b) return;
-    const char *open  = "/* ";
-    const char *close = " */";
-    scintilla_send_message(s, SCI_BEGINUNDOACTION, 0, 0);
+    sptr_t olen = (sptr_t)strlen(open), clen = (sptr_t)strlen(close);
     if (op_add > 0) {
+        scintilla_send_message(s, SCI_BEGINUNDOACTION, 0, 0);
         scintilla_send_message(s, SCI_INSERTTEXT, b, (sptr_t)close);
         scintilla_send_message(s, SCI_INSERTTEXT, a, (sptr_t)open);
+        scintilla_send_message(s, SCI_ENDUNDOACTION, 0, 0);
     } else {
-        /* Remove if selection starts/ends with the markers. */
-        sptr_t olen = strlen(open), clen = strlen(close);
-        char head[16] = {0}, tail[16] = {0};
-        for (sptr_t i = 0; i < olen && a + i < b; i++)
+        /* Remove if the selection starts/ends with the markers. The
+         * length guard also fixes an overlap bug found in the re-scan:
+         * a selection shorter than open+close (e.g. exactly "/* *" "/")
+         * could match both probes and the second DELETERANGE then ate a
+         * byte of text BEYOND the original selection. */
+        if (b - a < olen + clen) return;
+        char head[32] = {0}, tail[32] = {0};
+        if (olen >= (sptr_t)sizeof(head) || clen >= (sptr_t)sizeof(tail))
+            return;
+        for (sptr_t i = 0; i < olen; i++)
             head[i] = (char)scintilla_send_message(s, SCI_GETCHARAT, a + i, 0);
-        for (sptr_t i = 0; i < clen && b - clen + i < b; i++)
+        for (sptr_t i = 0; i < clen; i++)
             tail[i] = (char)scintilla_send_message(s, SCI_GETCHARAT, b - clen + i, 0);
-        if (strncmp(head, open, olen) == 0 && strncmp(tail, close, clen) == 0) {
+        if (strncmp(head, open, (gsize)olen) == 0 &&
+            strncmp(tail, close, (gsize)clen) == 0) {
+            scintilla_send_message(s, SCI_BEGINUNDOACTION, 0, 0);
             scintilla_send_message(s, SCI_DELETERANGE, b - clen, clen);
             scintilla_send_message(s, SCI_DELETERANGE, a, olen);
+            scintilla_send_message(s, SCI_ENDUNDOACTION, 0, 0);
         }
     }
-    scintilla_send_message(s, SCI_ENDUNDOACTION, 0, 0);
 }
 static void action_block_comment_add(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u; block_comment_apply(+1);
