@@ -169,7 +169,16 @@ static void name_bind(GtkSignalListItemFactory *f, GObject *li_obj, gpointer ud)
      * docs — single source of truth shared with editor.c:set_tab_status_icon. */
     editor_apply_save_status_icon(icon, item->modified, 12);
 
-    gtk_label_set_text(GTK_LABEL(label), item->name);
+    /* GAP-125 (macOS bb59822): when the Ext column is hidden, the Name
+     * column shows the full filename (base + extension) so the extension
+     * information isn't simply lost. */
+    if (s_show_ext || !item->ext[0]) {
+        gtk_label_set_text(GTK_LABEL(label), item->name);
+    } else {
+        char *disp = g_strconcat(item->name, item->ext, NULL);
+        gtk_label_set_text(GTK_LABEL(label), disp);
+        g_free(disp);
+    }
     gtk_widget_set_tooltip_text(box, item->full_path);
 
     /* Store the item ptr on the cell so the right-click handler can
@@ -247,7 +256,17 @@ static int cmp_str(const char *a, const char *b)
 static int sort_by_name(gconstpointer a, gconstpointer b, gpointer ud)
 {
     (void)ud;
-    return cmp_str(((DocListItem *)a)->name, ((DocListItem *)b)->name);
+    DocListItem *ia = (DocListItem *)a, *ib = (DocListItem *)b;
+    /* GAP-125: sort follows the DISPLAYED string — base + extension when
+     * the Ext column is hidden (macOS compares the displayed form). */
+    if (s_show_ext)
+        return cmp_str(ia->name, ib->name);
+    char *da = g_strconcat(ia->name, ia->ext, NULL);
+    char *db = g_strconcat(ib->name, ib->ext, NULL);
+    int r = cmp_str(da, db);
+    g_free(da);
+    g_free(db);
+    return r;
 }
 
 static int sort_by_ext(gconstpointer a, gconstpointer b, gpointer ud)
@@ -307,6 +326,10 @@ static void apply_column_visibility(void)
     if (s_col_path) gtk_column_view_column_set_visible(s_col_path, s_show_path);
 }
 
+/* GAP-125 — the header-menu check items mirror the toggles' state. */
+static GSimpleAction *s_act_ext  = NULL;
+static GSimpleAction *s_act_path = NULL;
+
 static void cb_toggle_ext(GtkButton *b, gpointer ud)
 {
     (void)b; (void)ud;
@@ -314,6 +337,16 @@ static void cb_toggle_ext(GtkButton *b, gpointer ud)
     g_prefs.doclist_show_ext = s_show_ext;    /* persisted (macOS parity) */
     prefs_save();
     apply_column_visibility();
+    if (s_act_ext)
+        g_simple_action_set_state(s_act_ext, g_variant_new_boolean(s_show_ext));
+    /* GAP-125: full reload so Name cells re-render (base+ext vs base),
+     * the sort re-runs against the displayed strings, and the current
+     * file's selection is restored by identity (doclist_sync_selection). */
+    if (s_col_name) {
+        GtkSorter *ns = gtk_column_view_column_get_sorter(s_col_name);
+        if (ns) gtk_sorter_changed(ns, GTK_SORTER_CHANGE_DIFFERENT);
+    }
+    doclist_refresh();
 }
 
 static void cb_toggle_path(GtkButton *b, gpointer ud)
@@ -323,6 +356,45 @@ static void cb_toggle_path(GtkButton *b, gpointer ud)
     g_prefs.doclist_show_path = s_show_path;
     prefs_save();
     apply_column_visibility();
+    if (s_act_path)
+        g_simple_action_set_state(s_act_path, g_variant_new_boolean(s_show_path));
+}
+
+/* GAP-125 (macOS bb59822): right-clicking the column-title area offers the
+ * same Ext./Path toggle menu as the empty-area right-click (users with many
+ * open files may have no empty space left to click). The header button
+ * claims the press before our column-view gesture sees it, so this goes
+ * through GTK's own per-column header-menu mechanism; boolean-stateful
+ * actions give the check marks for free (macOS routes its _DocListHeaderView
+ * through contextMenuForRow:-1 for the same reasons). */
+static void act_header_ext(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a; (void)p; (void)u; cb_toggle_ext(NULL, NULL); }
+
+static void act_header_path(GSimpleAction *a, GVariant *p, gpointer u)
+{ (void)a; (void)p; (void)u; cb_toggle_path(NULL, NULL); }
+
+static void install_header_menu(void)
+{
+    GSimpleActionGroup *grp = g_simple_action_group_new();
+    s_act_ext = g_simple_action_new_stateful(
+        "show-ext", NULL, g_variant_new_boolean(s_show_ext));
+    s_act_path = g_simple_action_new_stateful(
+        "show-path", NULL, g_variant_new_boolean(s_show_path));
+    g_signal_connect(s_act_ext,  "activate", G_CALLBACK(act_header_ext),  NULL);
+    g_signal_connect(s_act_path, "activate", G_CALLBACK(act_header_path), NULL);
+    g_action_map_add_action(G_ACTION_MAP(grp), G_ACTION(s_act_ext));
+    g_action_map_add_action(G_ACTION_MAP(grp), G_ACTION(s_act_path));
+    gtk_widget_insert_action_group(s_column_view, "doclist",
+                                   G_ACTION_GROUP(grp));
+    g_object_unref(grp);
+
+    GMenu *hm = g_menu_new();
+    g_menu_append(hm, "Ext.", "doclist.show-ext");
+    g_menu_append(hm, "Path", "doclist.show-path");
+    gtk_column_view_column_set_header_menu(s_col_name, G_MENU_MODEL(hm));
+    gtk_column_view_column_set_header_menu(s_col_ext,  G_MENU_MODEL(hm));
+    gtk_column_view_column_set_header_menu(s_col_path, G_MENU_MODEL(hm));
+    g_object_unref(hm);
 }
 
 static void on_columnview_rightclick(GtkGestureClick *gesture, int n_press,
@@ -524,6 +596,7 @@ GtkWidget *doclist_init(void)
     gtk_column_view_append_column(GTK_COLUMN_VIEW(s_column_view), s_col_ext);
     gtk_column_view_append_column(GTK_COLUMN_VIEW(s_column_view), s_col_path);
     apply_column_visibility();
+    install_header_menu();                                /* GAP-125 */
 
     /* Drive the sort layer from the column view's header clicks. */
     gtk_sort_list_model_set_sorter(sort_model,

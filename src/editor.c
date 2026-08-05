@@ -1245,6 +1245,32 @@ static void on_page_removed(GtkNotebook *nb, GtkWidget *child, guint page,
         g_idle_add(strip_remove_child_idle, g_object_ref(par));
 }
 
+/* GAP-124 (macOS 4bec481): drag-reordering a tab updated the tab bar but
+ * left the Document List stale until the next buffer activation. GTK
+ * emits "page-reordered" once per SWAP while the drag is in flight, so
+ * the refresh is coalesced into a single idle turn — the same shape as
+ * macOS coalescing its per-swap tabManagerDidReorderTabs: callbacks.
+ * (Command moves and the pin shuffle also pass through
+ * gtk_notebook_reorder_child and already refresh directly; the extra
+ * coalesced refresh is harmless.) */
+static guint s_reorder_refresh_idle = 0;
+
+static gboolean reorder_refresh_idle_cb(gpointer u)
+{
+    (void)u;
+    s_reorder_refresh_idle = 0;
+    main_doclist_refresh();
+    return G_SOURCE_REMOVE;
+}
+
+static void on_any_page_reordered(GtkNotebook *nb, GtkWidget *child,
+                                  guint page, gpointer u)
+{
+    (void)nb; (void)child; (void)page; (void)u;
+    if (!s_reorder_refresh_idle)
+        s_reorder_refresh_idle = g_idle_add(reorder_refresh_idle_cb, NULL);
+}
+
 static void on_page_reordered(GtkNotebook *nb, GtkWidget *child, guint page,
                               gpointer u)
 {
@@ -2293,6 +2319,8 @@ GtkWidget *editor_init(GtkWidget *window)
                      G_CALLBACK(on_page_removed), NULL);
     g_signal_connect(s_notebook, "page-reordered",
                      G_CALLBACK(on_page_reordered), NULL);
+    g_signal_connect(s_notebook, "page-reordered",
+                     G_CALLBACK(on_any_page_reordered), NULL);   /* GAP-124 */
     /* GAP-102 — the trailing + ▾ ✕ controls are NOT a notebook action
      * widget any more: they live in the toolbar (both appearance styles),
      * exactly as macOS ships them (kTBTabControls). See
@@ -2854,6 +2882,8 @@ static GtkWidget *secondary_notebook_new(gboolean vertical)
     gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nb),
                                !g_prefs.hide_tab_bar);   /* macOS #183 */
     g_signal_connect(nb, "switch-page", G_CALLBACK(on_switch_page), NULL);
+    g_signal_connect(nb, "page-reordered",
+                     G_CALLBACK(on_any_page_reordered), NULL);   /* GAP-124 */
     tabscroll_attach(nb);                                /* GAP-106 */
     *(vertical ? &s_notebook_v : &s_notebook_h) = nb;
     return nb;
