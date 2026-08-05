@@ -482,12 +482,12 @@ void session_restore_from(const char *path)
             gchar *bp = e->backup_filepath[0]
                 ? resolve_backup_path(e->backup_filepath) : NULL;
             if (bp) g_file_get_contents(bp, &content, NULL, NULL);
-            g_free(bp);
             /* A renamed-but-empty tab restores with no content (macOS
              * #177: organizational tabs survive relaunch); anything else
              * without a readable snapshot has nothing to restore. */
             if (!content &&
                 !(e->custom_name && e->custom_name[0])) {
+                g_free(bp);
                 g_free(e->bookmarks); g_free(e->folds); g_free(e->custom_name);
                 continue;
             }
@@ -513,9 +513,19 @@ void session_restore_from(const char *path)
                 /* No SETSAVEPOINT: the buffer is intentionally left in
                  * the modified state (it has no on-disk home yet).
                  * Re-snapshot right away so a crash before the next
-                 * clean quit still has an on-disk copy to restore. */
+                 * clean quit still has an on-disk copy to restore.
+                 * GAP-116: adopt the recorded claim first so the
+                 * re-snapshot reuses the SAME backup file (stable path
+                 * across sessions — the macOS backupFilePath contract)
+                 * instead of claiming a fresh one and orphaning it. */
+                if (bp) {
+                    g_free(nd->backup_filepath);
+                    nd->backup_filepath = bp;
+                    bp = NULL;
+                }
                 backup_snapshot_now(nd);
             }
+            g_free(bp);
             g_free(content);
         } else {
             if (!g_file_test(e->filepath, G_FILE_TEST_EXISTS)) {
@@ -529,14 +539,14 @@ void session_restore_from(const char *path)
              * calls backup_clean() and deletes the snapshot from disk.
              * (Verified live — reading after open finds the file gone.) */
             gchar *backup_content = NULL;
+            gchar *bp = NULL;
             if (e->backup_filepath[0]) {
-                gchar *bp = resolve_backup_path(e->backup_filepath);
-                if (bp) {
+                bp = resolve_backup_path(e->backup_filepath);
+                if (bp)
                     g_file_get_contents(bp, &backup_content, NULL, NULL);
-                    g_free(bp);
-                }
             }
             if (!editor_open_path(e->filepath)) {
+                g_free(bp);
                 g_free(backup_content);
                 g_free(e->bookmarks); g_free(e->folds); g_free(e->custom_name);
                 continue;
@@ -555,14 +565,21 @@ void session_restore_from(const char *path)
                     scintilla_send_message(SCINTILLA(bd->sci),
                                            SCI_EMPTYUNDOBUFFER, 0, 0);
                     changehistory_clear(bd->sci);
-                    /* The open-time savepoint deleted the on-disk
-                     * snapshot (SAVEPOINTREACHED → backup_clean).
-                     * Re-snapshot immediately so a crash before the
-                     * next clean quit doesn't lose the edits. */
+                    /* GAP-116: since backup_clean() now removes only a
+                     * doc's OWN claim, the open-time savepoint no longer
+                     * deletes this snapshot. Adopt the recorded claim so
+                     * the re-snapshot reuses the same backup file across
+                     * sessions (macOS backupFilePath contract). */
+                    if (bp) {
+                        g_free(bd->backup_filepath);
+                        bd->backup_filepath = bp;
+                        bp = NULL;
+                    }
                     backup_snapshot_now(bd);
                 }
                 g_free(backup_content);
             }
+            g_free(bp);
         }
 
         NppDoc *doc = editor_current_doc();
