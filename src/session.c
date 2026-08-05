@@ -578,6 +578,17 @@ void session_restore_from(const char *path)
                     backup_snapshot_now(bd);
                 }
                 g_free(backup_content);
+            } else if (e->encoding[0]) {
+                /* GAP-121 — re-decode with the SESSION's charset when it
+                 * differs from what open-time detection guessed. The old
+                 * relabel-only restore showed mojibake for any encoding
+                 * uchardet can't sniff (CP861, short Windows-1253 files,
+                 * …). Skipped when backup content was applied — that
+                 * text is already UTF-8 and newer than the disk copy. */
+                NppDoc *rd = editor_current_doc();
+                if (rd && rd->encoding &&
+                    strcmp(rd->encoding, e->encoding) != 0)
+                    editor_reload_as(e->encoding);
             }
             g_free(bp);
         }

@@ -12,6 +12,19 @@ typedef struct {
 extern const EncDef npp_encodings[];
 extern const int    npp_encoding_count;
 
+/* GAP-121 (macOS af362ea) — the Character-sets menu table: Windows
+ * Notepad_plus.rc rows in Windows order. `title` is the menu label
+ * (english.xml spelling); `display` is the canonical doc->encoding /
+ * npp_encodings key (legacy spellings preserved for pre-existing
+ * encodings, exactly like macOS encodingName). */
+typedef struct {
+    const char *category;
+    const char *title;
+    const char *display;
+} NppCharsetRow;
+
+const NppCharsetRow *npp_charset_table(int *out_n);
+
 /* Detect encoding from raw file bytes (BOM → UTF-8 validate → Latin-1).
    Returns a pointer into npp_encodings[].display — do NOT free. */
 const char *encoding_detect(const guchar *data, gsize len);

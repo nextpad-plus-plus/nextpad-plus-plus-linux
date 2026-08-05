@@ -32,8 +32,131 @@ const EncDef npp_encodings[] = {
     { "GB18030",       "GB18030",        FALSE },
     { "Big5",          "BIG5",           FALSE },
     { "EUC-KR",        "EUC-KR",         FALSE },
+    /* ── GAP-121 (macOS af362ea) — the rest of the Windows-parity
+     * Character-sets table. Display names for the NEW rows use the
+     * english.xml/menu spellings (that is what the status bar shows —
+     * macOS encodingName falls back to the table title); the rows above
+     * keep their legacy spellings exactly (session.xml compatibility).
+     * iconv names verified against glibc on 2026-08-05.
+     * ALSO the fix for a live GAP-94b bug: Windows-1253/1254/1257 and
+     * ISO-8859-7/9/13 were in the MENU but not in this table, so
+     * choosing them silently fell back to UTF-8 conversion. */
+    { "ISO-8859-7",         "ISO-8859-7",    FALSE },   /* Greek        */
+    { "ISO-8859-9",         "ISO-8859-9",    FALSE },   /* Turkish      */
+    { "ISO-8859-13",        "ISO-8859-13",   FALSE },   /* Baltic       */
+    { "Windows-1253",       "WINDOWS-1253",  FALSE },
+    { "Windows-1254",       "WINDOWS-1254",  FALSE },
+    { "Windows-1257",       "WINDOWS-1257",  FALSE },
+    { "ISO 8859-6",         "ISO-8859-6",    FALSE },   /* Arabic       */
+    { "Windows-1256",       "WINDOWS-1256",  FALSE },
+    { "ISO 8859-4",         "ISO-8859-4",    FALSE },   /* Baltic       */
+    { "OEM 775",            "CP775",         FALSE },
+    { "ISO 8859-14",        "ISO-8859-14",   FALSE },   /* Celtic       */
+    { "ISO 8859-5",         "ISO-8859-5",    FALSE },   /* Cyrillic     */
+    { "KOI8-U",             "KOI8-U",        FALSE },
+    { "Macintosh",          "MACCYRILLIC",   FALSE },   /* x-mac-cyrillic */
+    { "OEM 855",            "CP855",         FALSE },
+    { "OEM 866",            "CP866",         FALSE },
+    { "OEM 852",            "CP852",         FALSE },   /* Central Eur. */
+    { "OEM 737",            "CP737",         FALSE },   /* Greek        */
+    { "OEM 869",            "CP869",         FALSE },
+    { "ISO 8859-8",         "ISO-8859-8",    FALSE },   /* Hebrew       */
+    { "OEM 862",            "CP862",         FALSE },
+    { "Windows-1255",       "WINDOWS-1255",  FALSE },
+    { "Windows 949",        "CP949",         FALSE },   /* Korean (UHC) */
+    { "OEM 861: Icelandic", "CP861",         FALSE },   /* glibc's cp861
+                                    * is correct — macOS had to omit it
+                                    * (its converter applies cp775). */
+    { "OEM 865: Nordic",    "CP865",         FALSE },
+    { "TIS-620",            "CP874",         FALSE },   /* Thai         */
+    { "ISO 8859-3",         "ISO-8859-3",    FALSE },   /* Turkish      */
+    { "OEM 857",            "CP857",         FALSE },
+    { "OEM 850",            "CP850",         FALSE },   /* Western Eur. */
+    { "OEM 858",            "CP858",         FALSE },   /* macOS omits (no CF converter) */
+    { "OEM 860: Portuguese","CP860",         FALSE },
+    { "OEM 863: French",    "CP863",         FALSE },
+    { "OEM-US",             "CP437",         FALSE },
+    { "Windows-1258",       "WINDOWS-1258",  FALSE },   /* Vietnamese   */
 };
 const int npp_encoding_count = G_N_ELEMENTS(npp_encodings);
+
+/* ── GAP-121 — the Character-sets MENU table: 16 category submenus in
+ * Windows Notepad_plus.rc order, titles spelled as english.xml spells
+ * them, each row pointing at its npp_encodings display key. OEM 720 is
+ * the one Windows row absent here: glibc iconv has no CP720 converter
+ * (macOS additionally lacks 858 and ships a broken 861 — Linux carries
+ * both, 42 of Windows' 43 rows). A row whose display is missing from
+ * npp_encodings would silently decode as UTF-8, so the test harness
+ * asserts the join. */
+static const NppCharsetRow k_charset_rows[] = {
+    { "Arabic",           "ISO 8859-6",           "ISO 8859-6"   },
+    /* { "Arabic",        "OEM 720",              — no glibc converter } */
+    { "Arabic",           "Windows-1256",         "Windows-1256" },
+
+    { "Baltic",           "ISO 8859-4",           "ISO 8859-4"   },
+    { "Baltic",           "ISO 8859-13",          "ISO-8859-13"  },
+    { "Baltic",           "OEM 775",              "OEM 775"      },
+    { "Baltic",           "Windows-1257",         "Windows-1257" },
+
+    { "Celtic",           "ISO 8859-14",          "ISO 8859-14"  },
+
+    { "Cyrillic",         "ISO 8859-5",           "ISO 8859-5"   },
+    { "Cyrillic",         "KOI8-R",               "KOI8-R"       },
+    { "Cyrillic",         "KOI8-U",               "KOI8-U"       },
+    { "Cyrillic",         "Macintosh",            "Macintosh"    },
+    { "Cyrillic",         "OEM 855",              "OEM 855"      },
+    { "Cyrillic",         "OEM 866",              "OEM 866"      },
+    { "Cyrillic",         "Windows-1251",         "Windows-1251" },
+
+    { "Central European", "OEM 852",              "OEM 852"      },
+    { "Central European", "Windows-1250",         "Windows-1250" },
+
+    { "Chinese",          "Big5 (Traditional)",   "Big5"         },
+    { "Chinese",          "GB2312 (Simplified)",  "GB2312"       },
+
+    { "Eastern European", "ISO 8859-2",           "ISO-8859-2"   },
+
+    { "Greek",            "ISO 8859-7",           "ISO-8859-7"   },
+    { "Greek",            "OEM 737",              "OEM 737"      },
+    { "Greek",            "OEM 869",              "OEM 869"      },
+    { "Greek",            "Windows-1253",         "Windows-1253" },
+
+    { "Hebrew",           "ISO 8859-8",           "ISO 8859-8"   },
+    { "Hebrew",           "OEM 862",              "OEM 862"      },
+    { "Hebrew",           "Windows-1255",         "Windows-1255" },
+
+    { "Japanese",         "Shift-JIS",            "Shift-JIS"    },
+
+    { "Korean",           "Windows 949",          "Windows 949"  },
+    { "Korean",           "EUC-KR",               "EUC-KR"       },
+
+    { "North European",   "OEM 861: Icelandic",   "OEM 861: Icelandic" },
+    { "North European",   "OEM 865: Nordic",      "OEM 865: Nordic"    },
+
+    { "Thai",             "TIS-620",              "TIS-620"      },
+
+    { "Turkish",          "ISO 8859-3",           "ISO 8859-3"   },
+    { "Turkish",          "ISO 8859-9",           "ISO-8859-9"   },
+    { "Turkish",          "OEM 857",              "OEM 857"      },
+    { "Turkish",          "Windows-1254",         "Windows-1254" },
+
+    { "Western European", "ISO 8859-1",           "ISO-8859-1"   },
+    { "Western European", "ISO 8859-15",          "ISO-8859-15"  },
+    { "Western European", "OEM 850",              "OEM 850"      },
+    { "Western European", "OEM 858",              "OEM 858"      },
+    { "Western European", "OEM 860: Portuguese",  "OEM 860: Portuguese" },
+    { "Western European", "OEM 863: French",      "OEM 863: French"     },
+    { "Western European", "OEM-US",               "OEM-US"       },
+    { "Western European", "Windows-1252",         "Windows-1252" },
+
+    { "Vietnamese",       "Windows-1258",         "Windows-1258" },
+};
+
+const NppCharsetRow *npp_charset_table(int *out_n)
+{
+    if (out_n) *out_n = G_N_ELEMENTS(k_charset_rows);
+    return k_charset_rows;
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */

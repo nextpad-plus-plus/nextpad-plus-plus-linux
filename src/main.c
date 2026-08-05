@@ -7460,35 +7460,27 @@ static GMenuModel *build_menu_model(void)
         g_object_unref(mi);
     }
     {
+        /* GAP-121 (macOS af362ea) — the Character-sets submenu derives
+         * entirely from the shared table in encoding.c: 16 category
+         * submenus, Windows Notepad_plus.rc order and spellings. Item
+         * label = table title, action target = the canonical display
+         * name (checkmarks come from the stateful set-encoding action;
+         * the status bar shows the same display string). */
         GMenu *cs = g_menu_new();
-        struct { const char *region; const char **encs; size_t n; } regions[] = {
-            { "Western European", (const char *[]){
-                "Windows-1252", "ISO-8859-1", "ISO-8859-15" }, 3 },
-            { "Central European", (const char *[]){
-                "Windows-1250", "ISO-8859-2" }, 2 },
-            { "Cyrillic", (const char *[]){
-                "Windows-1251", "KOI8-R" }, 2 },
-            /* GAP-94b — Greek/Turkish/Baltic to match macOS Character sets. */
-            { "Greek", (const char *[]){
-                "Windows-1253", "ISO-8859-7" }, 2 },
-            { "Turkish", (const char *[]){
-                "Windows-1254", "ISO-8859-9" }, 2 },
-            { "Baltic", (const char *[]){
-                "Windows-1257", "ISO-8859-13" }, 2 },
-            { "East Asian", (const char *[]){
-                "Shift-JIS", "GB18030", "Big5", "EUC-KR" }, 4 },
-        };
-        for (size_t r = 0; r < G_N_ELEMENTS(regions); r++) {
-            GMenu *region_menu = g_menu_new();
-            for (size_t i = 0; i < regions[r].n; i++) {
-                GMenuItem *mi = g_menu_item_new(regions[r].encs[i], NULL);
-                g_menu_item_set_action_and_target(mi, "app.set-encoding", "s",
-                                                  regions[r].encs[i]);
-                g_menu_append_item(region_menu, mi);
+        int n = 0;
+        const NppCharsetRow *rows = npp_charset_table(&n);
+        for (int i = 0; i < n; ) {
+            const char *cat = rows[i].category;
+            GMenu *sub = g_menu_new();
+            for (; i < n && strcmp(rows[i].category, cat) == 0; i++) {
+                GMenuItem *mi = g_menu_item_new(rows[i].title, NULL);
+                g_menu_item_set_action_and_target(mi, "app.set-encoding",
+                                                  "s", rows[i].display);
+                g_menu_append_item(sub, mi);
                 g_object_unref(mi);
             }
-            g_menu_append_submenu(cs, regions[r].region, G_MENU_MODEL(region_menu));
-            g_object_unref(region_menu);
+            g_menu_append_submenu(cs, cat, G_MENU_MODEL(sub));
+            g_object_unref(sub);
         }
         g_menu_append_submenu(enc_menu, "Character sets", G_MENU_MODEL(cs));
         g_object_unref(cs);
