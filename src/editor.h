@@ -32,6 +32,10 @@ typedef struct {
     GFileMonitor *file_monitor;       /* watches filepath for external changes */
     gboolean      ignore_next_change; /* suppress the event caused by our own save */
     gboolean      monitoring;         /* tail-f auto-reload on every external change */
+    gboolean      external_change_pending; /* GAP-120 — external change seen
+                                       * while the app was inactive or the
+                                       * tab hidden; prompt deferred until
+                                       * both hold (macOS 4f8f134 #281). */
     int           color_tag;          /* 0 = none, 1..5 = Red/Orange/Yellow/Green/Blue.
                                        * Matches macOS DocumentListPanel color column
                                        * used to visually flag related docs. */

@@ -296,6 +296,9 @@ void editor_reload_as(const char *encoding) {
     main_sync_encoding_menu(encoding);
 }
 
+static void     file_changed_prompt(NppDoc *doc);          /* GAP-120 */
+static gboolean doc_tab_visible(NppDoc *doc);              /* GAP-120 */
+
 static void on_file_changed(GFileMonitor *mon, GFile *file, GFile *other,
                              GFileMonitorEvent event, gpointer user_data)
 {
@@ -328,11 +331,31 @@ static void on_file_changed(GFileMonitor *mon, GFile *file, GFile *other,
         return;
     }
 
-    /* Only prompt when the window is focused or the tab is visible */
-    const char *basename = g_path_get_basename(doc->filepath);
+    /* GAP-120 (macOS 4f8f134 #281): never interrupt from the background.
+     * When the app is inactive or this tab is hidden, DEFER — mark the
+     * change pending and return. GFileMonitor won't re-fire on its own
+     * (unlike macOS's 1 s poll), so the pending flag is re-checked on
+     * window activation and on tab switches; repeated external changes
+     * while deferred coalesce into one prompt for free. The silent
+     * paths above deliberately stay live in the background. */
+    if (!s_window || !gtk_window_is_active(GTK_WINDOW(s_window)) ||
+        !doc_tab_visible(doc)) {
+        doc->external_change_pending = TRUE;
+        return;
+    }
+    doc->external_change_pending = FALSE;
+    file_changed_prompt(doc);
+}
+
+/* The actual "changed on disk" question — split out so the deferred
+ * re-check path (GAP-120) shows the identical dialog. */
+static void file_changed_prompt(NppDoc *doc)
+{
+    char *basename = g_path_get_basename(doc->filepath);
     GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(s_window),
         GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
         "The file \"%s\" has been changed externally.\nReload it?", basename);
+    g_free(basename);
     gtk_dialog_add_button(GTK_DIALOG(dlg), "_Reload", GTK_RESPONSE_YES);
     gtk_dialog_add_button(GTK_DIALOG(dlg), "_Keep current", GTK_RESPONSE_NO);
     gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_YES);
@@ -340,6 +363,59 @@ static void on_file_changed(GFileMonitor *mon, GFile *file, GFile *other,
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_YES)
         reload_doc_from_disk(doc);
     gtk_widget_destroy(dlg);
+}
+
+/* GAP-120 — TRUE when the doc's tab is the visible page of ITS notebook
+ * (split panes are all on screen, so each notebook's current page counts). */
+static gboolean doc_tab_visible(NppDoc *doc)
+{
+    if (!doc || !doc->sci) return FALSE;
+    GtkWidget *nb = gtk_widget_get_ancestor(doc->sci, GTK_TYPE_NOTEBOOK);
+    if (!nb) return FALSE;
+    int cur = gtk_notebook_get_current_page(GTK_NOTEBOOK(nb));
+    if (cur < 0) return FALSE;
+    GtkWidget *page = gtk_notebook_get_nth_page(GTK_NOTEBOOK(nb), cur);
+    return page &&
+           (page == doc->sci || gtk_widget_is_ancestor(doc->sci, page));
+}
+
+/* GAP-120 — deferred-prompt re-check, coalesced into one idle: runs after
+ * a window activation or a tab switch (an idle also steps past the
+ * switch-page emission, during which the notebook still reports the OLD
+ * current page). Consumes the pending flag only when the prompt really
+ * shows, exactly like macOS. */
+static guint s_pending_recheck_idle;
+
+static gboolean pending_recheck_cb(gpointer u)
+{
+    (void)u;
+    s_pending_recheck_idle = 0;
+    if (!s_window || !gtk_window_is_active(GTK_WINDOW(s_window)))
+        return G_SOURCE_REMOVE;
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (!d || !d->external_change_pending) continue;
+        if (!doc_tab_visible(d)) continue;
+        d->external_change_pending = FALSE;
+        file_changed_prompt(d);
+    }
+    g_ptr_array_free(docs, TRUE);
+    return G_SOURCE_REMOVE;
+}
+
+static void schedule_pending_recheck(void)
+{
+    if (!s_pending_recheck_idle)
+        s_pending_recheck_idle = g_idle_add(pending_recheck_cb, NULL);
+}
+
+static void on_window_active_changed(GObject *win, GParamSpec *pspec,
+                                     gpointer u)
+{
+    (void)pspec; (void)u;
+    if (gtk_window_is_active(GTK_WINDOW(win)))
+        schedule_pending_recheck();
 }
 
 static void filewatch_start(NppDoc *doc)
@@ -2049,6 +2125,10 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
      * showed empty until the user typed). */
     if (funclist_is_visible())
         funclist_update(sci);
+    /* GAP-120 — a deferred file-changed prompt may target the tab that
+     * just became visible; the idle steps past this emission (the
+     * notebook still reports the OLD page here). */
+    schedule_pending_recheck();
     extern void main_mdpreview_notify_changed(void);
     main_mdpreview_notify_changed();
     /* GAP-101 — NPPN_BUFFERACTIVATED on plain tab switches. It only fired
@@ -2304,6 +2384,11 @@ GtkWidget *editor_init(GtkWidget *window)
 {
     stylestore_init(NULL);
     s_window   = window;
+    /* GAP-120 — deferred file-changed prompts fire when the window
+     * becomes active again (the tab-visibility half re-checks on
+     * switch-page). */
+    g_signal_connect(window, "notify::is-active",
+                     G_CALLBACK(on_window_active_changed), NULL);
     s_notebook = gtk_notebook_new();
     /* Marks this as the editor notebook so install_tab_color_css() can
      * scope the macOS tab styling here and not to Preferences / Plugin
