@@ -292,6 +292,15 @@ void session_save(void)
         g_error_free(err);
     }
     g_string_free(xml, TRUE);
+
+    /* GAP-116a (macOS 5e1c814) — quarantine backup files no longer
+     * referenced by any open editor, NON-destructively: moved to
+     * backup/.trash/<stamp>/ and aged out after a week. Runs here, at
+     * the end of the session save, exactly like macOS saveSession.
+     * Retro-cleans Save-As orphans (the old-basename snapshot is
+     * unreferenced the moment the doc's path changes) and, later, the
+     * old-style names left behind by the GAP-116 backup renaming. */
+    backup_quarantine_stale();
 }
 
 /* ------------------------------------------------------------------ */
