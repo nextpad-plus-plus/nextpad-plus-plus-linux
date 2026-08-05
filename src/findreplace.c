@@ -4,6 +4,7 @@
 #include "findreplace.h"
 #include "gtk_compat.h"
 #include "sci_c.h"
+#include "editor.h"   /* editor_display_section_centered (GAP-131) */
 #include "i18n.h"
 #include "prefs.h"
 #include "searchresults.h"
@@ -286,8 +287,9 @@ static gboolean fuzzy_find(const char *needle, gboolean match_case,
 
     gboolean found = (chosen != NULL);
     if (chosen) {
-        sci_msg(s_sci, SCI_SETSEL, (uptr_t)chosen->start, chosen->end);
-        sci_msg(s_sci, SCI_SCROLLCARET, 0, 0);
+        /* GAP-131 — center off-screen matches (macOS fbb0323). */
+        editor_display_section_centered(s_sci, chosen->start, chosen->end,
+                                        forward);
     }
     g_array_free(spans, TRUE);
     return found;
@@ -352,8 +354,10 @@ static gboolean find_in_sci(gboolean forward)
 
     if (found >= 0) {
         sptr_t target_end = sci_msg(s_sci, SCI_GETTARGETEND, 0, 0);
-        sci_msg(s_sci, SCI_SETSEL,       (uptr_t)found, target_end);
-        sci_msg(s_sci, SCI_SCROLLCARET,  0, 0);
+        /* GAP-131 — center off-screen matches (macOS fbb0323); every
+         * Find Next / F3 / Shift+F3 / Select-and-Find / macro replay
+         * funnels through here. */
+        editor_display_section_centered(s_sci, found, target_end, forward);
         gtk_label_set_text(GTK_LABEL(s_status), "");
         return TRUE;
     }

@@ -185,6 +185,13 @@ void main_do_print_dialog(void);              /* show the system print dialog */
 /* Open a file (or switch to it if already open) then jump to a 1-based line. */
 void   editor_open_and_goto(const char *path, int line);
 
+/* GAP-131 — reveal a found match: unfold its lines, jump-scroll to the
+ * vertical middle when off-screen (no-op when visible), scroll the whole
+ * match into view horizontally, select it with the caret at the
+ * direction-appropriate end (Windows displaySectionCentered port). */
+void   editor_display_section_centered(GtkWidget *sci, sptr_t pos_start,
+                                       sptr_t pos_end, gboolean downwards);
+
 /* Incremental search bar (Ctrl+I) */
 void editor_incr_search_show(void);
 void editor_incr_search_close(void);

@@ -3889,6 +3889,60 @@ void editor_goto_line_dialog(void)
     gtk_widget_destroy(dlg);
 }
 
+/* GAP-131 (macOS fbb0323 / Windows Searching::displaySectionCentered,
+ * FindReplaceDlg.cpp — issue #289): SCI_SCROLLCARET scrolls the minimum
+ * distance, parking an off-screen match on the very last visible line,
+ * behind the horizontal scrollbar. Instead: unfold the match's lines,
+ * jump-scroll the target line to the vertical middle when it is
+ * off-screen (and do nothing when it already shows — no jarring
+ * re-scroll), make the whole match visible horizontally, then select it
+ * with the caret at the appropriate end. One shared helper for every
+ * reveal site. */
+void editor_display_section_centered(GtkWidget *sci, sptr_t pos_start,
+                                     sptr_t pos_end, gboolean downwards)
+{
+    if (!sci) return;
+
+    /* Make sure target lines are unfolded. */
+    sci_msg(sci, SCI_ENSUREVISIBLE,
+            (uptr_t)sci_msg(sci, SCI_LINEFROMPOSITION, (uptr_t)pos_start, 0), 0);
+    sci_msg(sci, SCI_ENSUREVISIBLE,
+            (uptr_t)sci_msg(sci, SCI_LINEFROMPOSITION, (uptr_t)pos_end, 0), 0);
+
+    /* Jump-scroll to center if the position is out of view. Searching up,
+     * the beginning of the (possibly multiline) match matters; searching
+     * down, the end. */
+    sptr_t anchor_pos = downwards ? pos_end : pos_start;
+    sptr_t anchor_line = sci_msg(sci, SCI_LINEFROMPOSITION,
+                                 (uptr_t)anchor_pos, 0);
+    sci_msg(sci, SCI_SETVISIBLEPOLICY, CARET_JUMPS | CARET_EVEN, 0);
+    sci_msg(sci, SCI_ENSUREVISIBLEENFORCEPOLICY, (uptr_t)anchor_line, 0);
+    sci_msg(sci, SCI_GOTOPOS, (uptr_t)anchor_pos, 0);
+    sci_msg(sci, SCI_SETVISIBLEPOLICY, CARET_EVEN, 0);
+    sci_msg(sci, SCI_ENSUREVISIBLEENFORCEPOLICY, (uptr_t)anchor_line, 0);
+
+    /* Adjust so the entire match is visible — primarily horizontally. */
+    sci_msg(sci, SCI_SCROLLRANGE, (uptr_t)pos_start, pos_end);
+
+    /* Don't start/end the selection mid-character or inside a CR/LF pair
+     * (stale search results after later document edits). */
+    if (pos_start > 0) {
+        pos_start = sci_msg(sci, SCI_POSITIONBEFORE, (uptr_t)pos_start, 0);
+        pos_start = sci_msg(sci, SCI_POSITIONAFTER,  (uptr_t)pos_start, 0);
+    }
+    if (pos_end > 0) {
+        pos_end = sci_msg(sci, SCI_POSITIONBEFORE, (uptr_t)pos_end, 0);
+        pos_end = sci_msg(sci, SCI_POSITIONAFTER,  (uptr_t)pos_end, 0);
+    }
+
+    /* Caret at the result's end, selection over the result. */
+    sci_msg(sci, SCI_GOTOPOS, (uptr_t)pos_end, 0);
+    sci_msg(sci, SCI_SETANCHOR, (uptr_t)pos_start, 0);
+
+    /* Column memory: a first up/down arrow keeps the match's column. */
+    sci_msg(sci, SCI_CHOOSECARETX, 0, 0);
+}
+
 void editor_open_and_goto(const char *path, int line)
 {
     if (!path || !*path) return;
@@ -3924,8 +3978,13 @@ void editor_open_and_goto(const char *path, int line)
         if (!target) { npp_beep(); return; }
     }
     if (target && line > 0) {
-        sci_msg(target->sci, SCI_GOTOLINE,    (uptr_t)(line - 1), 0);
-        sci_msg(target->sci, SCI_SCROLLCARET, 0, 0);
+        /* GAP-131 — center the target line when off-screen (macOS
+         * fbb0323; Windows Finder::notify does the same). */
+        sptr_t ls = sci_msg(target->sci, SCI_POSITIONFROMLINE,
+                            (uptr_t)(line - 1), 0);
+        sptr_t le = sci_msg(target->sci, SCI_GETLINEENDPOSITION,
+                            (uptr_t)(line - 1), 0);
+        editor_display_section_centered(target->sci, ls, le, TRUE);
         gtk_widget_grab_focus(target->sci);
     }
 }
