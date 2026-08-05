@@ -112,6 +112,7 @@ set(APP_SRCS
     "${CMAKE_SOURCE_DIR}/fuzzy/FuzzyMatcher.cxx"
     "${CMAKE_SOURCE_DIR}/fuzzy/FuzzyText.cxx"
     "${SRC}/recent.c"
+    "${SRC}/fileassoc.c"
     "${SRC}/updatecheck.c"
     "${SRC}/updatecard.c"
     "${SRC}/stubs.c"

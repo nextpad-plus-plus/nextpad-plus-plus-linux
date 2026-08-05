@@ -205,6 +205,14 @@ typedef struct {
     char     backup_custom_dir[1024]; /* "" = default <user>/backup
                                        * (macOS kPrefBackupDir) */
 
+    /* ── File Association (GAP-128) ─────────────────────────── */
+    char     fileassoc_custom_exts[512]; /* customize-row extensions,
+                                          * space-separated ".foo .bar" */
+    char     fileassoc_prev[1024];       /* previous default handlers,
+                                          * "mime=app.desktop" pairs
+                                          * (Windows Notepad++_backup
+                                          * parity — unregister restores) */
+
     /* ── Document List panel ────────────────────────────────── */
     gboolean doclist_show_ext;        /* default TRUE  */
     gboolean doclist_show_path;       /* default TRUE  */

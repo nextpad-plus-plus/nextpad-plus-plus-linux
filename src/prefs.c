@@ -1,5 +1,6 @@
 #include "prefs.h"
 #include "toolbar.h"
+#include "fileassoc.h"
 #include "gtk_compat.h"
 #include "branding.h"
 #include "backup.h"
@@ -10,6 +11,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>   /* gNppUseBoostRegex is a C++ `extern "C" bool` */
+#include <glib/gstdio.h>
 
 /* ------------------------------------------------------------------ */
 /* EOL enum translation                                                */
@@ -482,6 +484,18 @@ static void apply_attr(const char *group, const char *attr, const char *val)
     else if (!strcmp(group, "UpdateAutoCheck")) {          /* GAP-107 */
         if (!strcmp(attr, "name2")) g_prefs.auto_check_updates = is_show(val);
     }
+    else if (!strcmp(group, "FileAssoc")) {                /* GAP-128 */
+        if (!strcmp(attr, "customExts")) {
+            strncpy(g_prefs.fileassoc_custom_exts, val,
+                    sizeof(g_prefs.fileassoc_custom_exts) - 1);
+            g_prefs.fileassoc_custom_exts[sizeof(g_prefs.fileassoc_custom_exts) - 1] = '\0';
+        }
+        else if (!strcmp(attr, "prevHandlers")) {
+            strncpy(g_prefs.fileassoc_prev, val,
+                    sizeof(g_prefs.fileassoc_prev) - 1);
+            g_prefs.fileassoc_prev[sizeof(g_prefs.fileassoc_prev) - 1] = '\0';
+        }
+    }
 }
 
 static void apply_text(const char *group, const char *text) {
@@ -910,6 +924,16 @@ g_prefs.tab_max_label_width,
     g_string_append_printf(b,
         "        <GUIConfig name=\"UpdateAutoCheck\" name2=\"%s\" />\n",
         b2sh(g_prefs.auto_check_updates));
+    /* GAP-128 — File Association customize list + previous handlers. */
+    {
+        gchar *ce = g_markup_escape_text(g_prefs.fileassoc_custom_exts, -1);
+        gchar *ph = g_markup_escape_text(g_prefs.fileassoc_prev, -1);
+        g_string_append_printf(b,
+            "        <GUIConfig name=\"FileAssoc\" customExts=\"%s\" prevHandlers=\"%s\" />\n",
+            ce, ph);
+        g_free(ce);
+        g_free(ph);
+    }
 
     /* GAP-53 — Find window transparency. */
     g_string_append_printf(b,
@@ -2313,6 +2337,235 @@ static GtkWidget *page_tahoe(void)
     return v;
 }
 
+/* ══ GAP-128 — File Association page (macOS pane / Windows regExtDlg).
+ * Three lists: categories, the selected category's extensions, and every
+ * extension currently registered to us. Linux associations are per-MIME-
+ * type (see fileassoc.h), so registering one extension covers its type
+ * siblings — the status line says so when an extension is selected. ══ */
+
+static GtkWidget *fa_cat_list, *fa_ext_list, *fa_reg_list;
+static GtkWidget *fa_custom_row, *fa_custom_entry, *fa_status;
+
+static void fa_list_clear(GtkWidget *lb)
+{
+    GtkListBoxRow *row;
+    while ((row = gtk_list_box_get_row_at_index(GTK_LIST_BOX(lb), 0)))
+        gtk_list_box_remove(GTK_LIST_BOX(lb), GTK_WIDGET(row));
+}
+
+static void fa_list_add(GtkWidget *lb, const char *text)
+{
+    GtkWidget *l = gtk_label_new(text);
+    gtk_widget_set_halign(l, GTK_ALIGN_START);
+    gtk_widget_set_margin_start(l, 6);
+    gtk_widget_set_margin_end(l, 6);
+    GtkWidget *row = gtk_list_box_row_new();
+    gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), l);
+    g_object_set_data_full(G_OBJECT(row), "fa-ext", g_strdup(text), g_free);
+    gtk_list_box_append(GTK_LIST_BOX(lb), row);
+}
+
+static const char *fa_row_ext(GtkListBoxRow *row)
+{
+    return row ? g_object_get_data(G_OBJECT(row), "fa-ext") : NULL;
+}
+
+static void fa_refresh_registered(void)
+{
+    fa_list_clear(fa_reg_list);
+    gchar **regs = fileassoc_registered_list();
+    for (int i = 0; regs[i]; i++) fa_list_add(fa_reg_list, regs[i]);
+    g_strfreev(regs);
+}
+
+static void fa_refresh_exts(void)
+{
+    fa_list_clear(fa_ext_list);
+    GtkListBoxRow *cr =
+        gtk_list_box_get_selected_row(GTK_LIST_BOX(fa_cat_list));
+    int idx = cr ? gtk_list_box_row_get_index(cr) : 0;
+    gboolean customize = fileassoc_category_is_customize(idx);
+    gtk_widget_set_visible(fa_custom_row, customize);
+    if (customize) {
+        gchar **customs = fileassoc_custom_list();
+        for (int i = 0; customs[i]; i++) fa_list_add(fa_ext_list, customs[i]);
+        g_strfreev(customs);
+    } else {
+        int n = 0;
+        const char *const *exts = fileassoc_category_exts(idx, &n);
+        for (int i = 0; i < n; i++) fa_list_add(fa_ext_list, exts[i]);
+    }
+}
+
+static void on_fa_cat_selected(GtkListBox *lb, GtkListBoxRow *row, gpointer u)
+{
+    (void)lb; (void)row; (void)u;
+    fa_refresh_exts();
+    gtk_label_set_text(GTK_LABEL(fa_status), "");
+}
+
+static void on_fa_ext_selected(GtkListBox *lb, GtkListBoxRow *row, gpointer u)
+{
+    (void)lb; (void)u;
+    const char *ext = fa_row_ext(row);
+    if (!ext) { gtk_label_set_text(GTK_LABEL(fa_status), ""); return; }
+    char *mime = fileassoc_ext_to_mime(ext);
+    char *msg = mime
+        ? g_strdup_printf("%s → %s  (registering covers every %s extension)",
+                          ext, mime, mime)
+        : g_strdup_printf("%s has no known MIME type — registering is a "
+                          "no-op for now", ext);
+    gtk_label_set_text(GTK_LABEL(fa_status), msg);
+    g_free(msg);
+    g_free(mime);
+}
+
+static void on_fa_register(GtkButton *b, gpointer u)
+{
+    (void)b; (void)u;
+    const char *ext = fa_row_ext(
+        gtk_list_box_get_selected_row(GTK_LIST_BOX(fa_ext_list)));
+    if (!ext) return;
+    char *err = NULL;
+    if (fileassoc_register(ext, &err)) {
+        char *m = g_strdup_printf("%s is now registered to Nextpad++", ext);
+        gtk_label_set_text(GTK_LABEL(fa_status), m);
+        g_free(m);
+    } else {
+        gtk_label_set_text(GTK_LABEL(fa_status),
+                           err ? err : "Registration failed");
+    }
+    g_free(err);
+    fa_refresh_registered();
+}
+
+static void on_fa_unregister(GtkButton *b, gpointer u)
+{
+    (void)b; (void)u;
+    const char *ext = fa_row_ext(
+        gtk_list_box_get_selected_row(GTK_LIST_BOX(fa_reg_list)));
+    if (!ext) return;
+    char *err = NULL;
+    if (fileassoc_unregister(ext, &err)) {
+        char *m = g_strdup_printf("%s unregistered (previous handler "
+                                  "restored when one was remembered)", ext);
+        gtk_label_set_text(GTK_LABEL(fa_status), m);
+        g_free(m);
+    } else {
+        gtk_label_set_text(GTK_LABEL(fa_status),
+                           err ? err : "Unregister failed");
+    }
+    g_free(err);
+    fa_refresh_registered();
+}
+
+static void on_fa_add_custom(GtkButton *b, gpointer u)
+{
+    (void)b; (void)u;
+    const char *raw = gtk_editable_get_text(GTK_EDITABLE(fa_custom_entry));
+    char *norm = fileassoc_normalize_input(raw);
+    if (!norm) {
+        gtk_label_set_text(GTK_LABEL(fa_status),
+                           "Not a valid extension — use e.g. \".foo\"");
+        return;
+    }
+    if (fileassoc_custom_add(norm)) {
+        gtk_editable_set_text(GTK_EDITABLE(fa_custom_entry), "");
+        fa_refresh_exts();
+        char *mime = fileassoc_ext_to_mime(norm);
+        char *m = mime
+            ? g_strdup_printf("%s added (%s)", norm, mime)
+            : g_strdup_printf("%s added — no known MIME type yet, so "
+                              "registering it is a no-op for now", norm);
+        gtk_label_set_text(GTK_LABEL(fa_status), m);
+        g_free(m);
+        g_free(mime);
+    } else {
+        gtk_label_set_text(GTK_LABEL(fa_status),
+                           "Already in the extension table");
+    }
+    g_free(norm);
+}
+
+static GtkWidget *fa_scrolled(GtkWidget *list, int w)
+{
+    GtkWidget *sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw),
+        GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_has_frame(GTK_SCROLLED_WINDOW(sw), TRUE);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), list);
+    gtk_widget_set_size_request(sw, w, 330);
+    gtk_widget_set_vexpand(sw, TRUE);
+    return sw;
+}
+
+static GtkWidget *page_file_association(void)
+{
+    GtkWidget *g = gtk_grid_new();
+    gtk_grid_set_column_spacing(GTK_GRID(g), 10);
+    gtk_grid_set_row_spacing(GTK_GRID(g), 6);
+
+    GtkWidget *hl = gtk_label_new("Supported extensions:");
+    gtk_widget_set_halign(hl, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), hl, 0, 0, 2, 1);
+    GtkWidget *hr = gtk_label_new("Registered");
+    gtk_widget_set_halign(hr, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(g), hr, 3, 0, 1, 1);
+
+    fa_cat_list = gtk_list_box_new();
+    fa_ext_list = gtk_list_box_new();
+    fa_reg_list = gtk_list_box_new();
+    for (int i = 0; i < fileassoc_category_count(); i++)
+        fa_list_add(fa_cat_list, fileassoc_category_name(i));
+
+    gtk_grid_attach(GTK_GRID(g), fa_scrolled(fa_cat_list, 160), 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(g), fa_scrolled(fa_ext_list, 120), 1, 1, 1, 1);
+
+    GtkWidget *bb = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_valign(bb, GTK_ALIGN_CENTER);
+    GtkWidget *reg = gtk_button_new_with_label(">");
+    GtkWidget *unr = gtk_button_new_with_label("<");
+    g_signal_connect(reg, "clicked", G_CALLBACK(on_fa_register), NULL);
+    g_signal_connect(unr, "clicked", G_CALLBACK(on_fa_unregister), NULL);
+    gtk_box_append(GTK_BOX(bb), reg);
+    gtk_box_append(GTK_BOX(bb), unr);
+    gtk_grid_attach(GTK_GRID(g), bb, 2, 1, 1, 1);
+
+    gtk_grid_attach(GTK_GRID(g), fa_scrolled(fa_reg_list, 160), 3, 1, 1, 1);
+
+    /* customize row — visible only for the customize category */
+    fa_custom_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    fa_custom_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(fa_custom_entry), ".ext");
+    gtk_widget_set_hexpand(fa_custom_entry, TRUE);
+    GtkWidget *add = gtk_button_new_with_label("Add");
+    g_signal_connect(add, "clicked", G_CALLBACK(on_fa_add_custom), NULL);
+    gtk_box_append(GTK_BOX(fa_custom_row), fa_custom_entry);
+    gtk_box_append(GTK_BOX(fa_custom_row), add);
+    gtk_grid_attach(GTK_GRID(g), fa_custom_row, 0, 2, 2, 1);
+
+    fa_status = gtk_label_new("");
+    gtk_widget_set_halign(fa_status, GTK_ALIGN_START);
+    gtk_label_set_wrap(GTK_LABEL(fa_status), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(fa_status), 0.0f);
+    gtk_widget_add_css_class(fa_status, "dim-label");
+    gtk_grid_attach(GTK_GRID(g), fa_status, 0, 3, 4, 1);
+
+    /* Signals AFTER construction so the initial population can't fire
+     * callbacks against half-built widgets. */
+    g_signal_connect(fa_cat_list, "row-selected",
+                     G_CALLBACK(on_fa_cat_selected), NULL);
+    g_signal_connect(fa_ext_list, "row-selected",
+                     G_CALLBACK(on_fa_ext_selected), NULL);
+
+    gtk_list_box_select_row(GTK_LIST_BOX(fa_cat_list),
+        gtk_list_box_get_row_at_index(GTK_LIST_BOX(fa_cat_list), 0));
+    fa_refresh_exts();
+    fa_refresh_registered();
+    gtk_widget_set_visible(fa_custom_row, FALSE);
+    return g;
+}
+
 static GtkWidget *prefs_tab_label(const char *text)
 {
     GtkWidget *lbl = gtk_label_new(text);
@@ -2390,6 +2643,9 @@ void prefs_dialog_show(GtkWidget *parent)
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_toolbar()),          prefs_tab_label("Toolbar"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_margins()),         prefs_tab_label("Margins"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_new_document()),    prefs_tab_label("New Document"));
+    /* GAP-128 — File Association sits between New Document and Backup,
+     * matching the macOS sidebar slot. */
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_file_association()), prefs_tab_label("File Association"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_backup()),          prefs_tab_label("Backup"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_auto_completion()), prefs_tab_label("Auto-Completion"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_searching()),       prefs_tab_label("Searching"));
