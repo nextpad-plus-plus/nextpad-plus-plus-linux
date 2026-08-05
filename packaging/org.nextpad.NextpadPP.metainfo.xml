@@ -10,7 +10,7 @@
     <p>
       Nextpad++ is a multi-tab text editor for Linux, ported from the
       macOS Nextpad++ codebase (which is in turn a native port of the
-      Windows Notepad++). Built on Scintilla and Lexilla with GTK 3.
+      Windows Notepad++). Built on Scintilla and Lexilla with GTK 4.
     </p>
     <p>Features:</p>
     <ul>
@@ -32,8 +32,8 @@
   <launchable type="desktop-id">org.nextpad.NextpadPP.desktop</launchable>
 
   <url type="homepage">https://nextpad.org</url>
-  <url type="bugtracker">https://github.com/nextpad-plus-plus/nextpad-plus-plus/issues</url>
-  <url type="vcs-browser">https://github.com/nextpad-plus-plus/nextpad-plus-plus</url>
+  <url type="bugtracker">https://github.com/nextpad-plus-plus/nextpad-plus-plus-linux/issues</url>
+  <url type="vcs-browser">https://github.com/nextpad-plus-plus/nextpad-plus-plus-linux</url>
 
   <developer_name>Andrew Letov</developer_name>
 
@@ -56,6 +56,11 @@
   </provides>
 
   <releases>
+    <release version="1.1.0" date="2026-08-02">
+      <description>
+        <p>Plugins Admin catalog, dockable plugin panel persistence, git side panel, update checker, SDK parity batch, and 26 ported plugins available.</p>
+      </description>
+    </release>
     <release version="1.0.6" date="2026-05-13">
       <description>
         <p>Initial Linux release. Multi-tab editing, full find/replace, side panels, macros, plugin SDK, command palette.</p>

@@ -1,0 +1,12 @@
+# Nextpad++ apt repository (deb822 format).
+# Installed by the .deb to /etc/apt/sources.list.d/nextpad.sources so
+# machines that installed once from the website receive signed updates
+# through the normal Ubuntu update mechanism.
+#
+# To opt out of updates: `sudo rm /etc/apt/sources.list.d/nextpad.sources`
+# (marked as a conffile — the removal survives package upgrades).
+Types: deb
+URIs: https://nextpad.org/apt
+Suites: stable
+Components: main
+Signed-By: /usr/share/keyrings/nextpad-archive-keyring.gpg

@@ -40,6 +40,29 @@ cmake -B build-pkg -S . \
 cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null
 
+# AppStream metadata — App Center / GNOME Software rich card for the
+# installed app (and required for repo-catalog listings later).
+install -Dm644 packaging/org.nextpad.NextpadPP.metainfo.xml \
+    "$STAGE/usr/share/metainfo/org.nextpad.NextpadPP.metainfo.xml"
+
+# APT-repo subscription (Chrome-style): ship the release public keyring +
+# a sources.list.d entry so machines that installed once from the website
+# receive signed updates via the normal update mechanism. Only when the
+# committed public keyring exists (packaging/apt-repo/README.md step 2) —
+# keyless builds still produce a valid standalone package.
+SOURCES_CONFFILE=""
+if [ -f packaging/apt-repo/nextpad-archive-keyring.gpg ]; then
+    install -Dm644 packaging/apt-repo/nextpad-archive-keyring.gpg \
+        "$STAGE/usr/share/keyrings/nextpad-archive-keyring.gpg"
+    install -Dm644 packaging/apt-repo/nextpad.sources \
+        "$STAGE/etc/apt/sources.list.d/nextpad.sources"
+    SOURCES_CONFFILE="/etc/apt/sources.list.d/nextpad.sources"
+    echo "── apt-repo subscription included (keyring + nextpad.sources)"
+else
+    echo "── NOTE: no packaging/apt-repo/nextpad-archive-keyring.gpg —" \
+         "building WITHOUT the apt-repo subscription"
+fi
+
 mkdir -p "$STAGE/DEBIAN"
 
 # The binary links gtk4/glib/uchardet/libstdc++ (NOT libadwaita — checked
@@ -64,10 +87,15 @@ Description: Multi-tab text editor (Linux port of Notepad++)
 EOF
 
 # /etc/apparmor.d/nextpad-plus-plus is admin-editable config — mark it a
-# conffile so local edits survive upgrades.
+# conffile so local edits survive upgrades. Same for the apt-repo
+# subscription: deleting it is the supported "no more updates" opt-out and
+# must survive upgrades (which arrive VIA that repo).
 cat > "$STAGE/DEBIAN/conffiles" <<EOF
 /etc/apparmor.d/nextpad-plus-plus
 EOF
+if [ -n "$SOURCES_CONFFILE" ]; then
+    echo "$SOURCES_CONFFILE" >> "$STAGE/DEBIAN/conffiles"
+fi
 
 # postinst: ldconfig for the bundled libscintilla.so, then load the AppArmor
 # userns profile so WebKitGTK-based plugins can run their sandbox on

@@ -16,6 +16,9 @@ build-*/
 /Nextpad++
 *.deb
 
+# Generated apt repository tree (make-apt-repo.sh output)
+dist/apt/
+
 # Tooling / IDE
 compile_commands.json
 .vscode/
