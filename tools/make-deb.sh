@@ -39,11 +39,7 @@ cmake -B build-pkg -S . \
       -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null
-
-# AppStream metadata — App Center / GNOME Software rich card for the
-# installed app (and required for repo-catalog listings later).
-install -Dm644 packaging/org.nextpad.NextpadPP.metainfo.xml \
-    "$STAGE/usr/share/metainfo/org.nextpad.NextpadPP.metainfo.xml"
+# (AppStream metainfo.xml is installed by the CMake install rules.)
 
 # APT-repo subscription (Chrome-style): ship the release public keyring +
 # a sources.list.d entry so machines that installed once from the website
