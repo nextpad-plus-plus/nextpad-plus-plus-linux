@@ -36,6 +36,10 @@ typedef struct {
                                        * while the app was inactive or the
                                        * tab hidden; prompt deferred until
                                        * both hold (macOS 4f8f134 #281). */
+    gboolean      external_change_muted;   /* GAP-129 — user answered "Keep
+                                       * current" with unsaved edits; stop
+                                       * re-asking until they are saved or
+                                       * discarded (macOS ee43ced #296). */
     int           color_tag;          /* 0 = none, 1..5 = Red/Orange/Yellow/Green/Blue.
                                        * Matches macOS DocumentListPanel color column
                                        * used to visually flag related docs. */

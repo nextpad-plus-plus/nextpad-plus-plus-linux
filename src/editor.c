@@ -237,14 +237,23 @@ static void update_window_title(void);
  *   forced_enc = NULL  → auto-detect (default reload behaviour)
  *   forced_enc = "…"   → bypass detection, use the named encoding
  *                        (Reload-with-encoding from the Encoding menu) */
-static void reload_doc_from_disk_with_enc(NppDoc *doc, const char *forced_enc)
+/* Returns FALSE on a read failure, with the reason in *err_msg (caller
+ * frees; may be NULL). GAP-129: callers decide — a silent monitored
+ * reload just waits for the next change event (we are event-driven, so
+ * no retry cap is needed, unlike macOS's 1 s poll), while a reload the
+ * USER asked for reports the failure once. */
+static gboolean reload_doc_from_disk_with_enc(NppDoc *doc,
+                                              const char *forced_enc,
+                                              char **err_msg)
 {
+    if (err_msg) *err_msg = NULL;
     gchar  *contents = NULL;
     gsize   len      = 0;
     GError *err      = NULL;
     if (!g_file_get_contents(doc->filepath, &contents, &len, &err)) {
+        if (err_msg) *err_msg = g_strdup(err->message);
         g_error_free(err);
-        return;
+        return FALSE;
     }
     const char *enc_name = forced_enc
         ? forced_enc
@@ -290,16 +299,34 @@ static void reload_doc_from_disk_with_enc(NppDoc *doc, const char *forced_enc)
     int page = sci_page_num(doc->sci);
     refresh_tab_label(page);
     statusbar_update_from_sci(doc->sci);
+    return TRUE;
 }
 
-static void reload_doc_from_disk(NppDoc *doc) {
-    reload_doc_from_disk_with_enc(doc, NULL);
+static gboolean reload_doc_from_disk(NppDoc *doc, char **err_msg) {
+    return reload_doc_from_disk_with_enc(doc, NULL, err_msg);
+}
+
+/* GAP-129 — a reload the user explicitly asked for that fails must say
+ * so once, instead of silently doing nothing (macOS ee43ced). */
+static void reload_failed_alert(NppDoc *doc, const char *why)
+{
+    char *base = g_path_get_basename(doc->filepath);
+    GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(s_window),
+        GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+        "Could not reload \"%s\".\n%s", base,
+        why ? why : "The file could not be read.");
+    g_free(base);
+    gtk_dialog_run(GTK_DIALOG(dlg));
+    gtk_widget_destroy(dlg);
 }
 
 void editor_reload_as(const char *encoding) {
     NppDoc *doc = editor_current_doc();
     if (!doc || !doc->filepath || !encoding) return;
-    reload_doc_from_disk_with_enc(doc, encoding);
+    char *why = NULL;
+    if (!reload_doc_from_disk_with_enc(doc, encoding, &why))
+        reload_failed_alert(doc, why);
+    g_free(why);
     main_sync_encoding_menu(encoding);
 }
 
@@ -327,14 +354,29 @@ static void on_file_changed(GFileMonitor *mon, GFile *file, GFile *other,
     if (!g_prefs.file_auto_detect && !doc->monitoring)
         return;
 
+    /* GAP-129 (macOS ee43ced #296) — the user already chose to keep
+     * their version of this file. Do not ask again while those edits
+     * are still unsaved: a monitored file keeps growing, so every
+     * append would otherwise re-raise the same prompt with no answer
+     * that makes it stop. Saving or reloading clears the dirty flag
+     * and the next change event re-arms detection. */
+    if (doc->external_change_muted) {
+        if (doc->modified) return;
+        doc->external_change_muted = FALSE;
+    }
+
     /* Reload silently when this tab is monitoring (tail -f), or when
-     * "Update silently" is on and the buffer has no unsaved edits. Dirty
-     * buffers always fall through to the prompt so unsaved changes are
-     * never discarded silently. (Caret + viewport survive the reload —
-     * GAP-58.) */
-    if (doc->monitoring ||
-        (g_prefs.file_update_silently && !doc->modified)) {
-        reload_doc_from_disk(doc);
+     * "Update silently" is on — in BOTH cases only while the buffer has
+     * no unsaved edits (GAP-129: the monitoring arm used to bypass the
+     * dirty check, so a dirty tail -f tab was silently reloaded and the
+     * edits were unrecoverable — the reload replaces the text and empties
+     * the undo buffer). Dirty buffers fall through to the prompt. A
+     * failed silent read needs no special handling here: we are
+     * event-driven, so the next change event simply retries. (Caret +
+     * viewport survive the reload — GAP-58.) */
+    if ((doc->monitoring || g_prefs.file_update_silently) &&
+        !doc->modified) {
+        reload_doc_from_disk(doc, NULL);
         return;
     }
 
@@ -367,8 +409,20 @@ static void file_changed_prompt(NppDoc *doc)
     gtk_dialog_add_button(GTK_DIALOG(dlg), "_Keep current", GTK_RESPONSE_NO);
     gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_YES);
 
-    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_YES)
-        reload_doc_from_disk(doc);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_YES) {
+        /* GAP-129 — the user asked for this reload; a failure must say
+         * so once instead of silently doing nothing. */
+        char *why = NULL;
+        if (!reload_doc_from_disk(doc, &why))
+            reload_failed_alert(doc, why);
+        g_free(why);
+    } else {
+        /* GAP-129 — the user kept what is in the editor: mute further
+         * prompts until those edits are saved or discarded. A CLEAN
+         * buffer's "Keep current" never mutes (macOS rule) — the next
+         * change should ask again. */
+        doc->external_change_muted = doc->modified;
+    }
     gtk_widget_destroy(dlg);
 }
 
@@ -3512,7 +3566,11 @@ void editor_reload_current(void)
 {
     NppDoc *doc = editor_current_doc();
     if (!doc || !doc->filepath) return;
-    reload_doc_from_disk(doc);
+    /* GAP-129 — explicit user request: report a failure once. */
+    char *why = NULL;
+    if (!reload_doc_from_disk(doc, &why))
+        reload_failed_alert(doc, why);
+    g_free(why);
 }
 
 gboolean editor_close_all_but_current(void)
