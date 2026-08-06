@@ -15,7 +15,8 @@
 #include <string.h>
 #include <ctype.h>
 
-#define AC_SCAN_LIMIT   (100 * 1024)  /* bytes of document to scan */
+#define AC_SCAN_WINDOW  500000        /* bytes scanned around the caret
+                                       * (macOS kScanWindow, ± each way) */
 #define AC_MAX_WORDS    300           /* cap on list size */
 
 static sptr_t sci_msg(GtkWidget *sci, unsigned int m, uptr_t w, sptr_t l)
@@ -23,8 +24,16 @@ static sptr_t sci_msg(GtkWidget *sci, unsigned int m, uptr_t w, sptr_t l)
     return scintilla_send_message(SCINTILLA(sci), m, w, l);
 }
 
-static gboolean is_word_char(char c)
+/* GAP-130 (macOS 9ed05d8 #297) — takes a byte (0..255) or an
+ * SCN_CHARADDED code point. Bytes >= 0x80 (every UTF-8 lead and
+ * continuation byte) count as word characters — Scintilla's own
+ * CharClassify default — so "Größe" and CJK identifiers are collected
+ * and a non-ASCII prefix no longer breaks the word_start walk. NOTE:
+ * callers must not pass sign-extended plain char (char is unsigned on
+ * aarch64 but signed on x86 — a silent x86-only breakage otherwise). */
+static gboolean is_word_char(int c)
 {
+    if (c >= 0x80) return TRUE;
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9') || c == '_';
 }
@@ -60,7 +69,7 @@ void autocomplete_on_char_added(GtkWidget *sci, int ch)
     /* Function-parameter hints trigger on the API's delimiters, before
      * (and independent of) list completion (macOS updateAutoComplete +
      * charAdded flow). */
-    if (g_prefs.func_params_hint && ch < 128 && !is_word_char((char)ch)) {
+    if (g_prefs.func_params_hint && ch < 128 && !is_word_char(ch)) {
         const char *lang =
             (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
         const AcLangApi *api = acapi_for_language(lang);
@@ -74,7 +83,7 @@ void autocomplete_on_char_added(GtkWidget *sci, int ch)
     }
 
     if (!g_prefs.autocomplete_enabled) return;
-    if (!is_word_char((char)ch)) {
+    if (!is_word_char(ch)) {
         /* Non-word char: cancel any active autocomplete */
         if (sci_msg(sci, SCI_AUTOCACTIVE, 0, 0))
             sci_msg(sci, SCI_AUTOCCANCEL, 0, 0);
@@ -85,7 +94,8 @@ void autocomplete_on_char_added(GtkWidget *sci, int ch)
     Sci_Position pos = (Sci_Position)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
     Sci_Position word_start = pos;
     while (word_start > 0) {
-        char c = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)(word_start - 1), 0);
+        int c = (int)(unsigned char)sci_msg(sci, SCI_GETCHARAT,
+                                            (uptr_t)(word_start - 1), 0);
         if (!is_word_char(c)) break;
         word_start--;
     }
@@ -175,28 +185,46 @@ void autocomplete_on_char_added(GtkWidget *sci, int ch)
         g_strfreev(parts);
     }
 
-    /* 2. Document words */
-    sptr_t doc_len  = sci_msg(sci, SCI_GETLENGTH, 0, 0);
-    sptr_t scan_len = doc_len < AC_SCAN_LIMIT ? doc_len : AC_SCAN_LIMIT;
+    /* 2. Document words — GAP-130: scan ±500 KB AROUND THE CARET (the
+     * macOS/kScanWindow policy; the old code always scanned the FIRST
+     * 100 KB, so in a large file the words near where the user is
+     * actually typing were never candidates). The window is snapped to
+     * line boundaries so it cannot start or end inside a UTF-8
+     * sequence — an edge landing mid-character would otherwise mint a
+     * truncated garbage candidate, since bytes ≥ 0x80 are word chars. */
+    sptr_t doc_len = sci_msg(sci, SCI_GETLENGTH, 0, 0);
+    sptr_t scan_start = word_start > AC_SCAN_WINDOW
+                      ? word_start - AC_SCAN_WINDOW : 0;
+    sptr_t scan_end   = word_start + AC_SCAN_WINDOW < doc_len
+                      ? word_start + AC_SCAN_WINDOW : doc_len;
+    scan_start = sci_msg(sci, SCI_POSITIONFROMLINE,
+        (uptr_t)sci_msg(sci, SCI_LINEFROMPOSITION, (uptr_t)scan_start, 0), 0);
+    scan_end = sci_msg(sci, SCI_GETLINEENDPOSITION,
+        (uptr_t)sci_msg(sci, SCI_LINEFROMPOSITION, (uptr_t)scan_end, 0), 0);
+    sptr_t scan_len = scan_end - scan_start;
     if (scan_len > 0) {
         char *text = g_malloc((gsize)scan_len + 1);
         Sci_TextRangeFull tr;
-        tr.chrg.cpMin = 0;
-        tr.chrg.cpMax = scan_len;
+        tr.chrg.cpMin = scan_start;
+        tr.chrg.cpMax = scan_end;
         tr.lpstrText  = text;
         sci_msg(sci, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
         text[scan_len] = '\0';
 
         sptr_t i = 0;
         while (i < scan_len && g_tree_nnodes(words) < AC_MAX_WORDS) {
-            while (i < scan_len && !is_word_char(text[i])) i++;
+            while (i < scan_len && !is_word_char((unsigned char)text[i])) i++;
             sptr_t ws = i;
-            while (i < scan_len && is_word_char(text[i])) i++;
+            while (i < scan_len && is_word_char((unsigned char)text[i])) i++;
             int wlen = (int)(i - ws);
             if (wlen > prefix_len &&
                 g_ascii_strncasecmp(text + ws, prefix, (gsize)prefix_len) == 0) {
-                /* Skip the exact region already typed (cursor is in this word) */
-                if (ws <= word_start && (ws + wlen) >= pos) continue;
+                /* Skip the exact region already typed (cursor is in this
+                 * word) — ws is scan-buffer-relative, the caret positions
+                 * are document-relative (GAP-130: the window no longer
+                 * starts at 0). */
+                if (scan_start + ws <= word_start &&
+                    scan_start + ws + wlen >= pos) continue;
                 g_tree_insert(words, g_strndup(text + ws, (gsize)wlen),
                               GINT_TO_POINTER(1));
             }
