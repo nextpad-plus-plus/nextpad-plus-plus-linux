@@ -80,7 +80,14 @@ static void load_plugin(const char *sopath)
     if (s_n_plugins >= MAX_PLUGINS) return;
 
     void *h = dlopen(sopath, RTLD_LAZY | RTLD_LOCAL);
-    if (!h) return;
+    if (!h) {
+        /* Was a silent skip — which hid every real-world failure class
+         * (missing DT_NEEDED lib, symbol mismatch, confinement denial)
+         * behind "the plugin just doesn't appear". One line, no dialog:
+         * a folder of non-plugin .so files must stay non-fatal. */
+        g_message("plugin: dlopen failed for %s: %s", sopath, dlerror());
+        return;
+    }
 
     GetName_t       get_name     = (GetName_t)      dlsym(h, "getName");
     GetFuncsArray_t get_funcs    = (GetFuncsArray_t) dlsym(h, "getFuncsArray");

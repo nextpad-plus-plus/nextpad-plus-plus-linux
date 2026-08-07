@@ -1,0 +1,126 @@
+# snapcraft.yaml — Nextpad++ Snap Store / Ubuntu App Center package.
+#
+# Third distribution channel next to the .deb (apt repo / GitHub) and the
+# .rpm; built from the SAME working tree (which must contain the vendored,
+# patched scintilla/ — it is gitignored, so the snap must be built from a
+# real checkout, not a bare git archive).
+#
+# Build locally (keeps the private source on our machines — do NOT use
+# `snapcraft remote-build`, it uploads the tree to Launchpad). This file
+# lives at snap/snapcraft.yaml (snapcraft's standard location);
+# packaging/snapcraft.yaml is a symlink to it.
+#     snapcraft pack        # LXD route (needs ~2.5 GB free for the container)
+# or, disk-friendly on a 24 GB VM (what we actually use):
+#     sudo mkdir -p /snap/command-chain && sudo chown $USER /snap/command-chain
+#         # ^ one-time: the gnome extension's gpu-wrapper Makefile default
+#         #   target writes there during plain `make` (harmless scratch in
+#         #   container builds where /snap is root-writable; its `make
+#         #   install DESTDIR=…` step is what actually lands in the snap)
+#     rsync the tree (minus build*/, dist/, .git) to a staging dir, then:
+#     snapcraft pack --destructive-mode
+# Test install:
+#     sudo snap install ./nextpad_*.snap --dangerous
+# Publish (stays invisible to App Center until released to "stable"):
+#     snapcraft upload nextpad_*.snap --release=edge
+#
+# Runtime notes:
+#  - The gnome extension supplies GTK4/libadwaita/portals at build AND run
+#    time (gnome platform content snap); we stage only what it lacks:
+#    curl (our HTTP fetches spawn the curl BINARY — the host's is invisible
+#    under strict confinement) and libuchardet0.
+#  - RESOURCES_DIR is baked to /snap/nextpad/current/... — the `current`
+#    symlink is stable across store revisions.
+#  - The update card disables itself inside snaps (updatecheck.c gates on
+#    $SNAP): snapd owns updates here.
+#  - WebKit's bubblewrap sandbox cannot nest inside the snap sandbox; the
+#    markdown preview needs the env below (same variable our headless
+#    tests use).
+name: nextpad
+title: Nextpad++
+summary: Native Linux port of Notepad++
+description: |
+  Nextpad++ is a native Linux port of the Notepad++ text editor, built
+  with GTK4 and the Scintilla editing component.
+
+  Multi-tab editing, full find/replace with regular expressions, split
+  views, side panels (Document List, Function List, Document Map,
+  Workspace, Git), macros, per-language syntax highlighting and User
+  Defined Languages, session persistence, automatic backups, a plugin
+  SDK with a Plugins Admin catalog, and a command palette.
+license: GPL-3.0
+website: https://github.com/nextpad-plus-plus
+issues: https://github.com/nextpad-plus-plus/nextpad-plus-plus-linux/issues
+grade: stable
+confinement: strict
+base: core24
+adopt-info: nextpad          # version is read from src/branding.h below
+
+platforms:
+  amd64:
+  arm64:
+
+# Strict confinement denies owning arbitrary session-bus names; this slot
+# grants ownership of our GApplication id (single-instance + gdbus
+# activation). Without it the app logs "Failed to register … AppArmor
+# policy" on the user bus.
+slots:
+  dbus-nextpad:
+    interface: dbus
+    bus: session
+    name: org.nextpad.NextpadPP
+
+parts:
+  nextpad:
+    plugin: nil
+    source: .
+    build-packages:
+      - build-essential
+      - cmake
+      - pkg-config
+      - libuchardet-dev
+    stage-packages:
+      - curl               # pluginsadmin/updatecheck/udladmin spawn `curl`
+      - libuchardet0
+    override-build: |
+      craftctl set version="$(sed -n 's/#define APP_VERSION *"\(.*\)"/\1/p' src/branding.h)"
+      # Memory-aware job cap (same 500 MB/job rule as tools/make-*.sh).
+      MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+      JOBS=$(nproc); CAP=$(( MEM_MB / 500 )); [ "$CAP" -lt 1 ] && CAP=1
+      [ "$JOBS" -gt "$CAP" ] && JOBS=$CAP
+      # 1. Vendored Scintilla (patched tree ships in the source copy).
+      # The source copy may carry HOST-built objects (same arch, wrong
+      # sysroot — built against host headers, not the gnome SDK): purge
+      # so everything compiles inside the container.
+      find scintilla -name '*.o' -delete
+      rm -f scintilla/bin/libscintilla.so
+      make -C scintilla/gtk4 shared -j"$JOBS"
+      # 2. The app, resources baked to the stable snap path.
+      cmake -B build-snap -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNPP_RES_DIR=/snap/nextpad/current/usr/share/nextpad-plus-plus \
+            -DCMAKE_INSTALL_PREFIX=/usr
+      cmake --build build-snap -j"$JOBS"
+      DESTDIR="$CRAFT_PART_INSTALL" cmake --install build-snap
+      # Snap app commands may not contain '+' — expose the binary under a
+      # clean name (the desktop file's Exec is rewritten by snapcraft).
+      ln -sf 'Nextpad++' "$CRAFT_PART_INSTALL/usr/bin/nextpad"
+      # A bare Icon=name only resolves against the HOST theme (works on our
+      # dev box, missing icon on clean systems) — point it into the snap.
+      sed -i 's|^Icon=.*|Icon=${SNAP}/usr/share/icons/hicolor/512x512/apps/nextpad-plus-plus.png|' \
+          "$CRAFT_PART_INSTALL/usr/share/applications/org.nextpad.NextpadPP.desktop"
+    prime:
+      - -etc/apparmor.d    # deb-only: WebKit userns profile, meaningless in a snap
+
+apps:
+  nextpad:
+    command: usr/bin/nextpad
+    common-id: org.nextpad.NextpadPP
+    desktop: usr/share/applications/org.nextpad.NextpadPP.desktop
+    extensions: [gnome]
+    plugs:
+      - home
+      - network            # Plugins Admin / UDL catalog / (update check is off in snaps)
+      - removable-media
+      - gsettings
+    environment:
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
