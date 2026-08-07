@@ -201,6 +201,11 @@ NppUpdateStatus updatecheck_status(void)
 
 gboolean updatecheck_is_due(void)
 {
+    /* Snap builds never self-check: snapd updates the app from the
+     * store automatically, and our card would point users at .deb/.rpm
+     * downloads they must not layer over a snap install. Inert
+     * everywhere else — $SNAP only exists inside a snap runtime. */
+    if (g_getenv("SNAP")) return FALSE;
     if (!g_prefs.auto_check_updates) return FALSE;
     if (s_in_flight) return FALSE;
     gint64 now = g_get_real_time() / G_USEC_PER_SEC;
