@@ -46,6 +46,17 @@ void theme_apply(ThemeMode mode);
 /* Resolved light/dark after the last theme_apply (GAP-44 UDL blend). */
 gboolean theme_effective_dark(void);
 
+/* Resolve a mode to the concrete dark/light it means right now
+ * (THEME_AUTO probes the desktop color-scheme). */
+gboolean theme_resolve_is_dark(ThemeMode mode);
+
+/* GTK-chrome half of theme_apply, callable before any widget exists
+ * (on_startup): sets gtk-application-prefer-dark-theme AND, when forcing
+ * light while the desktop handed us a "-dark"-suffixed gtk-theme-name
+ * (Yaru-dark & co — their BASE css is dark, so the prefer-dark flag alone
+ * cannot lighten them), swaps gtk-theme-name to the light sibling. */
+void theme_apply_gtk_settings(gboolean dark);
+
 /* Convenience: read mode from g_prefs.appearance. */
 ThemeMode theme_mode_from_prefs(void);
 

@@ -176,22 +176,83 @@ gboolean theme_effective_dark(void)
     return s_effective_dark;
 }
 
+gboolean theme_resolve_is_dark(ThemeMode mode)
+{
+    switch (mode) {
+        case THEME_DARK:  return TRUE;
+        case THEME_LIGHT: return FALSE;
+        case THEME_AUTO:
+        default:          return auto_is_dark();
+    }
+}
+
+/* Does `name` provide a gtk-4.0 stylesheet in any of GTK's theme search
+ * locations? (GTK also accepts gtk.gresource-only themes, but every theme
+ * that ships one — Yaru, Adwaita — ships gtk.css alongside it.) */
+static gboolean theme_css_exists(const char *name)
+{
+    gchar *p = g_build_filename(g_get_user_data_dir(), "themes",
+                                name, "gtk-4.0", "gtk.css", NULL);
+    gboolean ok = g_file_test(p, G_FILE_TEST_EXISTS);
+    g_free(p);
+    if (ok) return TRUE;
+
+    p = g_build_filename(g_get_home_dir(), ".themes",
+                         name, "gtk-4.0", "gtk.css", NULL);
+    ok = g_file_test(p, G_FILE_TEST_EXISTS);
+    g_free(p);
+    if (ok) return TRUE;
+
+    const char *const *dirs = g_get_system_data_dirs();
+    for (int i = 0; dirs && dirs[i]; i++) {
+        p = g_build_filename(dirs[i], "themes",
+                             name, "gtk-4.0", "gtk.css", NULL);
+        ok = g_file_test(p, G_FILE_TEST_EXISTS);
+        g_free(p);
+        if (ok) return TRUE;
+    }
+    return FALSE;
+}
+
+void theme_apply_gtk_settings(gboolean dark)
+{
+    GtkSettings *s = gtk_settings_get_default();
+    if (!s) return;
+
+    /* gtk-application-prefer-dark-theme selects the DARK VARIANT of the
+     * current theme; it cannot select a lighter one. When the desktop is
+     * in dark mode Ubuntu hands GTK "Yaru-dark" as the theme itself, so
+     * forcing Light must also swap gtk-theme-name to the light sibling
+     * ("Yaru-dark" → "Yaru") or menu/status-bar text stays white on our
+     * light chrome. The dark direction needs no name change — the flag
+     * picks the theme's own gtk-dark.css. */
+    if (!dark) {
+        gchar *cur = NULL;
+        g_object_get(s, "gtk-theme-name", &cur, NULL);
+        size_t len = cur ? strlen(cur) : 0;
+        if (len > 5 && g_ascii_strcasecmp(cur + len - 5, "-dark") == 0) {
+            gchar *light = g_strndup(cur, len - 5);
+            /* GTK's built-in "Default" is compiled in — always a safe
+             * light fallback when the stripped sibling isn't installed. */
+            g_object_set(s, "gtk-theme-name",
+                         theme_css_exists(light) ? light : "Default", NULL);
+            g_free(light);
+        }
+        g_free(cur);
+    }
+    g_object_set(s, "gtk-application-prefer-dark-theme", dark, NULL);
+}
+
 void theme_apply(ThemeMode mode)
 {
     /* 1) Resolve effective dark/light. */
-    gboolean dark;
-    switch (mode) {
-        case THEME_DARK:  dark = TRUE;  break;
-        case THEME_LIGHT: dark = FALSE; break;
-        case THEME_AUTO:
-        default:          dark = auto_is_dark(); break;
-    }
+    gboolean dark = theme_resolve_is_dark(mode);
     s_effective_dark = dark;
 
     /* 2) Flip GtkSettings so all GTK chrome (menus, dialogs, scrollbars,
-     *    headerbars, etc.) repaints into the right palette. */
-    GtkSettings *s = gtk_settings_get_default();
-    if (s) g_object_set(s, "gtk-application-prefer-dark-theme", dark, NULL);
+     *    headerbars, etc.) repaints into the right palette — including the
+     *    light-variant gtk-theme-name swap when the desktop theme is dark. */
+    theme_apply_gtk_settings(dark);
 
     /* 3) Load matching Scintilla theme. */
     gboolean theme_loaded = load_theme_for_mode(dark);
@@ -211,6 +272,13 @@ void theme_apply(ThemeMode mode)
 
     /* 6) Keep the Modern appearance CSS (if active) in the right palette. */
     theme_modern_reload();
+
+    /* 7) Refresh the theme-dependent chrome that lives outside this file:
+     *    tab-strip CSS, toolbar icons (icons/dark vs light), tab glyphs.
+     *    All three helpers no-op before their widgets exist, so the
+     *    startup-time call is safe. */
+    extern void main_refresh_theme_chrome(void);
+    main_refresh_theme_chrome();
 }
 
 /* ================================================================== */

@@ -1,4 +1,5 @@
 #include "prefs.h"
+#include "theme.h"
 #include "toolbar.h"
 #include "fileassoc.h"
 #include "gtk_compat.h"
@@ -1396,70 +1397,23 @@ static GtkWidget *page_tab_bar(void)
     return g;
 }
 
-/* Dark Mode radio handlers — three buttons sharing one group. Persist the
- * appearance pref through on_appear's combo path by faking an int and
- * applying directly here (the underlying field is just an int). */
-/* Apply the appearance preference live — no restart needed.
- *   1. Resolve AUTO via desktop color-scheme.
- *   2. Flip GtkSettings/gtk-application-prefer-dark-theme so all GTK
- *      widgets restyle in place.
- *   3. Switch the editor theme to Default vs DarkModeDefault.
- *   4. Re-apply styles to every open Scintilla view.
+/* Dark Mode radio handlers — three buttons sharing one group. All three
+ * route through theme_set_and_apply(), the single seam shared with the
+ * Settings → Appearance menu (it persists the pref and re-applies the
+ * WHOLE appearance: GtkSettings incl. the light-variant theme-name swap,
+ * the user's theme preset, editors, Modern CSS, tab/toolbar chrome).
+ * A local shortcut here once skipped the Modern CSS reload, leaving the
+ * toolbar/tab-strip/status-bar in the old palette until restart.
  * Mirrors macOS _darkModeRadioChanged: at PreferencesWindowController.mm
  * lines 1242-1264.                                                       */
-static void appearance_apply_live(void) {
-    gboolean dark;
-    if (g_prefs.appearance == APPEAR_DARK)       dark = TRUE;
-    else if (g_prefs.appearance == APPEAR_LIGHT) dark = FALSE;
-    else {
-        dark = FALSE;
-        GSettingsSchemaSource *src = g_settings_schema_source_get_default();
-        if (src) {
-            GSettingsSchema *schema = g_settings_schema_source_lookup(
-                src, "org.gnome.desktop.interface", TRUE);
-            if (schema) {
-                if (g_settings_schema_has_key(schema, "color-scheme")) {
-                    GSettings *gs = g_settings_new("org.gnome.desktop.interface");
-                    if (gs) {
-                        gchar *v = g_settings_get_string(gs, "color-scheme");
-                        if (v && strcmp(v, "prefer-dark") == 0) dark = TRUE;
-                        g_free(v); g_object_unref(gs);
-                    }
-                }
-                g_settings_schema_unref(schema);
-            }
-        }
-    }
-    GtkSettings *s = gtk_settings_get_default();
-    if (s) g_object_set(s, "gtk-application-prefer-dark-theme", dark, NULL);
-
-    /* Swap the bundled theme presets so editor colours flip too. */
-    extern void stylestore_load_theme(const char *path);
-    const char *theme_xml = dark
-        ? RESOURCES_DIR "/themes/DarkModeDefault.xml"
-        : NULL;  /* NULL → pristine light default (stylers.model.xml),
-                  * symmetric with Dark loading DarkModeDefault.xml. */
-    stylestore_load_theme(theme_xml);
-
-    /* Re-apply to every open editor view. */
-    extern void editor_reapply_styles(void);
-    editor_reapply_styles();
-
-    /* Reload the tab-strip CSS and the toolbar icons for the new
-     * appearance (toolbar icons come from icons/dark vs icons/light). */
-    extern void main_refresh_theme_chrome(void);
-    main_refresh_theme_chrome();
-}
-
-static void on_dm_auto (GtkToggleButton *b, gpointer d) { (void)d; if (gtk_toggle_button_get_active(b)) { g_prefs.appearance = 0; prefs_save(); appearance_apply_live(); } }
-static void on_dm_light(GtkToggleButton *b, gpointer d) { (void)d; if (gtk_toggle_button_get_active(b)) { g_prefs.appearance = 1; prefs_save(); appearance_apply_live(); } }
-static void on_dm_dark (GtkToggleButton *b, gpointer d) { (void)d; if (gtk_toggle_button_get_active(b)) { g_prefs.appearance = 2; prefs_save(); appearance_apply_live(); } }
+static void on_dm_auto (GtkToggleButton *b, gpointer d) { (void)d; if (gtk_toggle_button_get_active(b)) theme_set_and_apply(THEME_AUTO);  }
+static void on_dm_light(GtkToggleButton *b, gpointer d) { (void)d; if (gtk_toggle_button_get_active(b)) theme_set_and_apply(THEME_LIGHT); }
+static void on_dm_dark (GtkToggleButton *b, gpointer d) { (void)d; if (gtk_toggle_button_get_active(b)) theme_set_and_apply(THEME_DARK);  }
 
 static GtkWidget *page_dark_mode(void)
 {
     /* Dark Mode — 3 radios matching macOS PreferencesWindowController.mm:
-     * 1218 (Auto/Light/Dark). Restart-required on Linux since theme is
-     * decided at gtk_init time via gtk-application-prefer-dark-theme. */
+     * 1218 (Auto/Light/Dark). Applies live via theme_set_and_apply. */
     GtkWidget *g = make_grid();
     int r = 0;
     GtkWidget *header = gtk_label_new(NULL);
@@ -1481,7 +1435,8 @@ static GtkWidget *page_dark_mode(void)
     gtk_grid_attach(GTK_GRID(g), d, 0, r++, 2, 1);
 
     GtkWidget *note = gtk_label_new(
-        "Takes effect on next launch — GTK reads the theme preference at startup.");
+        "Applies immediately. Panels already open keep their old title-bar "
+        "shade until reopened.");
     gtk_widget_set_halign(note, GTK_ALIGN_START);
     gtk_widget_set_margin_top(note, 8);
     gtk_grid_attach(GTK_GRID(g), note, 0, r++, 2, 1);

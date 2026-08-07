@@ -8741,42 +8741,12 @@ static void on_startup(GtkApplication *app, gpointer ud)
      * earlier (in main(), before g_application_run) the GtkSettings
      * singleton doesn't yet exist, so the value never reached the theme
      * subsystem and toolbar.c:is_dark_mode() read FALSE on every launch,
-     * causing icons to load from light/ even in Dark mode. */
-    {
-        GtkSettings *s = gtk_settings_get_default();
-        if (s) {
-            gboolean dark;
-            if (g_prefs.appearance == APPEAR_DARK) {
-                dark = TRUE;
-            } else if (g_prefs.appearance == APPEAR_LIGHT) {
-                dark = FALSE;
-            } else {
-                /* APPEAR_AUTO: probe the desktop color-scheme. */
-                dark = FALSE;
-                GSettingsSchemaSource *src =
-                    g_settings_schema_source_get_default();
-                if (src) {
-                    GSettingsSchema *schema = g_settings_schema_source_lookup(
-                        src, "org.gnome.desktop.interface", TRUE);
-                    if (schema) {
-                        if (g_settings_schema_has_key(schema, "color-scheme")) {
-                            GSettings *gs = g_settings_new(
-                                "org.gnome.desktop.interface");
-                            if (gs) {
-                                gchar *v = g_settings_get_string(gs, "color-scheme");
-                                if (v && strcmp(v, "prefer-dark") == 0)
-                                    dark = TRUE;
-                                g_free(v);
-                                g_object_unref(gs);
-                            }
-                        }
-                        g_settings_schema_unref(schema);
-                    }
-                }
-            }
-            g_object_set(s, "gtk-application-prefer-dark-theme", dark, NULL);
-        }
-    }
+     * causing icons to load from light/ even in Dark mode. The theme.c
+     * helper also swaps a "-dark"-suffixed desktop gtk-theme-name for its
+     * light sibling when the user forces Light — the prefer-dark flag
+     * alone cannot lighten Yaru-dark (its BASE css is dark), which left
+     * menu/status-bar text white on light chrome. */
+    theme_apply_gtk_settings(theme_resolve_is_dark(theme_mode_from_prefs()));
 
     /* Actions + accelerators. Recordable menu commands go through the
      * macro-recording wrapper (GAP-20). */
