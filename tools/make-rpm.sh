@@ -91,6 +91,9 @@ Summary:        Multi-tab text editor (Linux port of Notepad++)
 License:        GPL-3.0-or-later
 URL:            https://nextpad.org
 BuildArch:      $ARCH
+# curl: ALL remote fetches (plugin catalog, UDL installs, update check)
+# spawn the curl binary — invisible to elfdeps, absent on stock desktops.
+Requires:       curl
 # unzip: Plugins Admin archive extraction. git: the Git side panel.
 Recommends:     unzip
 Recommends:     git

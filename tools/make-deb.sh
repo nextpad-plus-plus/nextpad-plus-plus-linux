@@ -71,7 +71,8 @@ Section: editors
 Priority: optional
 Architecture: $ARCH
 Maintainer: Andrew Letov <aletik@gmail.com>
-Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libstdc++6, libc6
+Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libstdc++6, libc6, curl
+Recommends: unzip, git
 Recommends: unzip, git
 Description: Multi-tab text editor (Linux port of Notepad++)
  Nextpad++ is a native Linux port of the Notepad++ text editor, built on

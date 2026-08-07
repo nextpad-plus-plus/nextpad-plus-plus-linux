@@ -80,6 +80,8 @@ parts:
       - libuchardet-dev
     stage-packages:
       - curl               # pluginsadmin/updatecheck/udladmin spawn `curl`
+      - unzip              # Plugins Admin archive extraction
+      - git                # Git side panel
       - libuchardet0
     override-build: |
       craftctl set version="$(sed -n 's/#define APP_VERSION *"\(.*\)"/\1/p' src/branding.h)"
