@@ -611,8 +611,9 @@ static void action_quit(GSimpleAction *a, GVariant *p, gpointer ud) {
         gboolean maxim = gtk_window_is_maximized(GTK_WINDOW(g_window));
         session_stash_geometry(ww, wh, wx, wy, maxim);
     }
-    /* P3 — only persist the session when the pref allows it. */
-    if (g_prefs.remember_session && !g_cli_nosession)
+    /* P3 — only persist the session when the pref allows it (GAP-132:
+     * one seam shared with the window-close route and editor.c). */
+    if (session_persistence_enabled())
         session_save();
     /* GAP-82/83 — final width/float capture + freeze, so teardown
      * hide-signals can't clobber the saved panel state. */
@@ -8259,8 +8260,11 @@ static gboolean on_window_delete(GtkWindow *w, gpointer ud)
         session_stash_geometry(ww, wh, wx, wy, maxim);
     }
     /* Capture session before tabs start closing so paths + caret positions
-     * are still readable. session_save() silently skips Untitled docs. */
-    if (!g_cli_nosession)
+     * are still readable. session_save() silently skips Untitled docs.
+     * GAP-132 — gate on the pref exactly like action_quit: this route
+     * previously checked only -nosession, so closing via the WM ✕ with
+     * "Remember session" OFF overwrote the stored session.xml. */
+    if (session_persistence_enabled())
         session_save();
     /* GAP-82/83 — final width/float capture + freeze (this quit route
      * never ran prefs_save at all before; the freeze writes config). */
@@ -8937,7 +8941,7 @@ static void on_activate(GtkApplication *app, gpointer ud)
         /* P3 — restore previous session only when the pref allows it.
          * session_restore() already silently skips missing files; the
          * keep_absent_session pref is honored inside session.c. */
-        if (g_prefs.remember_session && !g_cli_nosession)
+        if (session_persistence_enabled())
             session_restore();
         cli_apply_window_flags();                    /* GAP-109 */
     }

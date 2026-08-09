@@ -13,6 +13,13 @@ void session_restore(void);
 void session_restore_from(const char *path);
 void session_set_disabled(gboolean d);
 
+/* GAP-132 — the macOS sessionPersistenceEnabled seam: TRUE when the
+ * AUTOMATIC exit-path session handling should run (pref ON and -nosession
+ * absent). Gates the quit/close saves in main.c and the snapshot-vs-prompt
+ * decision in editor_close_all_quit. Explicit saves (File ▸ Save Session…,
+ * NPPM_SAVECURRENTSESSION & co) deliberately don't consult it. */
+gboolean session_persistence_enabled(void);
+
 /* Read the saved main-window frame from session.xml without opening any
  * tabs. Returns FALSE if no session file or no frame element. */
 gboolean session_get_saved_geometry(int *width, int *height,

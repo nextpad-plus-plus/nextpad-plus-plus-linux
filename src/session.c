@@ -173,6 +173,21 @@ static gboolean session_wants_doc(NppDoc *d)
 static gboolean s_session_disabled;
 void session_set_disabled(gboolean d) { s_session_disabled = d; }
 
+/* GAP-132 — TRUE once the AUTOMATIC (default-file) restore of this run
+ * actually reopened at least one document. Feeds the empty-session
+ * preserve guard in session_save() below; an -openSession restore does
+ * NOT count (it read a different file than the one the guard protects). */
+static gboolean s_did_restore;
+
+/* GAP-132 — macOS sessionPersistenceEnabled (MainWindowController.mm:11543):
+ * remember-session pref ON and -nosession absent. The single seam for the
+ * automatic exit-path decisions; keeps main.c's two quit routes and
+ * editor_close_all_quit from re-deriving (and diverging on) the rule. */
+gboolean session_persistence_enabled(void)
+{
+    return g_prefs.remember_session && !s_session_disabled;
+}
+
 void session_save(void)
 {
     if (s_session_disabled) return;
@@ -184,17 +199,32 @@ void session_save(void)
     GPtrArray *docs = editor_all_docs();
     NppDoc *active_doc = editor_current_doc();
 
-    int active_saved = 0;
-    {
-        int emitted = 0;
-        for (guint i = 0; i < docs->len; i++) {
-            NppDoc *d = g_ptr_array_index(docs, i);
-            if (!session_wants_doc(d)) continue;
-            if (d == active_doc) { active_saved = emitted; break; }
-            emitted++;
-        }
-        /* active doc not in the saved subset → clamp to 0 (handled by
-         * restore's bounds check anyway). */
+    int active_saved = 0;   /* active doc not in the saved subset → 0
+                             * (handled by restore's bounds check anyway) */
+    int emitted_total = 0;
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (!session_wants_doc(d)) continue;
+        if (d == active_doc) active_saved = emitted_total;
+        emitted_total++;
+    }
+
+    /* GAP-132 — empty-session preserve guard (macOS issue #87, refined —
+     * MainWindowController.mm:4610-4622). Original case: pref toggled OFF,
+     * quit (save skipped), relaunch to one empty untitled tab, pref back
+     * ON, quit — without the guard that empty quit wipes the prior
+     * session. Refinement: if THIS run actually restored the session, an
+     * empty save means the user deliberately closed everything — honor it.
+     *   s_did_restore | emitted_total==0 → action
+     *   ──────────────┼──────────────────────────────
+     *   TRUE          | write the empty session (user's close persists)
+     *   FALSE         | return — preserve the prior session.xml
+     * Returning here also skips backup_quarantine_stale(): with zero
+     * emitted docs the active set is empty, so the sweep would quarantine
+     * EVERY snapshot the preserved session still references. */
+    if (emitted_total == 0 && !s_did_restore) {
+        g_ptr_array_free(docs, TRUE);
+        return;
     }
 
     GString *xml = g_string_new(
@@ -221,8 +251,13 @@ void session_save(void)
         if (!session_wants_doc(doc)) continue;
 
         ScintillaObject *s = SCINTILLA(doc->sci);
-        sptr_t startPos     = scintilla_send_message(s, SCI_GETSELECTIONSTART, 0, 0);
-        sptr_t endPos       = scintilla_send_message(s, SCI_GETSELECTIONEND,   0, 0);
+        /* GAP-132c — Windows/macOS session format: startPos is the ANCHOR
+         * and endPos the CARET (MainWindowController.mm:4553-4554), so a
+         * backward selection records startPos > endPos and the direction
+         * survives the round-trip. The old GETSELECTIONSTART/END pair
+         * normalised the order and lost it. */
+        sptr_t startPos     = scintilla_send_message(s, SCI_GETANCHOR,     0, 0);
+        sptr_t endPos       = scintilla_send_message(s, SCI_GETCURRENTPOS, 0, 0);
         sptr_t selMode      = scintilla_send_message(s, SCI_GETSELECTIONMODE,  0, 0);
         sptr_t first_line   = scintilla_send_message(s, SCI_GETFIRSTVISIBLELINE,0, 0);
         sptr_t xoffset      = scintilla_send_message(s, SCI_GETXOFFSET,        0, 0);
@@ -600,7 +635,13 @@ void session_restore_from(const char *path)
             scintilla_send_message(s, SCI_SETXOFFSET,         (uptr_t)e->xoffset, 0);
             if (e->scroll_width > 0)
                 scintilla_send_message(s, SCI_SETSCROLLWIDTH, (uptr_t)e->scroll_width, 0);
-            if (e->start_pos >= 0 && e->end_pos >= e->start_pos) {
+            /* GAP-132c — startPos=anchor, endPos=caret (Windows format);
+             * a backward selection has endPos < startPos and SCI_SETSEL
+             * (anchor, caret) handles either order. The old
+             * `end >= start` requirement silently DROPPED backward
+             * selections, leaving the caret at 0. Old Linux sessions
+             * (always start <= end) still restore identically. */
+            if (e->start_pos >= 0 && e->end_pos >= 0) {
                 scintilla_send_message(s, SCI_SETSELECTIONMODE, (uptr_t)e->sel_mode, 0);
                 scintilla_send_message(s, SCI_SETSEL, (uptr_t)e->start_pos, (sptr_t)e->end_pos);
             }
@@ -650,6 +691,14 @@ void session_restore_from(const char *path)
         GtkWidget *nb = editor_get_notebook();
         gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), last_page);
     }
+
+    /* GAP-132 — arm the empty-session guard: the DEFAULT session was
+     * genuinely restored this run, so a later save of zero docs means the
+     * user closed everything on purpose. Explicit -openSession restores
+     * (path != NULL) leave the guard armed in preserve mode. */
+    if (!path && restored > 0)
+        s_did_restore = TRUE;
+
     g_free(st.entries);
 }
 

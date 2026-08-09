@@ -3619,7 +3619,14 @@ void editor_close_all_quit(GApplication *app)
 {
     GPtrArray *docs = editor_all_docs();
 
-    if (g_prefs.remember_session) {
+    /* GAP-132 — decide via the shared sessionPersistenceEnabled seam, not
+     * the raw pref: under -nosession the session is never written, so the
+     * old `remember_session`-only check took the snapshot-silently branch
+     * and quit — the snapshots were orphaned and the user's edits silently
+     * lost. -nosession now prompts, exactly like pref-OFF (and macOS,
+     * whose sessionPersistenceEnabled includes cliParams.noSession). */
+    extern gboolean session_persistence_enabled(void);
+    if (session_persistence_enabled()) {
         /* Session ON — do NOT prompt for unsaved changes on quit.
          * Snapshot every dirty document to the backup dir and record
          * the backupFilePath in session.xml; next launch reloads the
