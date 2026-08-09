@@ -1946,6 +1946,283 @@ void editor_auto_insert_on_char(GtkWidget *sci, int ch)
     g_array_append_val(ai_track(sci), t);
 }
 
+/* ================================================================== */
+/* GAP-133 — maintainIndentation (macOS EditorView.mm:4690-4920 /      */
+/* Windows NPP maintainIndentation), replacing the old inline block    */
+/* whose advanced gate `auto_indent >= AUTO_INDENT_BASIC + 1` (== 3)   */
+/* could never match a legal mode (0/1/2) — every setting, including   */
+/* the DEFAULT Advanced, silently degraded to copy-previous-indent.    */
+/* ================================================================== */
+
+#ifndef SCE_P_OPERATOR
+#define SCE_P_OPERATOR 10        /* Python lexer operator style */
+#endif
+
+/* Languages that get brace/condition-aware advanced indent — macOS
+ * _cLikeLanguages() verbatim; the keys are the GAP-112 canonical
+ * language names carried in "npp-lang" (incl. the "javascript" session
+ * alias next to "javascript.js"). UDL and unlisted languages fall
+ * through to the basic copy-previous-indent path. */
+static gboolean indent_lang_is_clike(const char *lang)
+{
+    static const char *const k[] = {
+        "c", "cpp", "objc", "cs", "java",
+        "javascript", "javascript.js", "typescript", "swift", "go", "rust",
+        "php", "jsp", "css", "perl", "powershell",
+        "json", "json5", "d", "actionscript", "rc", NULL
+    };
+    if (!lang || !*lang) return FALSE;
+    for (int i = 0; k[i]; i++)
+        if (g_ascii_strcasecmp(lang, k[i]) == 0) return TRUE;
+    return FALSE;
+}
+
+/* Deliberate divergence from macOS: both line probes below run GRegex
+ * on the raw line bytes instead of SCI_SEARCHINTARGET. That keeps the
+ * result independent of the session's regex backend (SCFIND_POSIX vs
+ * CXX11 vs Boost — GAP-140) AND avoids clobbering the user's
+ * SETTARGETRANGE/SETSEARCHFLAGS state mid-keystroke, which the macOS
+ * implementation silently does. Patterns and accept rules are copied
+ * exactly; PCRE and std::regex agree on leftmost-first alternation for
+ * these expressions. */
+
+/* macOS _isConditionExprLine: the FIRST match of the alternation must
+ * end exactly at the line end (their `end == endPos` check). */
+static gboolean indent_line_is_condition(GtkWidget *sci, Sci_Position line)
+{
+    if (line < 0 || line >= (Sci_Position)sci_msg(sci, SCI_GETLINECOUNT, 0, 0))
+        return FALSE;
+    Sci_Position s = (Sci_Position)sci_msg(sci, SCI_POSITIONFROMLINE,   (uptr_t)line, 0);
+    Sci_Position e = (Sci_Position)sci_msg(sci, SCI_GETLINEENDPOSITION, (uptr_t)line, 0);
+    if (s >= e) return FALSE;
+
+    static GRegex *rx;
+    if (!rx)
+        rx = g_regex_new(
+            "((else[ \\t]+)?if|for|while)[ \\t]*\\(.*\\)[ \\t]*|else[ \\t]*",
+            G_REGEX_RAW, 0, NULL);
+
+    const char *doc = (const char *)sci_msg(sci, SCI_GETCHARACTERPOINTER, 0, 0);
+    if (!doc || !rx) return FALSE;
+
+    GMatchInfo *mi = NULL;
+    gboolean hit = FALSE;
+    if (g_regex_match_full(rx, doc + s, (gssize)(e - s), 0, 0, &mi, NULL)) {
+        gint mstart = 0, mend = 0;
+        if (g_match_info_fetch_pos(mi, 0, &mstart, &mend))
+            hit = (mend == (gint)(e - s));
+    }
+    if (mi) g_match_info_free(mi);
+    return hit;
+}
+
+/* macOS _findMatchedBraceFrom: style-blind backward balance scan.
+ * Deliberately NOT SCI_BRACEMATCH — the freshly typed '}' may be
+ * unstyled and BRACEMATCH requires style equality. Zero-copy via the
+ * character pointer so the worst case (no match in a huge file) is one
+ * message + a memory scan, not millions of GETCHARAT round-trips. */
+static Sci_Position indent_find_open_brace(GtkWidget *sci, Sci_Position from)
+{
+    if (from < 0) return -1;
+    const char *doc = (const char *)sci_msg(sci, SCI_GETCHARACTERPOINTER, 0, 0);
+    if (!doc) return -1;
+    int balance = 0;
+    for (Sci_Position i = from; i >= 0; i--) {
+        char c = doc[i];
+        if (c == '{') {
+            if (balance == 0) return i;
+            balance--;
+        } else if (c == '}') {
+            balance++;
+        }
+    }
+    return -1;
+}
+
+/* macOS _maintainIndentCLike. */
+static void maintain_indent_clike(GtkWidget *sci, Sci_Position cur_line,
+                                  Sci_Position prev_line, int indent_prev,
+                                  int tab_w, int eol_mode)
+{
+    Sci_Position cur_pos  = (Sci_Position)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
+    Sci_Position prev_pos = cur_pos - (eol_mode == SC_EOL_CRLF ? 3 : 2);
+    char prev_ch = prev_pos >= 0
+        ? (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)prev_pos, 0) : 0;
+    char next_ch = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)cur_pos, 0);
+
+    if (prev_ch == '{') {
+        if (next_ch == '}') {
+            /* Enter between { and } — insert a third line so the closer
+             * gets its own row at the parent's indent, then indent the
+             * middle line one level deeper (caret ends up there). */
+            const char *eol = (eol_mode == SC_EOL_CRLF) ? "\r\n"
+                            : (eol_mode == SC_EOL_LF)   ? "\n" : "\r";
+            sci_msg(sci, SCI_INSERTTEXT, (uptr_t)cur_pos, (sptr_t)eol);
+            sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)(cur_line + 1),
+                    (sptr_t)indent_prev);
+        }
+        sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line,
+                (sptr_t)(indent_prev + tab_w));
+    } else if (next_ch == '{') {
+        /* Caret sits before an opening brace — keep the parent indent. */
+        sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line,
+                (sptr_t)indent_prev);
+    } else if (indent_line_is_condition(sci, prev_line)) {
+        /* Braceless if/for/while/else — one extra level. */
+        sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line,
+                (sptr_t)(indent_prev + tab_w));
+    } else {
+        if (indent_prev > 0) {
+            /* Two lines up was a braceless condition → its single
+             * statement just ended; de-indent back out. */
+            if (prev_line > 0 && indent_line_is_condition(sci, prev_line - 1))
+                sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line,
+                        (sptr_t)MAX(0, indent_prev - tab_w));
+            else
+                sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line,
+                        (sptr_t)indent_prev);
+        }
+    }
+
+    Sci_Position np = (Sci_Position)sci_msg(sci, SCI_GETLINEINDENTPOSITION,
+                                            (uptr_t)cur_line, 0);
+    sci_msg(sci, SCI_GOTOPOS, (uptr_t)np, 0);
+}
+
+/* macOS _maintainIndentPython: previous line ends in `:` (optionally
+ * followed by whitespace/comment) AND that colon carries the OPERATOR
+ * style — a colon inside a string or comment must not indent. */
+static void maintain_indent_python(GtkWidget *sci, Sci_Position cur_line,
+                                   Sci_Position prev_line, int indent_prev,
+                                   int tab_w)
+{
+    if (prev_line >= 0) {
+        Sci_Position s = (Sci_Position)sci_msg(sci, SCI_POSITIONFROMLINE,   (uptr_t)prev_line, 0);
+        Sci_Position e = (Sci_Position)sci_msg(sci, SCI_GETLINEENDPOSITION, (uptr_t)prev_line, 0);
+        if (s < e) {
+            static GRegex *rx;
+            if (!rx) rx = g_regex_new(":[ \\t]*(#|$)", G_REGEX_RAW, 0, NULL);
+            const char *doc = (const char *)sci_msg(sci, SCI_GETCHARACTERPOINTER, 0, 0);
+            GMatchInfo *mi = NULL;
+            if (doc && rx &&
+                g_regex_match_full(rx, doc + s, (gssize)(e - s), 0, 0, &mi, NULL)) {
+                gint mstart = 0, mend = 0;
+                if (g_match_info_fetch_pos(mi, 0, &mstart, &mend)) {
+                    sptr_t style = sci_msg(sci, SCI_GETSTYLEAT,
+                                           (uptr_t)(s + mstart), 0);
+                    if (style == SCE_P_OPERATOR) {
+                        g_match_info_free(mi);
+                        sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line,
+                                (sptr_t)(indent_prev + tab_w));
+                        Sci_Position np = (Sci_Position)sci_msg(sci,
+                            SCI_GETLINEINDENTPOSITION, (uptr_t)cur_line, 0);
+                        sci_msg(sci, SCI_GOTOPOS, (uptr_t)np, 0);
+                        return;
+                    }
+                }
+            }
+            if (mi) g_match_info_free(mi);
+        }
+    }
+
+    if (indent_prev > 0) {
+        sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line, (sptr_t)indent_prev);
+        Sci_Position np = (Sci_Position)sci_msg(sci, SCI_GETLINEINDENTPOSITION,
+                                                (uptr_t)cur_line, 0);
+        sci_msg(sci, SCI_GOTOPOS, (uptr_t)np, 0);
+    }
+}
+
+/* macOS _maintainIndentation — the SCN_CHARADDED entry point. */
+static void maintain_indentation(GtkWidget *sci, int ch)
+{
+    /* Skip during macro recording/playback (Windows rule): the recorded
+     * macro replays the indentation edits itself; re-applying them here
+     * would double-indent. */
+    if (macro_is_recording() || macro_is_playing()) return;
+    if (g_prefs.auto_indent == AUTO_INDENT_NONE) return;
+
+    int eol_mode = (int)sci_msg(sci, SCI_GETEOLMODE, 0, 0);
+    Sci_Position cur_pos  = (Sci_Position)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
+    Sci_Position cur_line = (Sci_Position)sci_msg(sci, SCI_LINEFROMPOSITION,
+                                                  (uptr_t)cur_pos, 0);
+    int tab_w = (int)sci_msg(sci, SCI_GETTABWIDTH, 0, 0);
+    if (tab_w < 1) tab_w = 4;
+
+    const char *lang = (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
+    if (!lang) lang = "";
+    gboolean advanced = (g_prefs.auto_indent == AUTO_INDENT_ADVANCED);
+    gboolean clike    = indent_lang_is_clike(lang);
+
+    /* EOL-mode-aware newline detection (macOS 4767): under CRLF the
+     * handler sees BOTH '\r' and '\n' — act on '\n' only, or every
+     * Enter would double-process. */
+    gboolean is_newline =
+        ((eol_mode == SC_EOL_CRLF || eol_mode == SC_EOL_LF) && ch == '\n') ||
+        (eol_mode == SC_EOL_CR && ch == '\r');
+
+    if (!is_newline) {
+        /* '}' typed as the first non-whitespace of its line (advanced,
+         * C-like): re-align the line to the matching '{' line's indent
+         * and park the caret after the brace. */
+        if (advanced && clike && ch == '}') {
+            Sci_Position line_start = (Sci_Position)sci_msg(sci,
+                SCI_POSITIONFROMLINE, (uptr_t)cur_line, 0);
+            const char *doc = (const char *)sci_msg(sci,
+                SCI_GETCHARACTERPOINTER, 0, 0);
+            if (!doc) return;
+            for (Sci_Position i = cur_pos - 2; i >= line_start; i--)
+                if (doc[i] != ' ' && doc[i] != '\t') return;
+
+            Sci_Position match = indent_find_open_brace(
+                sci, cur_pos >= 2 ? cur_pos - 2 : 0);
+            if (match < 0) return;
+            Sci_Position mline = (Sci_Position)sci_msg(sci,
+                SCI_LINEFROMPOSITION, (uptr_t)match, 0);
+            if (mline == cur_line) return;
+            sptr_t mindent = sci_msg(sci, SCI_GETLINEINDENTATION,
+                                     (uptr_t)mline, 0);
+            sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line, mindent);
+            Sci_Position np = (Sci_Position)sci_msg(sci,
+                SCI_GETLINEINDENTPOSITION, (uptr_t)cur_line, 0);
+            sci_msg(sci, SCI_GOTOPOS, (uptr_t)(np + 1), 0);
+        }
+        return;
+    }
+
+    Sci_Position prev_line = cur_line - 1;
+    if (prev_line < 0) return;
+
+    /* Enter pressed on an empty line — don't indent the new one
+     * (macOS 4805; their subsequent scan-back-for-non-empty loop is
+     * unreachable behind this return and is omitted). */
+    Sci_Position ps = (Sci_Position)sci_msg(sci, SCI_POSITIONFROMLINE,   (uptr_t)prev_line, 0);
+    Sci_Position pe = (Sci_Position)sci_msg(sci, SCI_GETLINEENDPOSITION, (uptr_t)prev_line, 0);
+    if (pe - ps == 0) return;
+
+    int indent_prev = (int)sci_msg(sci, SCI_GETLINEINDENTATION,
+                                   (uptr_t)prev_line, 0);
+
+    if (advanced && clike) {
+        maintain_indent_clike(sci, cur_line, prev_line, indent_prev,
+                              tab_w, eol_mode);
+        return;
+    }
+    if (advanced && g_ascii_strcasecmp(lang, "python") == 0) {
+        maintain_indent_python(sci, cur_line, prev_line, indent_prev, tab_w);
+        return;
+    }
+
+    /* Basic mode — and the advanced fallback for every other language:
+     * copy the previous line's indentation. */
+    if (indent_prev > 0) {
+        sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line, (sptr_t)indent_prev);
+        Sci_Position np = (Sci_Position)sci_msg(sci, SCI_GETLINEINDENTPOSITION,
+                                                (uptr_t)cur_line, 0);
+        sci_msg(sci, SCI_GOTOPOS, (uptr_t)np, 0);
+    }
+}
+
 static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
 {
     (void)data;
@@ -2068,44 +2345,10 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         /* Auto-Insert matched pairs + html/xml close tag (GAP-12,
          * macOS efbb0a7 / Windows AutoCompletion::insertMatchedChars). */
         editor_auto_insert_on_char(sci, n->ch);
-        if (g_prefs.auto_indent != AUTO_INDENT_NONE && (n->ch == '\n' || n->ch == '\r')) {
-            Sci_Position cur_line = (Sci_Position)sci_msg(sci, SCI_LINEFROMPOSITION,
-                (uptr_t)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0), 0);
-            Sci_Position prev_line = cur_line - 1;
-            if (prev_line < 0) return;
-
-            int indent = (int)sci_msg(sci, SCI_GETLINEINDENTATION, (uptr_t)prev_line, 0);
-            int tab_w  = (int)sci_msg(sci, SCI_GETTABWIDTH, 0, 0);
-            if (tab_w < 1) tab_w = 4;
-
-            if (g_prefs.auto_indent >= AUTO_INDENT_BASIC + 1) {
-                /* Advanced: look at the last non-whitespace char of prev line */
-                Sci_Position line_start = (Sci_Position)sci_msg(sci,
-                    SCI_POSITIONFROMLINE, (uptr_t)prev_line, 0);
-                Sci_Position line_end   = (Sci_Position)sci_msg(sci,
-                    SCI_GETLINEENDPOSITION, (uptr_t)prev_line, 0);
-                char last_ch = 0;
-                for (Sci_Position p = line_end - 1; p >= line_start; p--) {
-                    char c = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)p, 0);
-                    if (c != ' ' && c != '\t') { last_ch = c; break; }
-                }
-                if (last_ch == '{' || last_ch == ':')
-                    indent += tab_w;
-
-                /* If the new line (being typed) starts with '}', dedent it */
-                Sci_Position cur_start = (Sci_Position)sci_msg(sci,
-                    SCI_POSITIONFROMLINE, (uptr_t)cur_line, 0);
-                char first_ch = (char)sci_msg(sci, SCI_GETCHARAT, (uptr_t)cur_start, 0);
-                if (first_ch == '}' && indent >= tab_w)
-                    indent -= tab_w;
-            }
-
-            sci_msg(sci, SCI_SETLINEINDENTATION, (uptr_t)cur_line, (sptr_t)indent);
-            /* Move caret to end of new indentation */
-            Sci_Position new_pos = (Sci_Position)sci_msg(sci,
-                SCI_GETLINEINDENTPOSITION, (uptr_t)cur_line, 0);
-            sci_msg(sci, SCI_SETSEL, (uptr_t)new_pos, (sptr_t)new_pos);
-        }
+        /* GAP-133 — full maintainIndentation port (see the block above
+         * on_sci_notify); also handles '}' re-align, so it runs for
+         * every added char, not just newlines. */
+        maintain_indentation(sci, n->ch);
     } else if (code == SCN_MODIFIED &&
                (n->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
         auto_insert_track_modified(sci,
