@@ -22,4 +22,14 @@ void project_close(void);
 /* Create a new empty project (shows save dialog for name). */
 void project_new(void);
 
+/* GAP-136 — Find in Projects accessors (macOS ProjectPanel parity).
+ * has_content: SAVED workspace with ≥1 file (macOS rule).
+ * file_paths:  every NK_FILE path in the workspace tree; caller frees
+ *              the returned GPtrArray (elements freed by its g_free
+ *              free-func).
+ * file:        the .workspace path, or NULL while unsaved. */
+gboolean    project_workspace_has_content(int idx);
+GPtrArray  *project_workspace_file_paths(int idx);
+const char *project_workspace_file(int idx);
+
 #endif /* PROJECT_H */

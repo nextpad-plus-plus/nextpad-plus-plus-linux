@@ -50,6 +50,7 @@
 #include "branding.h"
 #include "editor.h"
 #include "macrobatch.h"
+#include "find_window.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -792,6 +793,19 @@ void project_close(void)
 /* ------------------------------------------------------------------ */
 
 static void ctx_add_project   (GtkButton *m, gpointer u) { (void)m;(void)u; add_project();     }
+
+/* GAP-136 — macOS _findInProjects: (ProjectPanel.mm:950): open Find in
+ * Files at the workspace file's directory, or home while unsaved. */
+static void ctx_find_in_projects(GtkButton *m, gpointer u)
+{
+    (void)m; (void)u;
+    Workspace *w = cur();
+    gchar *dir = (w->file_path && *w->file_path)
+                 ? g_path_get_dirname(w->file_path) : NULL;
+    find_window_show_fif_dir(s_window ? GTK_WINDOW(s_window) : NULL,
+                             dir ? dir : g_get_home_dir());
+    g_free(dir);
+}
 static void ctx_add_folder    (GtkButton *m, gpointer u) { (void)m;(void)u; add_folder();      }
 static void ctx_add_files     (GtkButton *m, gpointer u) { (void)m;(void)u; add_files();       }
 static void ctx_add_files_dir (GtkButton *m, gpointer u) { (void)m;(void)u; add_files_from_dir(); }
@@ -904,6 +918,10 @@ void on_project_tree_button_press(GtkGestureClick *gesture, int n_press,
         menu_add(menu, "Save As…",         G_CALLBACK(ctx_save_as_ws));
         menu_add(menu, NULL, NULL);
         menu_add(menu, "Add New Project",  G_CALLBACK(ctx_add_project));
+        menu_add(menu, NULL, NULL);
+        /* GAP-136 — macOS ProjectPanel.mm:607: delegates to Find in
+         * Files at the workspace file's directory. */
+        menu_add(menu, "Find in Projects…", G_CALLBACK(ctx_find_in_projects));
     } else if (k == NK_PROJECT || k == NK_FOLDER) {
         /* Project / Folder menu — matches macOS ProjectPanel.mm:582-600. */
         menu_add(menu, "Move Up",                   G_CALLBACK(ctx_move_up));
@@ -1036,4 +1054,54 @@ void project_set_visible(gboolean v)
 gboolean project_is_visible(void)
 {
     return s_panel && gtk_widget_get_visible(s_panel);
+}
+
+/* ------------------------------------------------------------------ */
+/* GAP-136 — Find in Projects accessors (macOS ProjectPanel            */
+/* workspaceHasContent: / allFilePathsFromWorkspace:)                  */
+/* ------------------------------------------------------------------ */
+
+static void collect_file_paths(GtkTreeModel *m, GtkTreeIter *iter,
+                               GPtrArray *out)
+{
+    do {
+        int   kind = 0;
+        char *path = NULL;
+        gtk_tree_model_get(m, iter, COL_KIND, &kind, COL_PATH, &path, -1);
+        if (kind == NK_FILE && path && *path)
+            g_ptr_array_add(out, g_strdup(path));
+        g_free(path);
+        GtkTreeIter child;
+        if (gtk_tree_model_iter_children(m, &child, iter))
+            collect_file_paths(m, &child, out);
+    } while (gtk_tree_model_iter_next(m, iter));
+}
+
+GPtrArray *project_workspace_file_paths(int idx)
+{
+    GPtrArray *out = g_ptr_array_new_with_free_func(g_free);
+    if (idx < 0 || idx >= PROJ_N || !s_ws[idx].store) return out;
+    GtkTreeModel *m = GTK_TREE_MODEL(s_ws[idx].store);
+    GtkTreeIter it;
+    if (gtk_tree_model_get_iter_first(m, &it))
+        collect_file_paths(m, &it, out);
+    return out;
+}
+
+gboolean project_workspace_has_content(int idx)
+{
+    /* macOS rule (ProjectPanel.mm workspaceHasContent:): a SAVED
+     * workspace (filePath set) with at least one file. */
+    if (idx < 0 || idx >= PROJ_N) return FALSE;
+    if (!s_ws[idx].file_path || !*s_ws[idx].file_path) return FALSE;
+    GPtrArray *p = project_workspace_file_paths(idx);
+    gboolean any = p->len > 0;
+    g_ptr_array_free(p, TRUE);
+    return any;
+}
+
+const char *project_workspace_file(int idx)
+{
+    if (idx < 0 || idx >= PROJ_N) return NULL;
+    return s_ws[idx].file_path;
 }

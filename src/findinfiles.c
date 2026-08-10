@@ -39,6 +39,8 @@ typedef struct {
     GPtrArray *hits;
     int        file_count;
     char      *needle;
+    FifSearchDone done;       /* GAP-136: optional completion status cb */
+    gpointer      done_user;
 } FifResult;
 
 static void fif_hit_free(gpointer p)
@@ -81,6 +83,11 @@ typedef struct {
     gboolean  whole_word;
     gboolean  subdirs;
     int       mode;        /* 0=Normal 1=Extended 2=Regex (GAP-122) */
+    GPtrArray *paths;      /* GAP-136: explicit file list (owned; char*).
+                              Non-NULL → iterate it instead of walking
+                              `directory` (which is then unused). */
+    FifSearchDone on_search_done;   /* GAP-136: optional, main thread */
+    gpointer      on_search_done_user;
     GPtrArray *hits;       /* output: array of FifHit* */
     int        file_count; /* output */
     /* ── Replace in Files (GAP-122) ── */
@@ -273,6 +280,25 @@ static void replace_file(const char *filepath, FifJob *job, GRegex *regex)
     g_free(contents);
 }
 
+/* GAP-136 — explicit-list traversal shared by search and replace (the
+ * macOS findInFilePaths shape). The filter applies per basename exactly
+ * like the directory walk; beyond that, files the user listed in a
+ * project are taken as-is — no hidden-file skip, an explicitly added
+ * dotfile is intentional. Vanished files are skipped silently (macOS:
+ * unreadable → continue). */
+static void walk_paths(FifJob *job, GRegex *regex,
+                       void (*per_file)(const char *, FifJob *, GRegex *))
+{
+    for (guint i = 0; i < job->paths->len; i++) {
+        const char *p = g_ptr_array_index(job->paths, i);
+        if (!p || !g_file_test(p, G_FILE_TEST_IS_REGULAR)) continue;
+        gchar *base = g_path_get_basename(p);
+        gboolean pass = name_matches_filter(base, job->filter);
+        g_free(base);
+        if (pass) per_file(p, job, regex);
+    }
+}
+
 static void replace_dir(const char *dirpath, FifJob *job, GRegex *regex)
 {
     GDir *dir = g_dir_open(dirpath, 0, NULL);
@@ -298,6 +324,7 @@ static gboolean replace_done_idle(gpointer data)
         job->on_done(job->total_replacements, job->changed_files,
                      job->write_failures, job->on_done_user);
     g_ptr_array_free(job->write_failures, TRUE);
+    if (job->paths) g_ptr_array_free(job->paths, TRUE);
     g_free(job->needle); g_free(job->replacement);
     g_free(job->directory); g_free(job->filter);
     g_free(job);
@@ -310,7 +337,8 @@ static gpointer replace_thread(gpointer data)
     GError *err = NULL;
     GRegex *regex = fif_build_regex(job, &err);
     if (regex) {
-        replace_dir(job->directory, job, regex);
+        if (job->paths) walk_paths(job, regex, replace_file);   /* GAP-136 */
+        else            replace_dir(job->directory, job, regex);
         g_regex_unref(regex);
     } else if (err) {
         g_ptr_array_add(job->write_failures,
@@ -329,7 +357,8 @@ static gpointer search_thread(gpointer data)
     GRegex *regex = fif_build_regex(job, &err);
 
     if (regex) {
-        search_dir(job->directory, job, regex);
+        if (job->paths) walk_paths(job, regex, search_file);    /* GAP-136 */
+        else            search_dir(job->directory, job, regex);
         g_regex_unref(regex);
     } else if (err) {
         g_error_free(err);
@@ -339,7 +368,10 @@ static gpointer search_thread(gpointer data)
     res->hits       = job->hits;
     res->file_count = job->file_count;
     res->needle     = g_strdup(job->needle); /* copy before freeing job */
+    res->done       = job->on_search_done;
+    res->done_user  = job->on_search_done_user;
 
+    if (job->paths) g_ptr_array_free(job->paths, TRUE);
     g_free(job->needle);
     g_free(job->directory);
     g_free(job->filter);
@@ -373,6 +405,7 @@ static gboolean post_results(gpointer data)
          * what was searched. */
         searchresults_begin(res->needle);
         searchresults_end(0, res->file_count);
+        if (res->done) res->done(0, 0, res->done_user);   /* GAP-136 */
         g_ptr_array_unref(res->hits);
         g_free(res->needle);
         g_free(res);
@@ -459,6 +492,9 @@ static gboolean post_results(gpointer data)
                  res->file_count, res->file_count == 1 ? "" : "s");
         gtk_label_set_text(GTK_LABEL(s_status_lbl), status);
     }
+
+    if (res->done)                                        /* GAP-136 */
+        res->done((int)res->hits->len, res->file_count, res->done_user);
 
     g_ptr_array_unref(res->hits);
     g_free(res->needle);
@@ -699,6 +735,30 @@ void findinfiles_run(const char *needle, const char *directory,
     g_thread_new("fif-search", search_thread, job);
 }
 
+/* GAP-136 — Find in Projects: same worker over an explicit file list. */
+void findinfiles_run_paths(const char *needle, GPtrArray *paths,
+                           const char *filter, gboolean match_case,
+                           gboolean whole_word, int mode,
+                           FifSearchDone done, gpointer user)
+{
+    if (!needle || !*needle || !paths) {
+        if (paths) g_ptr_array_free(paths, TRUE);
+        return;
+    }
+    FifJob *job      = g_new0(FifJob, 1);
+    job->needle      = g_strdup(needle);
+    job->paths       = paths;                  /* ownership transferred */
+    job->filter      = g_strdup((filter && *filter) ? filter : "*.*");
+    job->match_case  = match_case;
+    job->whole_word  = whole_word;
+    job->mode        = mode;
+    job->on_search_done      = done;
+    job->on_search_done_user = user;
+    job->hits        = g_ptr_array_new_with_free_func(fif_hit_free);
+    job->file_count  = 0;
+    g_thread_new("fip-search", search_thread, job);
+}
+
 void findinfiles_replace_run(const char *needle, const char *replacement,
                              const char *directory, const char *filter,
                              gboolean match_case, gboolean whole_word,
@@ -728,4 +788,37 @@ void findinfiles_replace_run(const char *needle, const char *replacement,
         free(r);
     }
     g_thread_new("fif-replace", replace_thread, job);
+}
+
+/* GAP-136 — Replace in Projects: same one-shot engine (atomic writes,
+ * no-op skip, mode preservation, capped failures) over the file list. */
+void findinfiles_replace_run_paths(const char *needle,
+                                   const char *replacement,
+                                   GPtrArray *paths, const char *filter,
+                                   gboolean match_case, gboolean whole_word,
+                                   int mode,
+                                   FifReplaceDone done, gpointer user)
+{
+    if (!needle || !*needle || !paths) {
+        if (paths) g_ptr_array_free(paths, TRUE);
+        return;
+    }
+    FifJob *job      = g_new0(FifJob, 1);
+    job->needle      = g_strdup(needle);
+    job->replacement = g_strdup(replacement ? replacement : "");
+    job->paths       = paths;                  /* ownership transferred */
+    job->filter      = g_strdup((filter && *filter) ? filter : "*.*");
+    job->match_case  = match_case;
+    job->whole_word  = whole_word;
+    job->mode        = mode;
+    job->write_failures = g_ptr_array_new_with_free_func(g_free);
+    job->on_done     = done;
+    job->on_done_user = user;
+    if (mode == 1) {
+        char *r = findreplace_expand_extended(job->replacement);
+        g_free(job->replacement);
+        job->replacement = g_strdup(r);
+        free(r);
+    }
+    g_thread_new("fip-replace", replace_thread, job);
 }

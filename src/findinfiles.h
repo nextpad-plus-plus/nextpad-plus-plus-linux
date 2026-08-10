@@ -35,4 +35,26 @@ void findinfiles_replace_run(const char *needle, const char *replacement,
                              int mode, gboolean subdirs,
                              FifReplaceDone done, gpointer user);
 
+/* GAP-136 — Find/Replace in Projects: the same engine over an EXPLICIT
+ * file list instead of a directory walk (macOS SearchEngine
+ * findInFilePaths:, the "sister function" of findInDirectory:).
+ * `paths` is a GPtrArray of char* the callee TAKES OWNERSHIP of (freed
+ * with its g_free free-func after the worker finishes). The filter is
+ * applied per basename exactly like the directory walk; results feed
+ * the shared Search Results panel. `done` (optional) fires on the main
+ * thread with (total_hits, files_with_hits) so the caller can post the
+ * macOS-style "Find in Projects: N hit(s) in M file(s)." status. */
+typedef void (*FifSearchDone)(int total_hits, int files_with_hits,
+                              gpointer user);
+void findinfiles_run_paths(const char *needle, GPtrArray *paths,
+                           const char *filter, gboolean match_case,
+                           gboolean whole_word, int mode,
+                           FifSearchDone done, gpointer user);
+void findinfiles_replace_run_paths(const char *needle,
+                                   const char *replacement,
+                                   GPtrArray *paths, const char *filter,
+                                   gboolean match_case, gboolean whole_word,
+                                   int mode,
+                                   FifReplaceDone done, gpointer user);
+
 #endif /* FINDINFILES_H */

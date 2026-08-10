@@ -17,4 +17,8 @@ typedef enum {
 
 void find_window_show(GtkWindow *parent, FwTab tab, const char *initial_text);
 
+/* GAP-136 — open on the Find in Files tab with `dir` pre-filled (the
+ * Project panel's "Find in Projects…" context item). */
+void find_window_show_fif_dir(GtkWindow *parent, const char *dir);
+
 #endif
