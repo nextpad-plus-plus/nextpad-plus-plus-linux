@@ -266,11 +266,31 @@ install(CODE "
 install(FILES "${SCI_SO}" DESTINATION lib/nextpad-plus-plus)
 # Install the contents of resources/ directly under .../nextpad-plus-plus
 # so the tree matches RESOURCES_DIR (= NPP_RES_DIR) baked into the binary.
+# GAP-137 — ALLOW-list, not a deny-list. The shipped payload is exactly
+# three file types (.png icons, .xml configs/themes/parsers, the single
+# udl-ac-index.json), so matching those three keeps every future stray
+# out of the package by construction. A deny-list would have to be
+# updated every time something new lands in the tree — which is exactly
+# how the 1.1.0 packages ended up carrying ~3.2 MB of dead weight
+# (a 2.8 MB scratch icons.zip, 14 .DS_Store, and the macOS bundle
+# artifacts npp.icns / Info.plist / entitlements.plist /
+# en.lproj/InfoPlist.strings, all of which have no Linux consumer).
+# The macOS dmg-background images are .png, so they need naming
+# explicitly; the same goes for directories, which FILES_MATCHING does
+# not filter.
 install(DIRECTORY resources/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nextpad-plus-plus
+        # FILES_MATCHING must precede every PATTERN (CMake requirement).
+        FILES_MATCHING
+        PATTERN "*.png"
+        PATTERN "*.xml"
+        PATTERN "*.json"
         PATTERN ".git" EXCLUDE
         # The hicolor tree is installed separately under share/icons/hicolor
         # for the system icon theme; don't duplicate it here.
-        PATTERN "icons/hicolor" EXCLUDE)
+        PATTERN "icons/hicolor" EXCLUDE
+        PATTERN "en.lproj" EXCLUDE          # macOS bundle strings
+        PATTERN "tmp" EXCLUDE               # scratch dirs never ship
+        PATTERN "dmg-background*" EXCLUDE)  # macOS installer artwork (.png)
 
 install(FILES packaging/nextpad-plus-plus.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
