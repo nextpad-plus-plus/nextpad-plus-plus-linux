@@ -23,7 +23,7 @@
 
 #define SCFIND_WHOLEWORD        0x2
 #define SCFIND_REGEXP           0x00200000
-#define SCFIND_POSIX            0x00400000
+#define SCFIND_CXX11REGEX       0x00800000
 
 /* ------------------------------------------------------------------ */
 /* Module state                                                        */
@@ -64,9 +64,12 @@ static sptr_t sci_msg(GtkWidget *sci, unsigned int m, uptr_t w, sptr_t l)
     return scintilla_send_message(SCINTILLA(sci), m, w, l);
 }
 
-/* Expand extended escape sequences: \n \r \t \0 \xNN.
- * Exported (findreplace_expand_extended) for Replace in Files (GAP-122),
- * which shares the Extended-mode semantics of this window. */
+/* Expand extended escape sequences: \n \r \t \0 \\ \xNN (\XNN).
+ * Mirrors macOS SearchEngine.mm expandExtendedString byte-for-byte:
+ * \\ collapses to one backslash, \x/\X take exactly two hex digits and
+ * stay literal when the digits are missing or invalid; any other escape
+ * passes through unchanged. Exported (findreplace_expand_extended) for
+ * Find/Replace in Files (GAP-122), which shares Extended semantics. */
 char *findreplace_expand_extended(const char *s);
 static char *expand_extended(const char *s);
 char *findreplace_expand_extended(const char *s) { return expand_extended(s); }
@@ -77,27 +80,30 @@ static char *expand_extended(const char *s)
     size_t j   = 0;
     for (size_t i = 0; i < len; i++) {
         if (s[i] == '\\' && i + 1 < len) {
-            i++;
-            switch (s[i]) {
-            case 'n': out[j++] = '\n'; break;
-            case 'r': out[j++] = '\r'; break;
-            case 't': out[j++] = '\t'; break;
-            case '0': out[j++] = '\0'; break;
-            case 'x':
-                if (i + 2 < len) {
-                    char hex[3] = {s[i+1], s[i+2], 0};
-                    out[j++] = (char)strtol(hex, NULL, 16);
-                    i += 2;
+            char next = s[i + 1];
+            switch (next) {
+            case 'n':  out[j++] = '\n'; i++; continue;
+            case 'r':  out[j++] = '\r'; i++; continue;
+            case 't':  out[j++] = '\t'; i++; continue;
+            case '0':  out[j++] = '\0'; i++; continue;
+            case '\\': out[j++] = '\\'; i++; continue;
+            case 'x': case 'X':
+                if (i + 3 < len) {
+                    char hex[3] = {s[i+2], s[i+3], 0};
+                    char *end   = NULL;
+                    long val    = strtol(hex, &end, 16);
+                    if (end == hex + 2) {
+                        out[j++] = (char)val;
+                        i += 3;
+                        continue;
+                    }
                 }
                 break;
             default:
-                out[j++] = '\\';
-                out[j++] = s[i];
                 break;
             }
-        } else {
-            out[j++] = s[i];
         }
+        out[j++] = s[i];
     }
     out[j] = '\0';
     return out;
@@ -119,7 +125,12 @@ static int build_flags(gboolean match_case, gboolean whole_word, SearchMode mode
     int flags = 0;
     if (match_case) flags |= SCFIND_MATCHCASE;
     if (whole_word && mode != MODE_REGEX) flags |= SCFIND_WHOLEWORD;
-    if (mode == MODE_REGEX) flags |= SCFIND_REGEXP | SCFIND_POSIX;
+    /* SCFIND_CXX11REGEX, never SCFIND_POSIX (macOS SearchEngine.mm issue
+     * #108): POSIX selects Scintilla's RESearch engine, which lacks `|`,
+     * lookaheads, non-capturing groups and `\b`/`\d`/`\w`. Our SCI_OWNREGEX
+     * backend (patch 0005) ignores both bits, but the flag word is visible
+     * to macro recording and plugins, so keep it dialect-truthful. */
+    if (mode == MODE_REGEX) flags |= SCFIND_REGEXP | SCFIND_CXX11REGEX;
     return flags;
 }
 
