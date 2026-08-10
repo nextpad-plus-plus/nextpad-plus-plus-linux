@@ -128,6 +128,7 @@ NppPrefs g_prefs = {
     .ai_dquotes              = FALSE,
     .ai_html                 = FALSE,
     .smart_highlight         = TRUE,
+    .funclist_use_xml        = TRUE,    /* macOS default — kPrefFuncListUseXML=YES */
     .smart_hilite_case       = FALSE,
     .smart_hilite_word       = FALSE,   /* Q-align: macOS default */
     .virtual_space           = FALSE,
@@ -393,6 +394,7 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "disableTextDragDrop"))g_prefs.disable_text_drag_drop = is_yes(val);
         else if (!strcmp(attr, "spellCheck"))         g_prefs.spell_check            = is_yes(val);
         else if (!strcmp(attr, "panelKeepState"))     g_prefs.panel_keep_state       = is_yes(val);
+        else if (!strcmp(attr, "funcListUseXML"))     g_prefs.funclist_use_xml       = is_yes(val);
         else if (!strcmp(attr, "fileStatusAutoDetection"))  g_prefs.file_auto_detect     = is_yes(val);
         else if (!strcmp(attr, "fileStatusUpdateSilently")) g_prefs.file_update_silently = is_yes(val);
     }
@@ -835,13 +837,15 @@ g_prefs.tab_max_label_width,
         g_free(lang_esc);
     }
 
-    /* MISC */
+    /* MISC — funcListUseXML is a REAL pref now (GAP-135); it used to be
+     * written as a hardcoded "yes" with no engine behind it. */
     g_string_append_printf(b,
         "        <GUIConfig name=\"MISC\" muteSounds=\"%s\" disableTextDragDrop=\"%s\" "
-        "spellCheck=\"%s\" panelKeepState=\"%s\" funcListUseXML=\"yes\" "
+        "spellCheck=\"%s\" panelKeepState=\"%s\" funcListUseXML=\"%s\" "
         "fileStatusAutoDetection=\"%s\" fileStatusUpdateSilently=\"%s\" />\n",
         b2yn(g_prefs.mute_sounds), b2yn(g_prefs.disable_text_drag_drop),
         b2yn(g_prefs.spell_check), b2yn(g_prefs.panel_keep_state),
+        b2yn(g_prefs.funclist_use_xml),
         b2yn(g_prefs.file_auto_detect), b2yn(g_prefs.file_update_silently));
 
     /* GAP-82/83 — panel persistence (panelstate.c formats; plain
@@ -1125,6 +1129,9 @@ CHK(ai_html,           ai_html,                    (void)0)
 /* GAP-134 — apply live on every open editor (re-mark, or clear when just
  * disabled) instead of waiting for each tab's next selection change. */
 extern void main_smarthighlight_refresh_all(void);
+/* GAP-135 — re-parse the visible Function List with the new engine. */
+extern void funclist_reparse_current(void);
+CHK(funclist_xml,      funclist_use_xml,           funclist_reparse_current())
 CHK(smart_hilite,      smart_highlight,            main_smarthighlight_refresh_all())
 CHK(smart_case,        smart_hilite_case,          main_smarthighlight_refresh_all())
 CHK(smart_word,        smart_hilite_word,          main_smarthighlight_refresh_all())
@@ -1510,6 +1517,8 @@ static GtkWidget *page_misc(void)
     make_check(g, r++, "Reverse default date/time order",        g_prefs.date_time_reverse,     G_CALLBACK(on_date_reverse));
     make_check(g, r++, "Keep absent file entries in session",    g_prefs.keep_absent_session,   G_CALLBACK(on_keep_absent));
     make_check(g, r++, "Remember panel visibility across sessions", g_prefs.panel_keep_state,   G_CALLBACK(on_panel_keep));
+    /* GAP-135 — label matches macOS (.mm:3072) for locale-string reuse. */
+    make_check(g, r++, "Use XML-based function list parsers",    g_prefs.funclist_use_xml,      G_CALLBACK(on_funclist_xml));
 
     GtkWidget *tb = gtk_combo_box_text_new();
     /* 6-step % scale matching macOS PreferencesWindowController.mm:1656.

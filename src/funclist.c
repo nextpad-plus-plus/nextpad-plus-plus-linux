@@ -1,6 +1,8 @@
 #include "funclist.h"
+#include "funclist_xml.h"
 #include "gtk_compat.h"
 #include "editor.h"
+#include "prefs.h"
 #include "sci_c.h"
 #include <gtk/gtk.h>
 #include <string.h>
@@ -248,25 +250,73 @@ static GtkTreeIter *get_global(void)
 /* Parse and populate the tree                                        */
 /* ------------------------------------------------------------------ */
 
+/* GAP-135 — populate the store from the XML engine's item tree (classes
+ * as root nodes with leaf children; ungrouped functions as root leaves —
+ * exactly the macOS _rootItems shape; no "(Global)" wrapper here). */
+static void populate_from_xml_items(GPtrArray *items)
+{
+    for (guint i = 0; i < items->len; i++) {
+        FlXmlItem *it = g_ptr_array_index(items, i);
+        GtkTreeIter iter;
+        gtk_tree_store_append(s_store, &iter, NULL);
+        gtk_tree_store_set(s_store, &iter,
+                           COL_LINE, it->line,
+                           COL_NAME, it->name,
+                           COL_ICON, it->is_node ? s_icon_node : s_icon_leaf,
+                           -1);
+        if (!it->children) continue;
+        for (guint k = 0; k < it->children->len; k++) {
+            FlXmlItem *ch = g_ptr_array_index(it->children, k);
+            GtkTreeIter leaf;
+            gtk_tree_store_append(s_store, &leaf, &iter);
+            gtk_tree_store_set(s_store, &leaf,
+                               COL_LINE, ch->line,
+                               COL_NAME, ch->name,
+                               COL_ICON, s_icon_leaf,
+                               -1);
+        }
+    }
+}
+
 static void do_parse(GtkWidget *sci)
 {
     if (!s_store || !sci) return;
 
     /* Determine language */
     const char *lang = (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
-    CompiledPat *pat = find_pattern(lang);
 
     /* Clear tree */
     gtk_tree_store_clear(s_store);
     s_global_valid = FALSE;
-
-    if (!pat) return; /* unsupported language — leave tree empty */
 
     /* Fetch full document text */
     int total = (int)scintilla_send_message(SCINTILLA(sci), SCI_GETLENGTH, 0, 0);
     if (total <= 0) return;
     char *text = g_malloc(total + 1);
     scintilla_send_message(SCINTILLA(sci), SCI_GETTEXT, (uptr_t)(total + 1), (sptr_t)text);
+
+    /* GAP-135 — XML parser engine first (macOS _scanText order: XML when
+     * the pref allows, hardcoded regex fallback otherwise). A successful
+     * XML parse with zero matches is still final — that language HAS a
+     * parser; the fallback must not second-guess it. UDL buffers carry
+     * "udl:<name>" in npp-lang; macOS uses the bare UDL name, so strip
+     * the prefix to keep the functionList/<name>.xml convention (and the
+     * UDL-Admin / hand-dropped parser files) portable between the ports. */
+    const char *xml_lang = (lang && g_str_has_prefix(lang, "udl:"))
+                           ? lang + 4 : lang;
+    if (g_prefs.funclist_use_xml && xml_lang && *xml_lang) {
+        GPtrArray *items = NULL;
+        if (flxml_scan(text, total, xml_lang, &items)) {
+            populate_from_xml_items(items);
+            flxml_items_free(items);
+            g_free(text);
+            gtk_tree_view_expand_all(GTK_TREE_VIEW(s_tree));
+            return;
+        }
+    }
+
+    CompiledPat *pat = find_pattern(lang);
+    if (!pat) { g_free(text); return; } /* unsupported — leave tree empty */
 
     /* State */
     int          brace_depth    = 0;
@@ -603,6 +653,14 @@ void funclist_update(GtkWidget *sci)
     s_pending_sci = sci;
     if (s_timer) { g_source_remove(s_timer); s_timer = 0; }
     do_parse(sci);
+}
+
+/* GAP-135 — prefs live-apply hook: re-parse the active document when the
+ * "Use XML-based function list parsers" checkbox flips. */
+void funclist_reparse_current(void)
+{
+    NppDoc *doc = editor_current_doc();
+    if (doc) funclist_update(doc->sci);
 }
 
 void funclist_schedule_update(GtkWidget *sci)

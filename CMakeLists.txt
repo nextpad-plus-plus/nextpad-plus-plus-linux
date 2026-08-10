@@ -154,6 +154,7 @@ set(APP_SRCS
     # G8 — side panels
     "${SRC}/docmap.c"
     "${SRC}/funclist.c"
+    "${SRC}/funclist_xml.c"
     "${SRC}/workspace.c"
     "${SRC}/searchresults.c"
     "${SRC}/charpanel.c"

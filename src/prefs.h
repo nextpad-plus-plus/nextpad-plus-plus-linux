@@ -116,6 +116,7 @@ typedef struct {
     gboolean remember_session;        /* default TRUE */
     gboolean keep_absent_session;     /* default FALSE */
     gboolean panel_keep_state;        /* default TRUE */
+    gboolean funclist_use_xml;        /* GAP-135 — XML function-list parsers; default TRUE (macOS kPrefFuncListUseXML) */
     /* GAP-82/83 — side-panel persistence (panelstate.c owns the
      * formats; prefs.c only loads/stores the raw strings). */
     char     open_side_panels[256];   /* "doclist funclist:popped" */
