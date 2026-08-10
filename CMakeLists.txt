@@ -269,15 +269,11 @@ install(FILES "${SCI_SO}" DESTINATION lib/nextpad-plus-plus)
 # GAP-137 — ALLOW-list, not a deny-list. The shipped payload is exactly
 # three file types (.png icons, .xml configs/themes/parsers, the single
 # udl-ac-index.json), so matching those three keeps every future stray
-# out of the package by construction. A deny-list would have to be
-# updated every time something new lands in the tree — which is exactly
-# how the 1.1.0 packages ended up carrying ~3.2 MB of dead weight
-# (a 2.8 MB scratch icons.zip, 14 .DS_Store, and the macOS bundle
-# artifacts npp.icns / Info.plist / entitlements.plist /
-# en.lproj/InfoPlist.strings, all of which have no Linux consumer).
-# The macOS dmg-background images are .png, so they need naming
-# explicitly; the same goes for directories, which FILES_MATCHING does
-# not filter.
+# out of the package by construction; a deny-list would need updating
+# every time something new lands in the tree, which is how the 1.1.0
+# packages ended up carrying ~3 MB of dead weight. The EXCLUDEs below
+# cover what an allow-list cannot: directories (FILES_MATCHING filters
+# files only) and macOS artwork that happens to be .png.
 install(DIRECTORY resources/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nextpad-plus-plus
         # FILES_MATCHING must precede every PATTERN (CMake requirement).
         FILES_MATCHING
