@@ -1682,6 +1682,7 @@
 				<Item id="90221" name="ലോക്ക് ചെയ്ത ആട്രിബ്യൂട്ട് (macOS)"/>
 				<Item id="90222" name="അപ്‌ഡേറ്റുകൾക്കായി പരിശോധിക്കുക…"/>
 				<Item id="90223" name="ഈയിടെ തുറക്കുക"/>
+				<Item id="90226" name="സഹായം"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

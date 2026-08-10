@@ -1438,6 +1438,11 @@ Beranduago mezu hau Hobespenak ataletik berriz aktibatu dezakezu."/>
 				<Item id="90221" name="Blokeatutako atributua (macOS)"/>
 				<Item id="90222" name="Egiaztatu eguneratzeak..."/>
 				<Item id="90223" name="Ireki Berriak"/>
+				<Item id="90226" name="Laguntza"/>
+				<Item id="90250" name="Fitxategi-elkarketak zure erakundeak kudeatzen ditu."/>
+				<Item id="90251" name="macOS-en berrespenaren zain…"/>
+				<Item id="90252" name="macOS-ek ez du aldaketa aplikatu."/>
+				<Item id="90253" name="Erregistratuta"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox><!-- $INT_REPLACE$ is a place holder, don't translate it -->

@@ -1682,6 +1682,7 @@
 				<Item id="90221" name="تړل شوی خاصیت (macOS)"/>
 				<Item id="90222" name="د تازه معلوماتو لپاره وګورئ ..."/>
 				<Item id="90223" name="وروستی خلاص کړئ"/>
+				<Item id="90226" name="مرسته"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

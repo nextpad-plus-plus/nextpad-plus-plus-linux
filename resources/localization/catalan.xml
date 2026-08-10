@@ -1197,6 +1197,11 @@ By Hiro5 <groccat at gmail>
 				<Item id="90221" name="Atribut bloquejat (macOS)"/>
 				<Item id="90222" name="Comproveu si hi ha actualitzacions..."/>
 				<Item id="90223" name="Obre Recent"/>
+				<Item id="90226" name="Ajuda"/>
+				<Item id="90250" name="Les associacions de fitxers les gestiona la vostra organització."/>
+				<Item id="90251" name="S'està esperant la confirmació del macOS…"/>
+				<Item id="90252" name="El macOS no ha aplicat el canvi."/>
+				<Item id="90253" name="Registrades"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

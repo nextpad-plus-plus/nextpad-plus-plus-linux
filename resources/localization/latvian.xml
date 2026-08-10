@@ -1056,6 +1056,11 @@
 				<Item id="90221" name="Bloķēts atribūts (macOS)"/>
 				<Item id="90222" name="Pārbaudiet atjauninājumus…"/>
 				<Item id="90223" name="Atveriet jaunākos"/>
+				<Item id="90226" name="Palīdzība"/>
+				<Item id="90250" name="Failu asociācijas pārvalda jūsu organizācija."/>
+				<Item id="90251" name="Gaida macOS apstiprinājumu…"/>
+				<Item id="90252" name="macOS nepiemēroja izmaiņas."/>
+				<Item id="90253" name="Reģistrētie"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

@@ -1284,6 +1284,7 @@ You can define several column markers by using white space to separate the diffe
 				<Item id="90221" name="Tréith faoi Ghlas (macOS)"/>
 				<Item id="90222" name="Seiceáil le haghaidh Nuashonruithe…"/>
 				<Item id="90223" name="Oscail Le Déanaí"/>
+				<Item id="90226" name="Cabhair"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox><!-- $INT_REPLACE$ is a place holder, don't translate it -->

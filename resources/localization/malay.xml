@@ -707,6 +707,11 @@ Desc: Malay translation for Nextpad++
 				<Item id="90221" name="Atribut Terkunci (macOS)"/>
 				<Item id="90222" name="Semak Kemas Kini…"/>
 				<Item id="90223" name="Buka Baru-baru ini"/>
+				<Item id="90226" name="Bantuan"/>
+				<Item id="90250" name="Perkaitan fail diuruskan oleh organisasi anda."/>
+				<Item id="90251" name="Menunggu pengesahan macOS…"/>
+				<Item id="90252" name="macOS tidak menggunakan perubahan itu."/>
+				<Item id="90253" name="Berdaftar"/>
 			</MacStrings>
 		</Dialog>
 	</Native-Langue>

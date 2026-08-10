@@ -1352,6 +1352,11 @@
 				<Item id="90221" name="Κλειδωμένο χαρακτηριστικό (macOS)"/>
 				<Item id="90222" name="Ελέγξτε για ενημερώσεις…"/>
 				<Item id="90223" name="Ανοίξτε Πρόσφατα"/>
+				<Item id="90226" name="Βοήθεια"/>
+				<Item id="90250" name="Οι συσχετίσεις αρχείων διαχειρίζονται από τον οργανισμό σας."/>
+				<Item id="90251" name="Αναμονή επιβεβαίωσης από το macOS…"/>
+				<Item id="90252" name="Το macOS δεν εφάρμοσε την αλλαγή."/>
+				<Item id="90253" name="Καταχωρημένες"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox><!-- $INT_REPLACE$ is a place holder, don't translate it -->

@@ -1697,6 +1697,11 @@ Ovaj dijalog možete kasnije ponovo aktivirati u Postavkama."/>
 				<Item id="90221" name="Zaključani atribut (macOS)"/>
 				<Item id="90222" name="Provjeri ažuriranja…"/>
 				<Item id="90223" name="Otvorite Nedavno"/>
+				<Item id="90226" name="Pomoć"/>
+				<Item id="90250" name="Pridruživanjima datoteka upravlja vaša organizacija."/>
+				<Item id="90251" name="Čekanje potvrde sustava macOS…"/>
+				<Item id="90252" name="macOS nije primijenio promjenu."/>
+				<Item id="90253" name="Registrirane"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

@@ -1691,6 +1691,11 @@ Diese Wahl kann jederzeit in den Einstellungen angepasst werden."/>
 				<Item id="90221" name="Gesperrtes Attribut (macOS)"/>
 				<Item id="90222" name="Nach Updates suchen…"/>
 				<Item id="90223" name="Zuletzt geöffnet"/>
+				<Item id="90226" name="Hilfe"/>
+				<Item id="90250" name="Dateiverknüpfungen werden von Ihrer Organisation verwaltet."/>
+				<Item id="90251" name="Warten auf Bestätigung durch macOS…"/>
+				<Item id="90252" name="macOS hat die Änderung nicht übernommen."/>
+				<Item id="90253" name="Registriert"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

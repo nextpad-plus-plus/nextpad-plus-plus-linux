@@ -1674,6 +1674,11 @@ Vous pourrez réactiver cette boîte de dialogue dans les Préférences ultérie
 				<Item id="90221" name="Attribut verrouillé (macOS)"/>
 				<Item id="90222" name="Vérifier les mises à jour…"/>
 				<Item id="90223" name="Ouvrir Récent"/>
+				<Item id="90226" name="Aide"/>
+				<Item id="90250" name="Les associations de fichiers sont gérées par votre organisation."/>
+				<Item id="90251" name="En attente de la confirmation de macOS…"/>
+				<Item id="90252" name="macOS n'a pas appliqué la modification."/>
+				<Item id="90253" name="Enregistrées"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

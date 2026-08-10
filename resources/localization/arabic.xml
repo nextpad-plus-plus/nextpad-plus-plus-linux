@@ -1219,6 +1219,11 @@
 				<Item id="90221" name="السمة المقفلة (macOS)"/>
 				<Item id="90222" name="التحقق من وجود تحديثات…"/>
 				<Item id="90223" name="افتح الأخيرة"/>
+				<Item id="90226" name="مساعدة"/>
+				<Item id="90250" name="ارتباطات الملفات تُدار من قبل مؤسستك."/>
+				<Item id="90251" name="في انتظار تأكيد macOS…"/>
+				<Item id="90252" name="لم يطبّق macOS التغيير."/>
+				<Item id="90253" name="المسجّلة"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox><!-- $INT_REPLACE$ is a place holder, don't translate it -->

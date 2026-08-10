@@ -1683,8 +1683,34 @@ You can re-activate this dialog in Preferences later."/>
 				<Item id="90221" name="Locked Attribute (macOS)"/>
 				<Item id="90222" name="Check for Updates…"/>
 				<Item id="90223" name="Open Recent"/>
+				<Item id="90226" name="Help"/>
 				<Item id="90227" name="Stage Failed"/>
 				<Item id="90228" name="Unstage Failed"/>
+				<Item id="90229" name="is available"/>
+				<Item id="90230" name="You're running"/>
+				<Item id="90231" name="Never remind me again"/>
+				<Item id="90232" name="Updates"/>
+				<Item id="90233" name="Automatically check for updates"/>
+				<Item id="90234" name="Automatic update checks are off."/>
+				<Item id="90235" name="Last checked:"/>
+				<Item id="90236" name="No internet connection."/>
+				<Item id="90237" name="Unexpected response from the update server."/>
+				<Item id="90238" name="No published release was found."/>
+				<Item id="90239" name="The update server is temporarily unavailable. Please try again later."/>
+				<Item id="90240" name="The update server refused the request. A proxy, firewall or VPN may be blocking access to GitHub."/>
+				<Item id="90241" name="Too many update checks from your network (this limit is shared by everyone on it). Try again after"/>
+				<Item id="90242" name="Too many update checks from your network (this limit is shared by everyone on it). Please try again later."/>
+				<Item id="90243" name="The update server returned status"/>
+				<Item id="90244" name="Try Again"/>
+				<Item id="90245" name="Print text size:"/>
+				<Item id="90246" name="Use screen zoom"/>
+				<Item id="90247" name="Actual size"/>
+				<Item id="90248" name="Some files could not be replaced"/>
+				<Item id="90249" name="...and %lu more"/>
+				<Item id="90250" name="File associations are managed by your organization."/>
+				<Item id="90251" name="Waiting for macOS to confirm…"/>
+				<Item id="90252" name="macOS did not apply the change."/>
+				<Item id="90253" name="Registered"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

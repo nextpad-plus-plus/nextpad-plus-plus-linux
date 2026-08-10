@@ -1492,6 +1492,11 @@ The comments are here for explanation, it's not necessary to translate them.
 				<Item id="90221" name="Заблакіраваны атрыбут (macOS)"/>
 				<Item id="90222" name="Праверце абнаўленні…"/>
 				<Item id="90223" name="Адкрыйце Апошнія"/>
+				<Item id="90226" name="Дапамога"/>
+				<Item id="90250" name="Асацыяцыямі файлаў кіруе ваша арганізацыя."/>
+				<Item id="90251" name="Чаканне пацвярджэння macOS…"/>
+				<Item id="90252" name="macOS не ўжыла змену."/>
+				<Item id="90253" name="Зарэгістраваныя"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox><!-- $INT_REPLACE$ is a place holder, don't translate it -->

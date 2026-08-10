@@ -1682,6 +1682,11 @@ You can re-activate this dialog in Preferences later."/>
 				<Item id="90221" name="Locked Attribute (macOS)"/>
 				<Item id="90222" name="Check for Updates…"/>
 				<Item id="90223" name="Open Recent"/>
+				<Item id="90226" name="Help"/>
+				<Item id="90250" name="File associations are managed by your organization."/>
+				<Item id="90251" name="Waiting for macOS to confirm…"/>
+				<Item id="90252" name="macOS did not apply the change."/>
+				<Item id="90253" name="Registered"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

@@ -1680,6 +1680,11 @@ Pode reactivalo en Preferencias se o desexa."/>
 				<Item id="90221" name="Atributo bloqueado (macOS)"/>
 				<Item id="90222" name="Buscar actualizacións..."/>
 				<Item id="90223" name="Abre Recente"/>
+				<Item id="90226" name="Axuda"/>
+				<Item id="90250" name="As asociacións de ficheiros xestiónaas a súa organización."/>
+				<Item id="90251" name="Agardando a confirmación de macOS…"/>
+				<Item id="90252" name="macOS non aplicou o cambio."/>
+				<Item id="90253" name="Rexistradas"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

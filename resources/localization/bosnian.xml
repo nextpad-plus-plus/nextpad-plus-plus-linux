@@ -802,6 +802,11 @@
 				<Item id="90221" name="Zaključani atribut (macOS)"/>
 				<Item id="90222" name="Provjerite ažuriranja…"/>
 				<Item id="90223" name="Otvorite Nedavno"/>
+				<Item id="90226" name="Pomoć"/>
+				<Item id="90250" name="Asocijacijama datoteka upravlja vaša organizacija."/>
+				<Item id="90251" name="Čeka se potvrda macOS-a…"/>
+				<Item id="90252" name="macOS nije primijenio promjenu."/>
+				<Item id="90253" name="Registrirane"/>
 			</MacStrings>
 		</Dialog>
 	</Native-Langue>

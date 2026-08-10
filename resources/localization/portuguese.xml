@@ -1680,6 +1680,11 @@ Pode reativar esta janela de diálogo nas preferências mais tarde."/>
 				<Item id="90221" name="Atributo bloqueado (macOS)"/>
 				<Item id="90222" name="Verifique se há atualizações…"/>
 				<Item id="90223" name="Abrir recente"/>
+				<Item id="90226" name="Ajuda"/>
+				<Item id="90250" name="As associações de ficheiros são geridas pela sua organização."/>
+				<Item id="90251" name="A aguardar a confirmação do macOS…"/>
+				<Item id="90252" name="O macOS não aplicou a alteração."/>
+				<Item id="90253" name="Registadas"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

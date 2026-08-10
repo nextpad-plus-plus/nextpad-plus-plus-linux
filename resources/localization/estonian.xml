@@ -1118,6 +1118,11 @@ https://github.com/AndresTraks/
 				<Item id="90221" name="Lukustatud atribuut (macOS)"/>
 				<Item id="90222" name="Kontrollige värskendusi…"/>
 				<Item id="90223" name="Avage Viimased"/>
+				<Item id="90226" name="Abi"/>
+				<Item id="90250" name="Failiseoseid haldab teie organisatsioon."/>
+				<Item id="90251" name="Ootan macOS-i kinnitust…"/>
+				<Item id="90252" name="macOS ei rakendanud muudatust."/>
+				<Item id="90253" name="Registreeritud"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

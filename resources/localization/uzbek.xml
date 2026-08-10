@@ -1268,6 +1268,11 @@ Siz bir necha marker ustunlarini probellar orqali belgilashingiz mumkin."/>
 				<Item id="90221" name="ga o'tingQulflangan atribut (macOS)"/>
 				<Item id="90222" name="Yangilanishlarni tekshiring…"/>
 				<Item id="90223" name="Oxirgilarni oching"/>
+				<Item id="90226" name="Yordam"/>
+				<Item id="90250" name="Fayl bog'lanishlari tashkilotingiz tomonidan boshqariladi."/>
+				<Item id="90251" name="macOS tasdig'i kutilmoqda…"/>
+				<Item id="90252" name="macOS o'zgarishni qo'llamadi."/>
+				<Item id="90253" name="Ro'yxatdan o'tgan"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

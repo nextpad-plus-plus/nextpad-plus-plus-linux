@@ -1686,6 +1686,11 @@ U kunt dit dialoogvenster later terug inschakelen via voorkeuren."/>
 				<Item id="90221" name="Vergrendeld kenmerk (macOS)"/>
 				<Item id="90222" name="Controleer op updates…"/>
 				<Item id="90223" name="Recent geopend"/>
+				<Item id="90226" name="Help"/>
+				<Item id="90250" name="Bestandskoppelingen worden beheerd door je organisatie."/>
+				<Item id="90251" name="Wachten op bevestiging van macOS…"/>
+				<Item id="90252" name="macOS heeft de wijziging niet toegepast."/>
+				<Item id="90253" name="Geregistreerd"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

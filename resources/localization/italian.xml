@@ -1665,6 +1665,11 @@ Il messaggio può essere riattivato da Preferenze."/>
 				<Item id="90221" name="Attributo bloccato (macOS)"/>
 				<Item id="90222" name="Controlla aggiornamenti…"/>
 				<Item id="90223" name="Apri Recenti"/>
+				<Item id="90226" name="Aiuto"/>
+				<Item id="90250" name="Le associazioni dei file sono gestite dalla tua organizzazione."/>
+				<Item id="90251" name="In attesa della conferma di macOS…"/>
+				<Item id="90252" name="macOS non ha applicato la modifica."/>
+				<Item id="90253" name="Registrate"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

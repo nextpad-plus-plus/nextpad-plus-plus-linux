@@ -1493,6 +1493,11 @@ Updated to v8.6 fixed version
 				<Item id="90221" name="Lukittu attribuutti (macOS)"/>
 				<Item id="90222" name="Tarkista päivitykset…"/>
 				<Item id="90223" name="Avaa Viimeisimmät"/>
+				<Item id="90226" name="Ohje"/>
+				<Item id="90250" name="Organisaatiosi hallitsee tiedostosidoksia."/>
+				<Item id="90251" name="Odotetaan macOS:n vahvistusta…"/>
+				<Item id="90252" name="macOS ei ottanut muutosta käyttöön."/>
+				<Item id="90253" name="Rekisteröidyt"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

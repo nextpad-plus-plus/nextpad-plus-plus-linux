@@ -1098,6 +1098,11 @@
 				<Item id="90221" name="ویژگی قفل شده (macOS)"/>
 				<Item id="90222" name="بررسی به روز رسانی…"/>
 				<Item id="90223" name="Recent را باز کنید"/>
+				<Item id="90226" name="راهنما"/>
+				<Item id="90250" name="پیوندهای پرونده توسط سازمان شما مدیریت می‌شوند."/>
+				<Item id="90251" name="در انتظار تأیید macOS…"/>
+				<Item id="90252" name="macOS تغییر را اعمال نکرد."/>
+				<Item id="90253" name="ثبت‌شده"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

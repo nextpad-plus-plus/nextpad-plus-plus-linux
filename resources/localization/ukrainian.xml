@@ -1669,6 +1669,11 @@ Translation note:
 				<Item id="90221" name="Заблокований атрибут (macOS)"/>
 				<Item id="90222" name="Перевірте наявність оновлень…"/>
 				<Item id="90223" name="Відкрийте Останні"/>
+				<Item id="90226" name="Довідка"/>
+				<Item id="90250" name="Асоціації файлів керуються вашою організацією."/>
+				<Item id="90251" name="Очікування підтвердження macOS…"/>
+				<Item id="90252" name="macOS не застосувала зміну."/>
+				<Item id="90253" name="Зареєстровані"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

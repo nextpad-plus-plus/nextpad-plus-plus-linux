@@ -801,6 +801,7 @@
 				<Item id="90221" name="Locked Attribute (macOS)"/>
 				<Item id="90222" name="Check for Updates…"/>
 				<Item id="90223" name="Open Recent"/>
+				<Item id="90226" name="Help"/>
 			</MacStrings>
 		</Dialog>
 	</Native-Langue>

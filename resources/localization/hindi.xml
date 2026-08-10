@@ -1217,6 +1217,11 @@
 				<Item id="90221" name="पर जाएंलॉक्ड एट्रिब्यूट (macOS)"/>
 				<Item id="90222" name="अद्यतनों की जाँच करें…"/>
 				<Item id="90223" name="हाल ही वाला खोलें"/>
+				<Item id="90226" name="सहायता"/>
+				<Item id="90250" name="फ़ाइल संबद्धताएँ आपके संगठन द्वारा प्रबंधित हैं।"/>
+				<Item id="90251" name="macOS की पुष्टि की प्रतीक्षा है…"/>
+				<Item id="90252" name="macOS ने परिवर्तन लागू नहीं किया।"/>
+				<Item id="90253" name="पंजीकृत"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox><!-- $INT_REPLACE$ is a place holder, don't translate it -->

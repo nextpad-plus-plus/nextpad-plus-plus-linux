@@ -1683,6 +1683,11 @@ W oknie ustawień możesz przywrócić to potwierdzenie w dowolnym momencie."/>
 				<Item id="90221" name="Zablokowany atrybut (macOS)"/>
 				<Item id="90222" name="Sprawdź aktualizacje…"/>
 				<Item id="90223" name="Otwórz Ostatnie"/>
+				<Item id="90226" name="Pomoc"/>
+				<Item id="90250" name="Skojarzenia plików są zarządzane przez Twoją organizację."/>
+				<Item id="90251" name="Oczekiwanie na potwierdzenie macOS…"/>
+				<Item id="90252" name="macOS nie zastosował zmiany."/>
+				<Item id="90253" name="Zarejestrowane"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

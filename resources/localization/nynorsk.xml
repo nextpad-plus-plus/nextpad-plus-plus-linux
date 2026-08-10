@@ -855,6 +855,11 @@
 				<Item id="90221" name="Låst attributt (macOS)"/>
 				<Item id="90222" name="Se etter oppdateringer..."/>
 				<Item id="90223" name="Åpne Nylig"/>
+				<Item id="90226" name="Hjelp"/>
+				<Item id="90250" name="Filtilknytingar vert administrerte av organisasjonen din."/>
+				<Item id="90251" name="Ventar på stadfesting frå macOS…"/>
+				<Item id="90252" name="macOS tok ikkje i bruk endringa."/>
+				<Item id="90253" name="Registrerte"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

@@ -1682,6 +1682,7 @@ Sampeyan bisa ngaktifake maneh dialog iki ing Preferensi mengko."/>
 				<Item id="90221" name="Atribut Dikunci (macOS)"/>
 				<Item id="90222" name="Priksa Update…"/>
 				<Item id="90223" name="Bukak pungkasan"/>
+				<Item id="90226" name="Pitulung"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

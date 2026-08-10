@@ -1682,6 +1682,11 @@ Ebben az esetben a „Gépház” párbeszédpanel „Egyéb” szakasza alatt k
 				<Item id="90221" name="Zárolt attribútum (macOS)"/>
 				<Item id="90222" name="Frissítések keresése…"/>
 				<Item id="90223" name="Nyissa meg a Legutóbbi lehetőséget"/>
+				<Item id="90226" name="Súgó"/>
+				<Item id="90250" name="A fájltársításokat a szervezete kezeli."/>
+				<Item id="90251" name="Várakozás a macOS megerősítésére…"/>
+				<Item id="90252" name="A macOS nem alkalmazta a módosítást."/>
+				<Item id="90253" name="Regisztrált"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

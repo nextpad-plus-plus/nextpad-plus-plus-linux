@@ -1069,6 +1069,7 @@
 				<Item id="90221" name="Ŝlosita Atributo (macOS)"/>
 				<Item id="90222" name="Kontrolu ĝisdatigojn…"/>
 				<Item id="90223" name="Malfermu Lastatempaj"/>
+				<Item id="90226" name="Helpo"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

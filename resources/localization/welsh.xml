@@ -1040,6 +1040,11 @@ gan/by Aled Powell
 				<Item id="90221" name="Priodoledd Wedi'i Gloi (macOS)"/>
 				<Item id="90222" name="Gwiriwch am Ddiweddariadau…"/>
 				<Item id="90223" name="Agored Diweddar"/>
+				<Item id="90226" name="Cymorth"/>
+				<Item id="90250" name="Rheolir cysylltiadau ffeiliau gan eich sefydliad."/>
+				<Item id="90251" name="Yn aros am gadarnhad macOS…"/>
+				<Item id="90252" name="Ni chymhwysodd macOS y newid."/>
+				<Item id="90253" name="Cofrestredig"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

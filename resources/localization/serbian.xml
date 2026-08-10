@@ -1682,6 +1682,11 @@ Možete ponovo aktivirati dijalog u preferencama."/>
 				<Item id="90221" name="Закључани атрибут (мацОС)"/>
 				<Item id="90222" name="Проверите ажурирања…"/>
 				<Item id="90223" name="Отворите Недавно"/>
+				<Item id="90226" name="Помоћ"/>
+				<Item id="90250" name="Asocijacijama datoteka upravlja vaša organizacija."/>
+				<Item id="90251" name="Čeka se potvrda macOS-a…"/>
+				<Item id="90252" name="macOS nije primenio promenu."/>
+				<Item id="90253" name="Registrovane"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

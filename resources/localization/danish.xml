@@ -1540,6 +1540,11 @@ Du kan altid fortryde i &quot;Indstillinger => Diverse&quot;."/>
 				<Item id="90221" name="Låst attribut (macOS)"/>
 				<Item id="90222" name="Se efter opdateringer..."/>
 				<Item id="90223" name="Åbn Seneste"/>
+				<Item id="90226" name="Hjælp"/>
+				<Item id="90250" name="Filtilknytninger administreres af din organisation."/>
+				<Item id="90251" name="Venter på bekræftelse fra macOS…"/>
+				<Item id="90252" name="macOS anvendte ikke ændringen."/>
+				<Item id="90253" name="Registrerede"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

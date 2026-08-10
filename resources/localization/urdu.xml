@@ -501,6 +501,11 @@
 				<Item id="90221" name="مقفل انتساب (macOS)"/>
 				<Item id="90222" name="اپ ڈیٹس کے لیے چیک کریں…"/>
 				<Item id="90223" name="حالیہ کھولیں۔"/>
+				<Item id="90226" name="مدد"/>
+				<Item id="90250" name="فائل وابستگیاں آپ کے ادارے کے زیرِ انتظام ہیں۔"/>
+				<Item id="90251" name="macOS کی تصدیق کا انتظار ہے…"/>
+				<Item id="90252" name="macOS نے تبدیلی لاگو نہیں کی۔"/>
+				<Item id="90253" name="رجسٹرڈ"/>
 			</MacStrings>
 		</Dialog>
 	</Native-Langue>

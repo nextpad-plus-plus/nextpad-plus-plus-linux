@@ -1681,6 +1681,11 @@ Bạn có thể mở lại hộp thoại này ở phần Thiết đặt về sau
 				<Item id="90221" name="Thuộc tính bị khóa (macOS)"/>
 				<Item id="90222" name="Kiểm tra cập nhật…"/>
 				<Item id="90223" name="Mở Gần đây"/>
+				<Item id="90226" name="Trợ giúp"/>
+				<Item id="90250" name="Liên kết tệp do tổ chức của bạn quản lý."/>
+				<Item id="90251" name="Đang chờ macOS xác nhận…"/>
+				<Item id="90252" name="macOS đã không áp dụng thay đổi."/>
+				<Item id="90253" name="Đã đăng ký"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

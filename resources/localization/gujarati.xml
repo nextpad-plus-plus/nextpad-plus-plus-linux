@@ -1024,6 +1024,7 @@
 				<Item id="90221" name="લૉક કરેલ વિશેષતા (macOS)"/>
 				<Item id="90222" name="અપડેટ્સ માટે તપાસો..."/>
 				<Item id="90223" name="તાજેતરના ખોલો"/>
+				<Item id="90226" name="મદદ"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

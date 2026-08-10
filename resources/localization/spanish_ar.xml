@@ -1013,6 +1013,11 @@
 				<Item id="90221" name="Atributo bloqueado (macOS)"/>
 				<Item id="90222" name="Buscar actualizaciones…"/>
 				<Item id="90223" name="Abrir reciente"/>
+				<Item id="90226" name="Ayuda"/>
+				<Item id="90250" name="Las asociaciones de archivos las administra su organización."/>
+				<Item id="90251" name="Esperando la confirmación de macOS…"/>
+				<Item id="90252" name="macOS no aplicó el cambio."/>
+				<Item id="90253" name="Registradas"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

@@ -1714,6 +1714,7 @@ Pudete attivà torna st’ozzione in u dialogu di e preferenze."/>
 				<Item id="90221" name="Attributu Locked (macOS)"/>
 				<Item id="90222" name="Verificate l'aghjurnamenti ..."/>
 				<Item id="90223" name="Open Recent"/>
+				<Item id="90226" name="Aiutu"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

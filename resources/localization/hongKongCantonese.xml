@@ -1790,6 +1790,11 @@
 				<Item id="90221" name="鎖定屬性 (macOS)"/>
 				<Item id="90222" name="檢查更新..."/>
 				<Item id="90223" name="最近打開"/>
+				<Item id="90226" name="說明"/>
+				<Item id="90250" name="檔案關聯由你的機構管理。"/>
+				<Item id="90251" name="正在等待 macOS 確認…"/>
+				<Item id="90252" name="macOS 未套用此變更。"/>
+				<Item id="90253" name="已註冊"/>
 			</MacStrings>
 		</Dialog>
 

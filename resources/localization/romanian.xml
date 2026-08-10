@@ -1702,6 +1702,11 @@ Poți reactiva această casetă de dialog mai târziu, în Preferințe."/>
 				<Item id="90221" name="Atribut blocat (macOS)"/>
 				<Item id="90222" name="Verificați actualizările…"/>
 				<Item id="90223" name="Deschide Recent"/>
+				<Item id="90226" name="Ajutor"/>
+				<Item id="90250" name="Asocierile de fișiere sunt gestionate de organizația dvs."/>
+				<Item id="90251" name="Se așteaptă confirmarea macOS…"/>
+				<Item id="90252" name="macOS nu a aplicat modificarea."/>
+				<Item id="90253" name="Înregistrate"/>
 			</MacStrings>
 		</Dialog>
         <MessageBox> 

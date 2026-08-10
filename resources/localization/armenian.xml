@@ -1682,6 +1682,7 @@
 				<Item id="90221" name="Կողպված հատկանիշ (macOS)"/>
 				<Item id="90222" name="Ստուգեք թարմացումների համար…"/>
 				<Item id="90223" name="Բացեք Վերջին"/>
+				<Item id="90226" name="Օգնություն"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

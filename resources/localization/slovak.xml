@@ -1677,6 +1677,11 @@ Toto dialógové okno môžete neskôr znovu aktivovať v Predvoľbách."/>
 				<Item id="90221" name="Uzamknutý atribút (macOS)"/>
 				<Item id="90222" name="Vyhľadať aktualizácie…"/>
 				<Item id="90223" name="Otvoriť Nedávne"/>
+				<Item id="90226" name="Pomocník"/>
+				<Item id="90250" name="Asociácie súborov spravuje vaša organizácia."/>
+				<Item id="90251" name="Čaká sa na potvrdenie macOS…"/>
+				<Item id="90252" name="macOS zmenu nepoužil."/>
+				<Item id="90253" name="Registrované"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

@@ -1179,6 +1179,7 @@
 				<Item id="90221" name="Isibaluli Esikhiyiwe (macOS)"/>
 				<Item id="90222" name="Bheka Izibuyekezo…"/>
 				<Item id="90223" name="Vula Okwakamuva"/>
+				<Item id="90226" name="Usizo"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox><!-- $INT_REPLACE$ is a place holder, don't translate it -->

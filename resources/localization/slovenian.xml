@@ -1601,6 +1601,11 @@ To pogovorno okno lahko pozneje znova aktivirate v nastavitvah."/>
 				<Item id="90221" name="Zaklenjen atribut (macOS)"/>
 				<Item id="90222" name="Preverite posodobitve…"/>
 				<Item id="90223" name="Odprite Nedavno"/>
+				<Item id="90226" name="Pomoč"/>
+				<Item id="90250" name="Povezave datotek upravlja vaša organizacija."/>
+				<Item id="90251" name="Čakanje na potrditev macOS…"/>
+				<Item id="90252" name="macOS ni uveljavil spremembe."/>
+				<Item id="90253" name="Registrirane"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

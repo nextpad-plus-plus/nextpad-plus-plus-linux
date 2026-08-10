@@ -1631,6 +1631,11 @@ Bu dialoqu daha sonra Nizamlamalarda yenidən aktivləşdirə bilərsiniz."/>
 				<Item id="90221" name="-ə keçinKilidlənmiş Atribut (macOS)"/>
 				<Item id="90222" name="Yeniləmələri yoxlayın..."/>
 				<Item id="90223" name="Sonları açın"/>
+				<Item id="90226" name="Kömək"/>
+				<Item id="90250" name="Fayl əlaqələndirmələri təşkilatınız tərəfindən idarə olunur."/>
+				<Item id="90251" name="macOS təsdiqi gözlənilir…"/>
+				<Item id="90252" name="macOS dəyişikliyi tətbiq etmədi."/>
+				<Item id="90253" name="Qeydiyyatlı"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

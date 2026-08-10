@@ -1682,6 +1682,7 @@ Koj tuaj yeem rov qhib qhov kev sib tham no hauv Preferences tom qab."/>
 				<Item id="90221" name="Xauv Attribute (macOS)"/>
 				<Item id="90222" name="Tshawb nrhiav cov tshiab…"/>
 				<Item id="90223" name="Qhib Tsis ntev los no"/>
+				<Item id="90226" name="Pab"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

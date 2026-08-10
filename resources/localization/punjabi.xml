@@ -1068,6 +1068,11 @@
 				<Item id="90221" name="ਲੌਕਡ ਐਟਰੀਬਿਊਟ (macOS)"/>
 				<Item id="90222" name="ਅੱਪਡੇਟ ਦੀ ਜਾਂਚ ਕਰੋ..."/>
 				<Item id="90223" name="ਤਾਜ਼ਾ ਖੋਲ੍ਹੋ"/>
+				<Item id="90226" name="ਮਦਦ"/>
+				<Item id="90250" name="ਫਾਈਲ ਸੰਬੰਧ ਤੁਹਾਡੀ ਸੰਸਥਾ ਦੁਆਰਾ ਪ੍ਰਬੰਧਿਤ ਹਨ।"/>
+				<Item id="90251" name="macOS ਦੀ ਪੁਸ਼ਟੀ ਦੀ ਉਡੀਕ ਹੈ…"/>
+				<Item id="90252" name="macOS ਨੇ ਤਬਦੀਲੀ ਲਾਗੂ ਨਹੀਂ ਕੀਤੀ।"/>
+				<Item id="90253" name="ਰਜਿਸਟਰਡ"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>

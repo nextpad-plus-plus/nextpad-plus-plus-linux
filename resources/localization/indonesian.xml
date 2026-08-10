@@ -1526,6 +1526,11 @@ Anda dapat mengaktifkan kembali dialog ini di Preferensi nanti."/>
 				<Item id="90221" name="Atribut Terkunci (macOS)"/>
 				<Item id="90222" name="Periksa Pembaruan…"/>
 				<Item id="90223" name="Buka Terbaru"/>
+				<Item id="90226" name="Bantuan"/>
+				<Item id="90250" name="Asosiasi file dikelola oleh organisasi Anda."/>
+				<Item id="90251" name="Menunggu konfirmasi macOS…"/>
+				<Item id="90252" name="macOS tidak menerapkan perubahan."/>
+				<Item id="90253" name="Terdaftar"/>
 			</MacStrings>
 		</Dialog>
 		<MessageBox>
