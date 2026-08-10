@@ -75,8 +75,12 @@ static const char *const CATALOG_WIN =
     "https://raw.githubusercontent.com/notepad-plus-plus/nppPluginList/"
     "master/src/pl.x64.json";
 
+/* macOS kPluginListVersion — the plugin-list schema version shown in
+ * the footer. */
+#define PLUGIN_LIST_VERSION "0.2.0"
+
 /* Track which catalog ended up populating the rows — informational only,
- * surfaced in the title-bar suffix and in the build-status report. */
+ * surfaced in the footer tooltip and in the build-status report. */
 static const char *g_catalog_origin = "(none)";
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -130,6 +134,14 @@ static void plugrow_free(PlugRow *p) {
  * Top-level state — singleton window
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* GAP-139 — per-row checkbox mode (macOS viewForTableColumn rules):
+ *   CHK_NORMAL  — actionable: toggleable, feeds Install/Update/Remove.
+ *   CHK_LOCKED  — installed row on the Available tab: rendered CHECKED
+ *                 and insensitive; cannot be toggled and never counts
+ *                 as actionable (macOS: cb.enabled=NO, state=On).
+ *   CHK_HIDDEN  — Windows-only row: no checkbox at all.               */
+enum { CHK_NORMAL = 0, CHK_LOCKED = 1, CHK_HIDDEN = 2 };
+
 enum {
     COL_CHECK = 0,   /* GBoolean — visible only on first 3 tabs           */
     COL_NAME,
@@ -137,13 +149,11 @@ enum {
     COL_BUILT,
     COL_OS,
     COL_FOLDER,      /* hidden — keys the row back to PlugRow             */
-    COL_DIM,         /* GBoolean — Windows-only row shown for context;
-                      * Available-tab cell-data-funcs render the row in
-                      * dim foreground and hide the checkbox so the user
-                      * can see the plugin exists without being able to
-                      * install it on Linux. Mirrors macOS's
-                      * tertiaryLabelColor + cb.hidden behavior in
-                      * PluginsAdminWindowController.mm:868-917. */
+    COL_DIM,         /* GBoolean — dim TEXT only: Windows-only rows and,
+                      * on the Available tab, installed rows (macOS dims
+                      * both, PluginsAdminWindowController.mm:1053-1065). */
+    COL_CHECKMODE,   /* int — CHK_* above; drives checkbox visibility,
+                      * sensitivity and toggleability per row.           */
     COL_COUNT
 };
 
@@ -154,7 +164,9 @@ typedef struct {
     GtkWidget   *notebook;
     GtkWidget   *action_btn;
     GtkWidget   *close_btn;
-    GtkWidget   *status_lbl;
+    GtkWidget   *status_lbl;    /* footer stats line (macOS _statsLabel)  */
+    GtkWidget   *desc_view;     /* GAP-139 — shared description pane      */
+    GtkTextTag  *red_tag;       /* "(Nextpad++ needs update)" highlight   */
 
     /* One tree-view + store per tab (kept distinct so checkbox-column
      * visibility can differ on the Incompatible tab without juggling). */
@@ -184,6 +196,8 @@ static void on_tab_switched(GtkNotebook *nb, GtkWidget *page,
                             guint page_num, gpointer user);
 static void on_check_toggled(GtkCellRendererToggle *r, gchar *path_str,
                              gpointer user);
+static void update_action_sensitivity(AdminUI *ui);
+static void desc_clear(AdminUI *ui);
 static gboolean on_window_delete(GtkWindow *w, gpointer user);
 static void on_close_clicked(GtkButton *b, gpointer user);
 
@@ -787,18 +801,31 @@ static void enrich_installed_from_catalog(AdminUI *ui) {
     for (guint i = 0; i < ui->installed->len; i++) {
         PlugRow *ip = ui->installed->pdata[i];
         PlugRow *c  = g_hash_table_lookup(by_folder, ip->folder);
+        if (!c) {
+            /* Locally-built plugin absent from the catalog (macOS: "not
+             * in catalog … use the dylib's own version"; ELF has none →
+             * the macOS tri-state's "unknown"). */
+            g_free(ip->version);
+            ip->version = g_strdup("unknown");
+        }
         if (c) {
             g_free(ip->display);       ip->display       = g_strdup(c->display);
-            /* GAP-48 (macOS 8dbd854): only claim the catalog version when
-             * the installed .so is byte-identical to the catalog build —
-             * an older/custom build shows "?" instead of masquerading as
-             * the catalog release. (ELF has no version stamp to fall back
-             * on, unlike mach-o current_version.) */
+            /* GAP-48 + GAP-139 (macOS installedVersionDisplayFor): claim
+             * the catalog version only when the installed .so is
+             * byte-identical to the catalog build; otherwise the macOS
+             * tri-state — a differing hash is "outdated", missing data is
+             * "unknown". (ELF has no version stamp to fall back on,
+             * unlike mach-o current_version.) */
             g_free(ip->version);
-            ip->version = (ip->installed_sha && c->so_sha256 &&
-                           g_ascii_strcasecmp(ip->installed_sha,
-                                              c->so_sha256) == 0)
-                          ? g_strdup(c->version) : g_strdup("?");
+            if (ip->installed_sha && strlen(ip->installed_sha) == 64 &&
+                c->so_sha256 && strlen(c->so_sha256) == 64) {
+                ip->version = g_ascii_strcasecmp(ip->installed_sha,
+                                                 c->so_sha256) == 0
+                    ? g_strdup(c->version[0] ? c->version : "latest")
+                    : g_strdup("outdated");
+            } else {
+                ip->version = g_strdup("unknown");
+            }
             g_free(ip->description);   ip->description   = g_strdup(c->description);
             g_free(ip->author);        ip->author        = g_strdup(c->author);
             g_free(ip->homepage);      ip->homepage      = g_strdup(c->homepage);
@@ -821,6 +848,23 @@ static void enrich_installed_from_catalog(AdminUI *ui) {
  *   2. Catalog `so-id` ≠ installed sha256 (not byte-identical).
  *   3. Catalog `so-built` strictly newer than installed mtime date.
  * ═══════════════════════════════════════════════════════════════════════ */
+/* Numeric dotted-version compare (macOS compareSemver): "1.1.0" vs
+ * "1.0.8" → positive. Missing components count as 0. */
+static int compare_semver(const char *a, const char *b) {
+    while (*a || *b) {
+        long na = 0, nb = 0;
+        while (*a >= '0' && *a <= '9') na = na * 10 + (*a++ - '0');
+        while (*b >= '0' && *b <= '9') nb = nb * 10 + (*b++ - '0');
+        if (na != nb) return na < nb ? -1 : 1;
+        if (*a == '.') a++;
+        if (*b == '.') b++;
+        /* Non-numeric junk ends the comparison. */
+        if ((*a && (*a < '0' || *a > '9')) || (*b && (*b < '0' || *b > '9')))
+            break;
+    }
+    return 0;
+}
+
 static gboolean is_update_candidate(PlugRow *catalog_row, PlugRow *installed) {
     if (!catalog_row || !installed) return FALSE;
     if (!catalog_row->so_sha256 || strlen(catalog_row->so_sha256) != 64)
@@ -833,8 +877,18 @@ static gboolean is_update_candidate(PlugRow *catalog_row, PlugRow *installed) {
                            catalog_row->so_sha256) == 0)
         return FALSE;
     /* YYYY-MM-DD strings compare correctly as lex strings. */
-    if (!installed->installed_date) return TRUE;
-    return g_strcmp0(catalog_row->so_built, installed->installed_date) > 0;
+    if (installed->installed_date &&
+        g_strcmp0(catalog_row->so_built, installed->installed_date) <= 0)
+        return FALSE;
+    /* GAP-139 — macOS gate 3: never offer an update the running host is
+     * too old for (updateCandidates, compareSemver(host, min) < 0 →
+     * skip). One deliberate divergence: macOS REQUIRES npp-min-version
+     * to be present; here an entry without the field still qualifies so
+     * catalog entries published before the field existed keep updating. */
+    if (catalog_row->npp_min_version && *catalog_row->npp_min_version &&
+        compare_semver(APP_VERSION, catalog_row->npp_min_version) < 0)
+        return FALSE;
+    return TRUE;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -857,47 +911,68 @@ static gboolean row_matches_search(PlugRow *r, const char *needle) {
 }
 
 static void append_row(GtkListStore *ls, PlugRow *r,
-                       const char *os_label, gboolean dim) {
+                       const char *os_label, gboolean dim,
+                       int checkmode) {
     GtkTreeIter it;
     gtk_list_store_append(ls, &it);
     gtk_list_store_set(ls, &it,
-        COL_CHECK,   FALSE,
+        /* Locked rows render pre-checked (macOS: installed → state On). */
+        COL_CHECK,   checkmode == CHK_LOCKED,
         COL_NAME,    r->display ? r->display : r->folder,
         COL_VERSION, r->version ? r->version : "",
         COL_BUILT,   r->so_built ? r->so_built : (r->installed_date ?: ""),
         COL_OS,      os_label,
         COL_FOLDER,  r->folder,
         COL_DIM,     dim,
+        COL_CHECKMODE, checkmode,
         -1);
+}
+
+/* qsort helper — macOS sorts _allAvailable case-insensitively by display
+ * name (localizedCaseInsensitiveCompare), native and Windows-only rows
+ * MIXED in one alphabet. */
+static gint cmp_display_ci(gconstpointer a, gconstpointer b) {
+    const PlugRow *ra = *(PlugRow *const *)a;
+    const PlugRow *rb = *(PlugRow *const *)b;
+    gchar *la = g_utf8_casefold(ra->display ? ra->display : ra->folder, -1);
+    gchar *lb = g_utf8_casefold(rb->display ? rb->display : rb->folder, -1);
+    gint c = g_utf8_collate(la, lb);
+    g_free(la); g_free(lb);
+    return c;
 }
 
 static void populate_available(AdminUI *ui) {
     GtkListStore *ls = ui->store[TAB_AVAILABLE];
     gtk_list_store_clear(ls);
-    GHashTable *installed_set = g_hash_table_new(g_str_hash, g_str_equal);
-    for (guint i = 0; i < ui->installed->len; i++) {
-        PlugRow *ip = ui->installed->pdata[i];
-        g_hash_table_add(installed_set, ip->folder);
-    }
     const char *os = strstr(g_catalog_origin, "linux") ? "Linux x86_64/arm64"
                                                        : "macOS (port)";
-    for (guint i = 0; i < ui->catalog->len; i++) {
-        PlugRow *r = ui->catalog->pdata[i];
-        if (g_hash_table_contains(installed_set, r->folder)) continue;
+
+    /* GAP-139 — macOS Available semantics (_allAvailable): EVERY catalog
+     * entry appears, one case-insensitive alphabet across native and
+     * Windows-only rows. Installed plugins are NOT hidden any more —
+     * they show pre-checked, insensitive and dimmed, so the tab reads as
+     * the full ecosystem with install-state at a glance; reinstalling
+     * from here is impossible until the plugin is removed. Windows-only
+     * rows stay dim with no checkbox (their tertiaryLabelColor +
+     * cb.hidden, PluginsAdminWindowController.mm:997-1016). */
+    GPtrArray *all = g_ptr_array_new();
+    for (guint i = 0; i < ui->catalog->len; i++)
+        g_ptr_array_add(all, ui->catalog->pdata[i]);
+    for (guint i = 0; i < ui->win_only->len; i++)
+        g_ptr_array_add(all, ui->win_only->pdata[i]);
+    g_ptr_array_sort(all, cmp_display_ci);
+
+    for (guint i = 0; i < all->len; i++) {
+        PlugRow *r = g_ptr_array_index(all, i);
         if (!row_matches_search(r, ui->search_text)) continue;
-        append_row(ls, r, os, /*dim*/ FALSE);
+        if (r->from_win_only)
+            append_row(ls, r, "Windows only", /*dim*/ TRUE, CHK_HIDDEN);
+        else if (r->is_installed)
+            append_row(ls, r, os, /*dim*/ TRUE, CHK_LOCKED);
+        else
+            append_row(ls, r, os, /*dim*/ FALSE, CHK_NORMAL);
     }
-    /* Windows-only plugins are listed too — greyed out, no checkbox — so
-     * the user can see the full Notepad++ ecosystem and recognise which
-     * plugins are still Windows-exclusive. This mirrors macOS, which
-     * shows them in tertiaryLabelColor on the Available tab with the
-     * checkbox hidden (PluginsAdminWindowController.mm:867-878). */
-    for (guint i = 0; i < ui->win_only->len; i++) {
-        PlugRow *r = ui->win_only->pdata[i];
-        if (!row_matches_search(r, ui->search_text)) continue;
-        append_row(ls, r, "Windows only", /*dim*/ TRUE);
-    }
-    g_hash_table_destroy(installed_set);
+    g_ptr_array_free(all, TRUE);
 }
 
 static void populate_updates(AdminUI *ui) {
@@ -918,7 +993,7 @@ static void populate_updates(AdminUI *ui) {
         /* Show the catalog row (newer version/built date), not the
          * installed one. The folder key is unchanged so the action
          * handler can still find both halves. */
-        append_row(ls, c, os, /*dim*/ FALSE);
+        append_row(ls, c, os, /*dim*/ FALSE, CHK_NORMAL);
     }
     g_hash_table_destroy(cat);
 }
@@ -929,7 +1004,7 @@ static void populate_installed(AdminUI *ui) {
     for (guint i = 0; i < ui->installed->len; i++) {
         PlugRow *r = ui->installed->pdata[i];
         if (!row_matches_search(r, ui->search_text)) continue;
-        append_row(ls, r, "Linux (local)", /*dim*/ FALSE);
+        append_row(ls, r, "Linux (local)", /*dim*/ FALSE, CHK_NORMAL);
     }
 }
 
@@ -939,7 +1014,7 @@ static void populate_incompatible(AdminUI *ui) {
     for (guint i = 0; i < ui->win_only->len; i++) {
         PlugRow *r = ui->win_only->pdata[i];
         if (!row_matches_search(r, ui->search_text)) continue;
-        append_row(ls, r, "Windows only", /*dim*/ FALSE);
+        append_row(ls, r, "Windows only", /*dim*/ FALSE, CHK_HIDDEN);
     }
 }
 
@@ -949,13 +1024,21 @@ static void adminui_repopulate_all(AdminUI *ui) {
     populate_installed(ui);
     populate_incompatible(ui);
 
-    /* Status line below the notebook. */
+    /* GAP-139 — macOS footer stats: "Plugins in catalog: N ·
+     * Installable on macOS: M" (updateStatsLabel). The catalog-origin
+     * string stays reachable as the label's tooltip (fallback-catalog
+     * debugging). */
     char *msg = g_strdup_printf(
-        "Catalog: %s   ·   %u available   ·   %u installed   ·   %u Windows-only",
-        g_catalog_origin,
-        ui->catalog->len, ui->installed->len, ui->win_only->len);
+        "Plugins in catalog:  %u  ·  Installable on Linux:  %u",
+        ui->catalog->len + ui->win_only->len, ui->catalog->len);
     gtk_label_set_text(GTK_LABEL(ui->status_lbl), msg);
     g_free(msg);
+    char *tip = g_strdup_printf("Catalog: %s · %u installed",
+                                g_catalog_origin, ui->installed->len);
+    gtk_widget_set_tooltip_text(ui->status_lbl, tip);
+    g_free(tip);
+    desc_clear(ui);
+    update_action_sensitivity(ui);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -982,10 +1065,16 @@ static GPtrArray *collect_checked(GtkListStore *ls) {
         do {
             gboolean checked = FALSE;
             gchar   *folder  = NULL;
+            gint     mode    = CHK_NORMAL;
             gtk_tree_model_get(m, &it,
                 COL_CHECK, &checked,
-                COL_FOLDER, &folder, -1);
-            if (checked && folder)
+                COL_FOLDER, &folder,
+                COL_CHECKMODE, &mode, -1);
+            /* GAP-139 — locked rows (installed plugins shown pre-checked
+             * on the Available tab) are indicators, not selections: they
+             * must never feed an action (macOS: their checkbox is
+             * disabled so it can never enter _checkedPlugins). */
+            if (checked && folder && mode == CHK_NORMAL)
                 g_ptr_array_add(out, folder);
             else
                 g_free(folder);
@@ -998,13 +1087,17 @@ static GPtrArray *collect_checked(GtkListStore *ls) {
  * Install / Update / Remove implementations
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* GAP-139 — do NOT also gtk_window_set_title() these dialogs: under
+ * GTK4 client-side decoration the window title renders as its own bold
+ * heading above the message-dialog primary text, so every popup showed
+ * its title TWICE ("Restart required / Restart required"). macOS
+ * NSAlert has no window title either — one bold line is the design. */
 static void show_message(GtkWindow *parent, GtkMessageType kind,
                          const char *title, const char *body) {
     GtkWidget *dlg = gtk_message_dialog_new(parent, GTK_DIALOG_DESTROY_WITH_PARENT,
         kind, GTK_BUTTONS_OK, "%s", title);
     gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
         "%s", body ? body : "");
-    gtk_window_set_title(GTK_WINDOW(dlg), title);
     gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
 }
@@ -1015,7 +1108,6 @@ static gboolean confirm_dialog(GtkWindow *parent, const char *title,
         GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL, "%s", title);
     gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
         "%s", body ? body : "");
-    gtk_window_set_title(GTK_WINDOW(dlg), title);
     gint resp = gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
     return resp == GTK_RESPONSE_OK;
@@ -1321,30 +1413,167 @@ static void on_search_changed(GtkSearchEntry *e, gpointer user) {
     adminui_repopulate_all(ui);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * GAP-139 — shared description pane (macOS _descriptionView +
+ * tableViewSelectionDidChange:, PluginsAdminWindowController.mm:1066-1116)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static void desc_clear(AdminUI *ui) {
+    if (!ui->desc_view) return;
+    GtkTextBuffer *b = gtk_text_view_get_buffer(GTK_TEXT_VIEW(ui->desc_view));
+    gtk_text_buffer_set_text(b, "", -1);
+}
+
+/* Resolve the PlugRow behind a folder key for the current tab. The
+ * Available tab mixes catalog and Windows-only rows; Installed shows the
+ * enriched installed set; Updates shows catalog rows. */
+static PlugRow *desc_resolve(AdminUI *ui, const char *folder) {
+    PlugRow *r = NULL;
+    if (ui->current_tab == TAB_INSTALLED)
+        r = find_row_by_folder(ui->installed, folder);
+    else if (ui->current_tab == TAB_INCOMPATIBLE)
+        r = find_row_by_folder(ui->win_only, folder);
+    if (!r) r = find_row_by_folder(ui->catalog, folder);
+    if (!r) r = find_row_by_folder(ui->win_only, folder);
+    if (!r) r = find_row_by_folder(ui->installed, folder);
+    return r;
+}
+
+static void desc_show_row(AdminUI *ui, PlugRow *r) {
+    GtkTextBuffer *b = gtk_text_view_get_buffer(GTK_TEXT_VIEW(ui->desc_view));
+    gtk_text_buffer_set_text(b, "", -1);
+    GtkTextIter end;
+
+#define APPEND(txt) do { \
+        gtk_text_buffer_get_end_iter(b, &end); \
+        gtk_text_buffer_insert(b, &end, (txt), -1); \
+    } while (0)
+
+    /* Header — Available tab only, exactly like macOS (post-591a593):
+     * "<name> v<version>" then the npp-min-version requirement with a
+     * red "(Nextpad++ needs update)" when the running host is older. */
+    if (ui->current_tab == TAB_AVAILABLE) {
+        if (!r->from_win_only) {
+            gchar *hdr = g_strdup_printf("%s v%s\n",
+                r->display ? r->display : r->folder,
+                (r->version && r->version[0]) ? r->version : "?");
+            APPEND(hdr);
+            g_free(hdr);
+            if (r->npp_min_version && *r->npp_min_version) {
+                gchar *req = g_strdup_printf(
+                    "Nextpad++ version required for full compatibility: %s",
+                    r->npp_min_version);
+                APPEND(req);
+                g_free(req);
+                if (compare_semver(APP_VERSION, r->npp_min_version) < 0) {
+                    gtk_text_buffer_get_end_iter(b, &end);
+                    gtk_text_buffer_insert_with_tags(b, &end,
+                        " (Nextpad++ needs update)", -1, ui->red_tag, NULL);
+                }
+                APPEND("\n");
+            }
+            APPEND("\n");
+        } else {
+            /* macOS: "[Windows only — macOS port not yet available]". */
+            APPEND("[Windows only — Linux port not yet available]\n\n");
+        }
+    }
+
+    if (r->description && *r->description) {
+        APPEND(r->description);
+        APPEND("\n\n");
+    }
+    if (r->author && *r->author) {
+        gchar *a = g_strdup_printf("Author: %s\n", r->author);
+        APPEND(a);
+        g_free(a);
+    }
+    if (r->homepage && *r->homepage) {
+        gchar *h = g_strdup_printf("Homepage: %s\n", r->homepage);
+        APPEND(h);
+        g_free(h);
+    }
+#undef APPEND
+}
+
+static void on_selection_changed(GtkTreeSelection *sel, gpointer user) {
+    AdminUI *ui = user;
+    if (!ui->desc_view) return;
+    /* Store rebuilds fire "changed" on hidden tabs too — only the
+     * visible tab's selection drives the pane. */
+    if (gtk_tree_selection_get_tree_view(sel) !=
+        GTK_TREE_VIEW(ui->view[ui->current_tab]))
+        return;
+    GtkTreeModel *m = NULL;
+    GtkTreeIter it;
+    if (!gtk_tree_selection_get_selected(sel, &m, &it)) {
+        desc_clear(ui);
+        return;
+    }
+    gchar *folder = NULL;
+    gtk_tree_model_get(m, &it, COL_FOLDER, &folder, -1);
+    PlugRow *r = folder ? desc_resolve(ui, folder) : NULL;
+    if (r) desc_show_row(ui, r);
+    else   desc_clear(ui);
+    g_free(folder);
+}
+
+/* Clear the entered tab's actionable checkmarks — macOS empties
+ * _checkedPlugins on every tab switch (refreshForCurrentTab), so a
+ * selection never survives leaving a tab. Locked indicator checks stay. */
+static void clear_tab_checks(AdminUI *ui, AdminTab tab) {
+    GtkTreeModel *m = GTK_TREE_MODEL(ui->store[tab]);
+    GtkTreeIter it;
+    if (gtk_tree_model_get_iter_first(m, &it)) {
+        do {
+            gint mode = CHK_NORMAL;
+            gtk_tree_model_get(m, &it, COL_CHECKMODE, &mode, -1);
+            if (mode == CHK_NORMAL)
+                gtk_list_store_set(ui->store[tab], &it, COL_CHECK, FALSE, -1);
+        } while (gtk_tree_model_iter_next(m, &it));
+    }
+}
+
 static void on_tab_switched(GtkNotebook *nb, GtkWidget *page,
                             guint page_num, gpointer user) {
     (void)nb; (void)page;
     AdminUI *ui = user;
     if (page_num >= TAB_COUNT) page_num = TAB_AVAILABLE;
     ui->current_tab = (AdminTab)page_num;
+    clear_tab_checks(ui, ui->current_tab);
+    desc_clear(ui);                       /* macOS: setString:@"" */
     adminui_set_action_for_tab(ui);
+    update_action_sensitivity(ui);
+}
+
+/* GAP-139 — macOS enables the action button only while >= 1 actionable
+ * row is checked (checkboxToggled: → _actionButton.enabled). Locked and
+ * hidden rows never count. */
+static void update_action_sensitivity(AdminUI *ui) {
+    if (ui->current_tab == TAB_INCOMPATIBLE) return;   /* button hidden */
+    GPtrArray *checked = collect_checked(ui->store[ui->current_tab]);
+    gtk_widget_set_sensitive(ui->action_btn, checked->len > 0);
+    g_ptr_array_free(checked, TRUE);
 }
 
 static void on_check_toggled(GtkCellRendererToggle *r, gchar *path_str,
                              gpointer user) {
     (void)r;
-    GtkListStore *ls = user;
+    AdminUI *ui = user;
+    /* A toggle can only originate from the visible tab's view. */
+    GtkListStore *ls = ui->store[ui->current_tab];
     GtkTreeIter it;
     if (gtk_tree_model_get_iter_from_string(GTK_TREE_MODEL(ls), &it, path_str)) {
-        gboolean cur = FALSE, dim = FALSE;
+        gboolean cur = FALSE;
+        gint     mode = CHK_NORMAL;
         gtk_tree_model_get(GTK_TREE_MODEL(ls), &it,
-                           COL_CHECK, &cur, COL_DIM, &dim, -1);
-        /* Windows-only rows shouldn't be toggleable. The cell renderer
-         * hides the checkbox for these rows already; this is a belt-
-         * and-braces guard in case a future change to the cell-data-func
-         * leaves the toggle visible by mistake. */
-        if (dim) return;
+                           COL_CHECK, &cur, COL_CHECKMODE, &mode, -1);
+        /* Locked (installed, Available tab) and hidden (Windows-only)
+         * rows are not toggleable — the renderer already renders them
+         * inactive/invisible; this is the belt-and-braces guard. */
+        if (mode != CHK_NORMAL) return;
         gtk_list_store_set(ls, &it, COL_CHECK, !cur, -1);
+        update_action_sensitivity(ui);
     }
 }
 
@@ -1370,17 +1599,17 @@ static void adminui_set_action_for_tab(AdminUI *ui) {
     switch (ui->current_tab) {
         case TAB_AVAILABLE:
             gtk_button_set_label(GTK_BUTTON(ui->action_btn), "Install");
-            gtk_widget_set_sensitive(ui->action_btn, TRUE);
+            gtk_widget_set_sensitive(ui->action_btn, FALSE);
             gtk_widget_show(ui->action_btn);
             break;
         case TAB_UPDATES:
             gtk_button_set_label(GTK_BUTTON(ui->action_btn), "Update");
-            gtk_widget_set_sensitive(ui->action_btn, TRUE);
+            gtk_widget_set_sensitive(ui->action_btn, FALSE);
             gtk_widget_show(ui->action_btn);
             break;
         case TAB_INSTALLED:
             gtk_button_set_label(GTK_BUTTON(ui->action_btn), "Remove");
-            gtk_widget_set_sensitive(ui->action_btn, TRUE);
+            gtk_widget_set_sensitive(ui->action_btn, FALSE);
             gtk_widget_show(ui->action_btn);
             break;
         case TAB_INCOMPATIBLE:
@@ -1414,15 +1643,21 @@ static void cdf_text_dim(GtkTreeViewColumn *col, GtkCellRenderer *r,
     }
 }
 
-/* Cell-data-func for the checkbox column: hide the toggle on dim rows so
- * the user can't accidentally check a Windows-only plugin (which has no
- * Linux build). Mirror of macOS cb.hidden = !pe.isMacAvailable. */
+/* Cell-data-func for the checkbox column (GAP-139, macOS
+ * viewForTableColumn rules): Windows-only rows get no checkbox at all
+ * (cb.hidden = !isMacAvailable); installed rows on the Available tab
+ * render CHECKED but insensitive (cb.enabled = NO, state = On) — the
+ * install-state indicator that cannot be toggled or re-installed. */
 static void cdf_check_visibility(GtkTreeViewColumn *col, GtkCellRenderer *r,
                                  GtkTreeModel *m, GtkTreeIter *it, gpointer ud) {
     (void)col; (void)ud;
-    gboolean dim = FALSE;
-    gtk_tree_model_get(m, it, COL_DIM, &dim, -1);
-    g_object_set(r, "visible", !dim, NULL);
+    gint mode = CHK_NORMAL;
+    gtk_tree_model_get(m, it, COL_CHECKMODE, &mode, -1);
+    g_object_set(r,
+        "visible",     mode != CHK_HIDDEN,
+        "sensitive",   mode != CHK_LOCKED,
+        "activatable", mode == CHK_NORMAL,
+        NULL);
 }
 
 static GtkWidget *build_tab_view(AdminUI *ui, AdminTab tab,
@@ -1434,7 +1669,8 @@ static GtkWidget *build_tab_view(AdminUI *ui, AdminTab tab,
         G_TYPE_STRING,   /* built  */
         G_TYPE_STRING,   /* os     */
         G_TYPE_STRING,   /* folder */
-        G_TYPE_BOOLEAN); /* dim    */
+        G_TYPE_BOOLEAN,  /* dim    */
+        G_TYPE_INT);     /* checkmode */
     GtkWidget *tv = gtk_tree_view_new_with_model(GTK_TREE_MODEL(ls));
     gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(tv), TRUE);
     /* Alternating row colours are styled via CSS in modern GTK3; the
@@ -1447,7 +1683,7 @@ static GtkWidget *build_tab_view(AdminUI *ui, AdminTab tab,
         gtk_cell_renderer_toggle_set_activatable(
             GTK_CELL_RENDERER_TOGGLE(cr), TRUE);
         g_signal_connect(cr, "toggled",
-            G_CALLBACK(on_check_toggled), ls);
+            G_CALLBACK(on_check_toggled), ui);
         GtkTreeViewColumn *col = gtk_tree_view_column_new_with_attributes(
             "", cr, "active", COL_CHECK, NULL);
         gtk_tree_view_column_set_fixed_width(col, 36);
@@ -1514,7 +1750,7 @@ static AdminUI *adminui_create(GtkWindow *parent) {
 
     ui->window = gtk_window_new();
     gtk_window_set_title(GTK_WINDOW(ui->window), "Plugins Admin");
-    gtk_window_set_default_size(GTK_WINDOW(ui->window), 880, 560);
+    gtk_window_set_default_size(GTK_WINDOW(ui->window), 880, 640);
     /* GTK4 has no explicit window positioning; transient-for centres it. */
     if (parent) gtk_window_set_transient_for(GTK_WINDOW(ui->window), parent);
     g_signal_connect(ui->window, "close-request",
@@ -1564,11 +1800,47 @@ static AdminUI *adminui_create(GtkWindow *parent) {
     g_signal_connect(ui->notebook, "switch-page",
         G_CALLBACK(on_tab_switched), ui);
 
-    /* Status line — populated by adminui_repopulate_all. */
+    /* GAP-139 — shared description pane under the table (macOS
+     * _descriptionView): read-only, selectable, ~6 text rows. One pane
+     * serves all four tabs, driven by each view's selection. */
+    GtkWidget *desc_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(desc_scroll),
+        GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_size_request(desc_scroll, -1, 110);
+    ui->desc_view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(ui->desc_view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(ui->desc_view), FALSE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(ui->desc_view), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(ui->desc_view), 6);
+    gtk_text_view_set_right_margin(GTK_TEXT_VIEW(ui->desc_view), 6);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(ui->desc_view), 6);
+    ui->red_tag = gtk_text_buffer_create_tag(
+        gtk_text_view_get_buffer(GTK_TEXT_VIEW(ui->desc_view)),
+        "npp-red", "foreground", "#c01c28", NULL);
+    gtk_container_add(GTK_CONTAINER(desc_scroll), ui->desc_view);
+    npp_box_pack(GTK_BOX(root), desc_scroll, FALSE, 0);
+
+    for (int t = 0; t < TAB_COUNT; t++)
+        g_signal_connect(gtk_tree_view_get_selection(ui->view[t]),
+            "changed", G_CALLBACK(on_selection_changed), ui);
+
+    /* GAP-139 — macOS footer block, centered: repository link, plugin
+     * list version, catalog stats (screenshot layout). */
+    GtkWidget *footer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
+    gtk_widget_set_halign(footer, GTK_ALIGN_CENTER);
+    GtkWidget *repo_link = gtk_link_button_new_with_label(
+        "https://github.com/nextpad-plus-plus/nppPluginList",
+        "Plugin list repository");
+    gtk_widget_set_halign(repo_link, GTK_ALIGN_CENTER);
+    npp_box_pack(GTK_BOX(footer), repo_link, FALSE, 0);
+    GtkWidget *ver_lbl = gtk_label_new(
+        "Plugin list version:  " PLUGIN_LIST_VERSION);
+    gtk_widget_add_css_class(ver_lbl, "dim-label");
+    npp_box_pack(GTK_BOX(footer), ver_lbl, FALSE, 0);
     ui->status_lbl = gtk_label_new("");
-    gtk_label_set_xalign(GTK_LABEL(ui->status_lbl), 0.0f);
-    gtk_widget_set_margin_top(ui->status_lbl, 2);
-    npp_box_pack(GTK_BOX(root), ui->status_lbl, FALSE, 0);
+    gtk_widget_add_css_class(ui->status_lbl, "dim-label");
+    npp_box_pack(GTK_BOX(footer), ui->status_lbl, FALSE, 0);
+    npp_box_pack(GTK_BOX(root), footer, FALSE, 0);
 
     /* Bottom button row */
     GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -1611,6 +1883,7 @@ void pluginsadmin_show(GtkWindow *parent) {
 
     gtk_widget_show_all(g_ui->window);
     adminui_set_action_for_tab(g_ui);  /* hides Incompatible action */
+    update_action_sensitivity(g_ui);
     gtk_window_present(GTK_WINDOW(g_ui->window));
 }
 
