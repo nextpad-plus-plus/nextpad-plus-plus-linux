@@ -84,6 +84,53 @@ static void link_gen_bump(GtkWidget *sci)
                       GINT_TO_POINTER(gen + 1));
 }
 
+/* GAP-134 — smart-highlight re-marking, deferred to idle for the same
+ * reason as the links above: this backend delivers SCN_UPDATEUI from
+ * inside Editor::Paint, and mutating indicators there abandons the
+ * in-flight frame (every wheel notch would paint twice). Coalesced per
+ * editor via the same object-data latch pattern. */
+static sptr_t sci_msg(GtkWidget *sci, unsigned int msg, uptr_t w, sptr_t l);
+
+static gboolean smarthl_update_idle(gpointer data)
+{
+    GtkWidget *sci = data;
+    g_object_set_data(G_OBJECT(sci), "npp-sh-idle", NULL);
+
+    /* Feedback-loop breaker (found live): the engine's own
+     * INDICATORCLEARRANGE/FILLRANGE raise SC_MOD_CHANGEINDICATOR, which
+     * surfaces as SC_UPDATE_CONTENT in the NEXT UPDATEUI — without this
+     * memo the pass re-arms itself every frame, forever (measured: the
+     * engine ran 77× in seconds and starved GLib timers). Skip when
+     * neither the selection nor the TEXT generation ("npp-link-gen",
+     * bumped only on insert/delete — indicator churn doesn't move it)
+     * changed since the last pass. Direct callers (Find All in Current,
+     * the prefs live-apply) bypass this by calling the engine straight. */
+    sptr_t a = sci_msg(sci, SCI_GETSELECTIONSTART, 0, 0);
+    sptr_t b = sci_msg(sci, SCI_GETSELECTIONEND,   0, 0);
+    int gen  = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(sci),
+                                                 "npp-link-gen"));
+    gchar *memo = g_strdup_printf("%ld:%ld:%d", (long)a, (long)b, gen);
+    const char *last = g_object_get_data(G_OBJECT(sci), "npp-sh-memo");
+    if (last && strcmp(last, memo) == 0) {
+        g_free(memo);
+        g_object_unref(sci);
+        return G_SOURCE_REMOVE;
+    }
+    g_object_set_data_full(G_OBJECT(sci), "npp-sh-memo", memo, g_free);
+
+    extern void main_smarthighlight_update(GtkWidget *);
+    main_smarthighlight_update(sci);
+    g_object_unref(sci);
+    return G_SOURCE_REMOVE;
+}
+
+static void smarthl_update_schedule(GtkWidget *sci)
+{
+    if (g_object_get_data(G_OBJECT(sci), "npp-sh-idle")) return;
+    g_object_set_data(G_OBJECT(sci), "npp-sh-idle", GINT_TO_POINTER(1));
+    g_idle_add(smarthl_update_idle, g_object_ref(sci));
+}
+
 /* Forward decls for the watermark block (defined later in this file). */
 static sptr_t sci_msg(GtkWidget *sci, unsigned int msg, uptr_t w, sptr_t l);
 static NppDoc *doc_of_sci(GtkWidget *sci);
@@ -2284,6 +2331,15 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
          * moves (macOS _refreshActiveCalltipOnCaretMove). */
         if (n->updated & (SC_UPDATE_CONTENT | SC_UPDATE_SELECTION))
             autocomplete_on_update_ui(sci);
+
+        /* GAP-134 — smart highlight follows the selection. macOS calls
+         * updateSmartHighlight on every SCN_UPDATEUI (EditorView.mm:5510);
+         * here it defers to idle (see smarthl_update_schedule) and skips
+         * pure scrolls — a scroll can change neither selection nor
+         * content, so the marks are already right and a whole-document
+         * clear+resweep per wheel notch would be pure waste. */
+        if (n->updated & (SC_UPDATE_CONTENT | SC_UPDATE_SELECTION))
+            smarthl_update_schedule(sci);
 
         /* GAP-37 — re-mark clickable links only when content or the
          * viewport changed (a bare caret move can't shift link spans).

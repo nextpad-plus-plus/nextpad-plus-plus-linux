@@ -1781,50 +1781,72 @@ static void action_select_in_brackets(GSimpleAction *a, GVariant *p, gpointer u)
     }
 }
 
-/* Smart Highlight: mark all matches of the word under caret with INDIC 8
- * (Scintilla's "tag" indicator). Triggered from SCN_UPDATEUI in editor.c
- * (we add the call below). */
+/* GAP-134 — Smart Highlight (macOS updateSmartHighlight, EditorView.mm:
+ * 4114-4168): mark every occurrence of the selected text with indicator 8.
+ * Runs from editor.c's SCN_UPDATEUI (deferred to idle there — this
+ * backend delivers UPDATEUI from inside Editor::Paint, and mutating
+ * indicators mid-paint abandons the frame; the GAP-37 link lesson). */
 #define NPP_INDIC_SMARTHIGHLIGHT 8
 
-static void smarthighlight_update_now(GtkWidget *sci)
+gboolean main_large_file_allows(GtkWidget *sci, const char *feature);  /* below */
+
+void main_smarthighlight_update(GtkWidget *sci)
 {
     if (!sci) return;
     ScintillaObject *s = SCINTILLA(sci);
 
-    /* Clear previous highlights. */
+    /* One-time indicator styling per view — macOS styles once at editor
+     * setup (EditorView.mm:2386-2390); re-sending SETSTYLE every pass
+     * would dirty the view for nothing. Gold roundbox: macOS
+     * RGB(1.0, 0.85, 0) → BGR 0x00D9FF, alpha 80. */
+    if (!g_object_get_data(G_OBJECT(sci), "npp-sh-styled")) {
+        scintilla_send_message(s, SCI_INDICSETSTYLE, NPP_INDIC_SMARTHIGHLIGHT,
+                               INDIC_ROUNDBOX);
+        scintilla_send_message(s, SCI_INDICSETFORE,  NPP_INDIC_SMARTHIGHLIGHT,
+                               0x00D9FF);
+        scintilla_send_message(s, SCI_INDICSETALPHA, NPP_INDIC_SMARTHIGHLIGHT, 80);
+        g_object_set_data(G_OBJECT(sci), "npp-sh-styled", GINT_TO_POINTER(1));
+    }
+
+    /* Always clear FIRST, unconditionally (macOS rule) — this is also
+     * what retires Find-All-in-Current marks on the next selection
+     * change instead of leaving them stranded forever. */
     sptr_t doc_len = scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
     scintilla_send_message(s, SCI_SETINDICATORCURRENT, NPP_INDIC_SMARTHIGHLIGHT, 0);
     scintilla_send_message(s, SCI_INDICATORCLEARRANGE, 0, doc_len);
 
-    /* If no selection, nothing to do. */
+    if (!g_prefs.smart_highlight) return;
+
+    /* Large-file gate (macOS: _largeFileMode && !allowSmartHilite —
+     * sweeping a multi-million-line buffer dominates wall time). */
+    if (!main_large_file_allows(sci, "smarthilite")) return;
+
+    /* Selection-driven: ≥ 2 chars, single line (macOS's no-newline test;
+     * the old 80-char cap was a Linux-only invention — macOS has none). */
     sptr_t sel_start = scintilla_send_message(s, SCI_GETSELECTIONSTART, 0, 0);
     sptr_t sel_end   = scintilla_send_message(s, SCI_GETSELECTIONEND,   0, 0);
-    if (sel_start == sel_end) return;
-    /* Cap to single-line selections of reasonable length. */
-    if (sel_end - sel_start < 2 || sel_end - sel_start > 80) return;
-    sptr_t line_start = scintilla_send_message(s, SCI_LINEFROMPOSITION, sel_start, 0);
-    sptr_t line_end   = scintilla_send_message(s, SCI_LINEFROMPOSITION, sel_end,   0);
-    if (line_start != line_end) return;
+    sptr_t sel_len   = sel_end - sel_start;
+    if (sel_len < 2) return;
+    if (scintilla_send_message(s, SCI_LINEFROMPOSITION, sel_start, 0) !=
+        scintilla_send_message(s, SCI_LINEFROMPOSITION, sel_end,   0)) return;
 
-    /* Configure the indicator style: box, semi-transparent, theme accent. */
-    scintilla_send_message(s, SCI_INDICSETSTYLE, NPP_INDIC_SMARTHIGHLIGHT,
-                           INDIC_ROUNDBOX);
-    scintilla_send_message(s, SCI_INDICSETFORE,  NPP_INDIC_SMARTHIGHLIGHT,
-                           0x00B0F0);  /* warm yellow-orange (BGR) */
-    scintilla_send_message(s, SCI_INDICSETALPHA, NPP_INDIC_SMARTHIGHLIGHT, 80);
-
-    /* Grab selected text. */
-    sptr_t sel_len = sel_end - sel_start;
     char *needle = g_malloc((gsize)sel_len + 1);
     scintilla_send_message(s, SCI_GETSELTEXT, 0, (sptr_t)needle);
 
-    /* Sweep document with SCI_SEARCHINTARGET. Flags driven by prefs:
-     * smart_hilite_case  → SCFIND_MATCHCASE  (default off — case-insensitive)
-     * smart_hilite_word  → SCFIND_WHOLEWORD  (default on  — whole-word only) */
+    /* Flags per prefs; both OFF = substring + case-insensitive (macOS
+     * issue #64 — the four toggle states stay orthogonal to the labels).
+     * Save/restore the global search state around the sweep — findreplace
+     * re-pushes its own flags per operation, but a plugin's in-flight
+     * target must not be clobbered by a caret move (GAP-133 lesson). */
+    sptr_t save_flags = scintilla_send_message(s, SCI_GETSEARCHFLAGS, 0, 0);
+    sptr_t save_ts    = scintilla_send_message(s, SCI_GETTARGETSTART, 0, 0);
+    sptr_t save_te    = scintilla_send_message(s, SCI_GETTARGETEND,   0, 0);
+
     int flags = 0;
     if (g_prefs.smart_hilite_case) flags |= SCFIND_MATCHCASE;
     if (g_prefs.smart_hilite_word) flags |= SCFIND_WHOLEWORD;
     scintilla_send_message(s, SCI_SETSEARCHFLAGS, (uptr_t)flags, 0);
+
     sptr_t cur = 0;
     while (cur < doc_len) {
         scintilla_send_message(s, SCI_SETTARGETRANGE, cur, doc_len);
@@ -1832,28 +1854,29 @@ static void smarthighlight_update_now(GtkWidget *sci)
                                             (uptr_t)sel_len, (sptr_t)needle);
         if (hit < 0) break;
         sptr_t end = scintilla_send_message(s, SCI_GETTARGETEND, 0, 0);
-        /* Don't re-mark the actual selection itself. */
-        if (hit != sel_start) {
+        if (end <= cur) break;               /* zero-width safety */
+        /* Don't re-mark the actual selection itself (macOS rule). */
+        if (hit != sel_start)
             scintilla_send_message(s, SCI_INDICATORFILLRANGE, hit, end - hit);
-        }
         cur = end;
     }
     g_free(needle);
+
+    scintilla_send_message(s, SCI_SETSEARCHFLAGS, (uptr_t)save_flags, 0);
+    scintilla_send_message(s, SCI_SETTARGETRANGE, save_ts, save_te);
 }
 
-/* Public hook callable from editor.c on SCN_UPDATEUI. */
-void main_smarthighlight_update(GtkWidget *sci) {
-    /* P3 — gate on the pref. When disabled, clear any active indicators
-     * so the visual state matches the toggle. */
-    if (!g_prefs.smart_highlight) {
-        if (sci) {
-            scintilla_send_message(SCINTILLA(sci), SCI_SETINDICATORCURRENT, 8, 0);
-            sptr_t len = scintilla_send_message(SCINTILLA(sci), SCI_GETLENGTH, 0, 0);
-            scintilla_send_message(SCINTILLA(sci), SCI_INDICATORCLEARRANGE, 0, len);
-        }
-        return;
+/* Live-apply hook for the three Searching-page checkboxes: re-run (or
+ * clear, when just disabled) on every open editor immediately instead of
+ * waiting for each tab's next selection change. */
+void main_smarthighlight_refresh_all(void)
+{
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (d && d->sci) main_smarthighlight_update(d->sci);
     }
-    smarthighlight_update_now(sci);
+    g_ptr_array_free(docs, TRUE);
 }
 
 /* ──────────────────────────────────────────────────────────────────────

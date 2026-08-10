@@ -1122,9 +1122,12 @@ CHK(ai_braces,         ai_braces,                  (void)0)
 CHK(ai_quotes,         ai_quotes,                  (void)0)
 CHK(ai_dquotes,        ai_dquotes,                 (void)0)
 CHK(ai_html,           ai_html,                    (void)0)
-CHK(smart_hilite,      smart_highlight,            (void)0)
-CHK(smart_case,        smart_hilite_case,          (void)0)
-CHK(smart_word,        smart_hilite_word,          (void)0)
+/* GAP-134 — apply live on every open editor (re-mark, or clear when just
+ * disabled) instead of waiting for each tab's next selection change. */
+extern void main_smarthighlight_refresh_all(void);
+CHK(smart_hilite,      smart_highlight,            main_smarthighlight_refresh_all())
+CHK(smart_case,        smart_hilite_case,          main_smarthighlight_refresh_all())
+CHK(smart_word,        smart_hilite_word,          main_smarthighlight_refresh_all())
 CHK(virt_space,        virtual_space,              editor_apply_prefs())
 CHK(no_drag,           disable_text_drag_drop,     editor_apply_prefs())
 CHK(rmb_keep,          right_click_keeps_sel,      (void)0)
