@@ -190,7 +190,10 @@ void plugin_refresh_handles(void)
 {
     NppDoc *cur = editor_current_doc();
     s_npp_data.scintillaMainHandle = cur ? cur->sci : NULL;
-    s_npp_data.scintillaSecondHandle = split_secondary_current_sci();
+    /* GAP-160 — routing OFF hides the split view from plugins (macOS
+     * falls back to the current editor for everything). */
+    s_npp_data.scintillaSecondHandle =
+        g_prefs.plugin_split_routing ? split_secondary_current_sci() : NULL;
 }
 
 void plugin_load_all(void)
@@ -492,14 +495,23 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     /* ── Scintilla / view ────────────────────────────────────────────── */
     case NPPM_GETCURRENTSCINTILLA: {
         NppDoc *doc = editor_current_doc();
-        /* lParam may be a `int *` to receive the view id (0 or 1); we only
-         * have view 0 right now. */
-        if (lParam) *((int *)(intptr_t)lParam) = 0;
+        /* GAP-160 — with split routing ON (macOS
+         * pluginSplitViewRouting, default), report view 1 when the
+         * focused editor IS the secondary split view; OFF forces the
+         * macOS fallback of always-main. */
+        int view = 0;
+        if (g_prefs.plugin_split_routing && doc &&
+            doc->sci == split_secondary_current_sci())
+            view = 1;
+        if (lParam) *((int *)(intptr_t)lParam) = view;
         (void)wParam;
         return doc ? (long)(intptr_t)doc->sci : 0L;
     }
-    case NPPM_GETCURRENTVIEW:
-        return 0L;
+    case NPPM_GETCURRENTVIEW: {
+        NppDoc *doc = editor_current_doc();
+        return (g_prefs.plugin_split_routing && doc &&
+                doc->sci == split_secondary_current_sci()) ? 1L : 0L;
+    }
     case NPPM_GETCURRENTBUFFERID: {
         NppDoc *doc = editor_current_doc();
         return doc ? (long)(intptr_t)doc : 0L;

@@ -108,6 +108,9 @@ typedef struct {
     gboolean show_full_path_in_title; /* default FALSE */
     gboolean show_status_bar;         /* default TRUE */
     gboolean copy_line_no_selection;  /* copy/cut whole line, default TRUE */
+    int      plugin_split_routing;    /* GAP-160 — report/route the split
+                                         view to plugins (macOS
+                                         pluginSplitViewRouting, def ON) */
     int      scroll_wheel_gain;       /* GAP-159 — lines per wheel notch:
                                          1 (off) / 2 / 3 / 5 / 8 / 10 */
     int      toolbar_icon_scale;      /* index 0..5 into pickScales[]

@@ -208,6 +208,7 @@ NppPrefs g_prefs = {
     .hide_tab_bar            = FALSE,
     .line_spacing10          = 10,
     .scroll_wheel_gain       = 1,
+    .plugin_split_routing    = TRUE,
     .doclist_show_ext        = TRUE,
     .doclist_show_path       = TRUE,
     /* Backup */
@@ -447,6 +448,8 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "funcListUseXML"))     g_prefs.funclist_use_xml       = is_yes(val);
         else if (!strcmp(attr, "fileStatusAutoDetection"))  g_prefs.file_auto_detect     = is_yes(val);
         else if (!strcmp(attr, "fileStatusUpdateSilently")) g_prefs.file_update_silently = is_yes(val);
+        else if (!strcmp(attr, "pluginSplitViewRouting"))
+            g_prefs.plugin_split_routing = is_yes(val);
         else if (!strcmp(attr, "scrollSpeedGain")) {
             /* GAP-159 — macOS kPrefScrollSpeedGain ("3" for 3x). Only
              * the six offered gains are accepted. */
@@ -937,12 +940,12 @@ g_prefs.tab_max_label_width,
         "        <GUIConfig name=\"MISC\" muteSounds=\"%s\" disableTextDragDrop=\"%s\" "
         "spellCheck=\"%s\" panelKeepState=\"%s\" funcListUseXML=\"%s\" "
         "fileStatusAutoDetection=\"%s\" fileStatusUpdateSilently=\"%s\" "
-        "scrollSpeedGain=\"%d\" />\n",
+        "scrollSpeedGain=\"%d\" pluginSplitViewRouting=\"%s\" />\n",
         b2yn(g_prefs.mute_sounds), b2yn(g_prefs.disable_text_drag_drop),
         b2yn(g_prefs.spell_check), b2yn(g_prefs.panel_keep_state),
         b2yn(g_prefs.funclist_use_xml),
         b2yn(g_prefs.file_auto_detect), b2yn(g_prefs.file_update_silently),
-        g_prefs.scroll_wheel_gain);
+        g_prefs.scroll_wheel_gain, b2yn(g_prefs.plugin_split_routing));
 
     /* GAP-82/83 — panel persistence (panelstate.c formats; plain
      * [a-z0-9=x: ] tokens, no XML escaping needed). */
@@ -1344,6 +1347,15 @@ static void on_enc_combo(GtkComboBox *c, gpointer d)
 
 static void on_appear(GtkComboBox *c, gpointer d)
     { (void)d; g_prefs.appearance = gtk_combo_box_get_active(c); prefs_save(); }
+static void on_plugin_split_routing(GtkCheckButton *b, gpointer d)
+{
+    (void)d;
+    g_prefs.plugin_split_routing = npp_toggle_get_active(GTK_WIDGET(b));
+    extern void plugin_refresh_handles(void);
+    plugin_refresh_handles();          /* live: second handle on/off */
+    prefs_save();
+}
+
 /* GAP-159 — six gains, same list as macOS (PrefWC:3139). */
 static const int k_wheel_gains[] = { 1, 2, 3, 5, 8, 10 };
 static void on_wheel_gain(GtkComboBox *c, gpointer d)
@@ -1637,6 +1649,8 @@ static GtkWidget *page_misc(void)
     make_check(g, r++, "Remember panel visibility across sessions", g_prefs.panel_keep_state,   G_CALLBACK(on_panel_keep));
     /* GAP-135 — label matches macOS (.mm:3072) for locale-string reuse. */
     make_check(g, r++, "Use XML-based function list parsers",    g_prefs.funclist_use_xml,      G_CALLBACK(on_funclist_xml));
+    /* GAP-160 — macOS MISC (.mm:3073). */
+    make_check(g, r++, "Route plugin messages to split view editors", g_prefs.plugin_split_routing, G_CALLBACK(on_plugin_split_routing));
 
     GtkWidget *tb = gtk_combo_box_text_new();
     /* 6-step % scale matching macOS PreferencesWindowController.mm:1656.
@@ -1656,12 +1670,12 @@ static GtkWidget *page_misc(void)
 
     /* GAP-159 — macOS MISC "Mouse wheel scroll speed" (PrefWC:3129). */
     GtkWidget *wg = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "1Ã (off)");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "2Ã");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "3Ã");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "5Ã");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "8Ã");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "10Ã");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "1× (off)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "2×");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "3×");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "5×");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "8×");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "10×");
     int wi = 0;
     for (int k = 0; k < 6; k++)
         if (k_wheel_gains[k] == g_prefs.scroll_wheel_gain) { wi = k; break; }
@@ -2081,6 +2095,69 @@ static void on_cloud_path_changed(GtkEditable *e, gpointer radio)
         cloud_choice_write(gtk_editable_get_text(e));
 }
 
+/* GAP-160 — macOS cloud-pane affordances (PrefWC:2702-2852): a "…"
+ * folder chooser and a live status line under the path field —
+ * "" (no cloud / empty), gray restart prompt (usable dir), red
+ * "Invalid path." (macOS _backupPathUsable = is/can-become a writable
+ * directory). */
+static GtkWidget *s_cloud_status;
+static GtkWidget *s_cloud_entry;
+static GtkWidget *s_cloud_rb_path;
+
+static gboolean cloud_path_usable(const char *p)
+{
+    if (!p || !*p) return FALSE;
+    if (g_file_test(p, G_FILE_TEST_IS_DIR))
+        return g_access(p, W_OK) == 0;
+    if (g_file_test(p, G_FILE_TEST_EXISTS)) return FALSE;  /* a file */
+    gchar *parent = g_path_get_dirname(p);
+    gboolean ok = g_file_test(parent, G_FILE_TEST_IS_DIR) &&
+                  g_access(parent, W_OK) == 0;
+    g_free(parent);
+    return ok;
+}
+
+static void cloud_status_refresh(void)
+{
+    if (!s_cloud_status) return;
+    const char *p = s_cloud_entry
+        ? gtk_editable_get_text(GTK_EDITABLE(s_cloud_entry)) : "";
+    if (!npp_toggle_get_active(s_cloud_rb_path) || !p || !*p) {
+        gtk_label_set_text(GTK_LABEL(s_cloud_status), "");
+    } else if (cloud_path_usable(p)) {
+        gtk_label_set_markup(GTK_LABEL(s_cloud_status),
+            "<small>Please restart Nextpad++ to take effect.</small>");
+    } else {
+        gtk_label_set_markup(GTK_LABEL(s_cloud_status),
+            "<small><span foreground='#C01010'>Invalid path.</span></small>");
+    }
+}
+
+static void on_cloud_status_any(GtkWidget *w, gpointer d)
+{
+    (void)w; (void)d;
+    cloud_status_refresh();
+}
+
+static void on_cloud_browse(GtkButton *b, gpointer entry)
+{
+    (void)b;
+    GtkWidget *dlg = gtk_file_chooser_dialog_new(
+        "Choose Cloud Folder", NULL, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Select", GTK_RESPONSE_ACCEPT, NULL);
+    char *chosen = NULL;
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT)
+        chosen = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+    gtk_widget_destroy(dlg);
+    if (chosen) {
+        npp_toggle_set_active(s_cloud_rb_path, TRUE);
+        /* "changed" fires cloud_choice_write + status refresh. */
+        gtk_editable_set_text(GTK_EDITABLE(entry), chosen);
+        g_free(chosen);
+    }
+}
+
 static GtkWidget *page_cloud_link(void)
 {
     GtkWidget *g = make_grid();
@@ -2108,7 +2185,28 @@ static GtkWidget *page_cloud_link(void)
 
     gtk_grid_attach(GTK_GRID(g), rb_none, 0, r++, 2, 1);
     gtk_grid_attach(GTK_GRID(g), rb_path, 0, r++, 2, 1);
-    gtk_grid_attach(GTK_GRID(g), path_entry, 0, r++, 2, 1);
+    {   /* GAP-160 — entry + "…" chooser side by side + status line. */
+        GtkWidget *hb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *browse = gtk_button_new_with_label("…");
+        gtk_widget_set_tooltip_text(browse, "Choose folder");
+        npp_box_pack(GTK_BOX(hb), path_entry, TRUE, 0);
+        npp_box_pack(GTK_BOX(hb), browse, FALSE, 0);
+        gtk_grid_attach(GTK_GRID(g), hb, 0, r++, 2, 1);
+        g_signal_connect(browse, "clicked",
+                         G_CALLBACK(on_cloud_browse), path_entry);
+        s_cloud_entry   = path_entry;
+        s_cloud_rb_path = rb_path;
+        s_cloud_status  = gtk_label_new("");
+        gtk_widget_set_halign(s_cloud_status, GTK_ALIGN_START);
+        gtk_grid_attach(GTK_GRID(g), s_cloud_status, 0, r++, 2, 1);
+        g_signal_connect(path_entry, "changed",
+                         G_CALLBACK(on_cloud_status_any), NULL);
+        g_signal_connect(rb_none, "toggled",
+                         G_CALLBACK(on_cloud_status_any), NULL);
+        g_signal_connect(rb_path, "toggled",
+                         G_CALLBACK(on_cloud_status_any), NULL);
+        cloud_status_refresh();
+    }
     GtkWidget *note = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(note),
         "<small>Settings (config, styles, shortcuts, user languages) move to "
