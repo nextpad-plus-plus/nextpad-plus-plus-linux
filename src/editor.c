@@ -708,12 +708,9 @@ static gsize link_trim_trailing(const char *text, gsize start, gsize end)
 static gboolean link_gating_off(GtkWidget *sci)
 {
     if (!g_prefs.clickable_link_enable) return TRUE;
-    /* Large-file gate (pre-existing pref pair). */
-    if (g_prefs.large_file_enabled && !g_prefs.large_file_allow_url_click) {
-        sptr_t len = sci_msg(sci, SCI_GETLENGTH, 0, 0);
-        if (len > (sptr_t)g_prefs.large_file_size_mb * 1024 * 1024)
-            return TRUE;
-    }
+    /* GAP-148 — the per-widget large-file marking governs (before, this
+     * re-derived size from the live buffer; now every open path marks). */
+    if (!main_large_file_allows(sci, "urlclick")) return TRUE;
     return FALSE;
 }
 
@@ -998,6 +995,9 @@ static void apply_word_chars(GtkWidget *sci)
     sci_msg(sci, SCI_SETWORDCHARS, 0, (sptr_t)combined->str);
     g_string_free(combined, TRUE);
 }
+
+/* GAP-148 — main.c owns the per-widget large-file gate lookup. */
+gboolean main_large_file_allows(GtkWidget *sci, const char *feature);
 
 static void setup_sci(GtkWidget *sci)
 {
@@ -2441,7 +2441,13 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
             docmap_sync_scroll(sci);
         }
 
-        /* Brace highlighting */
+        /* Brace highlighting. GAP-148 — skipped on large files unless
+         * the pref allows (macOS updateBraceHighlight gate). */
+        if (!main_large_file_allows(sci, "bracematch")) {
+            sci_msg(sci, SCI_BRACEHIGHLIGHT, (uptr_t)-1, (sptr_t)-1);
+            goto brace_done;
+        }
+        {
         Sci_Position pos = (Sci_Position)sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
         static const char braces[] = "()[]{}<>";
         Sci_Position brace_pos = -1;
@@ -2462,6 +2468,8 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         } else {
             sci_msg(sci, SCI_BRACEHIGHLIGHT, (uptr_t)-1, (sptr_t)-1);
         }
+        }
+brace_done:;
 
         /* API calltip: retarget the highlighted parameter as the caret
          * moves (macOS _refreshActiveCalltipOnCaretMove). */
@@ -3121,6 +3129,33 @@ gboolean editor_open_path(const char *path)
         return FALSE;
     }
 
+    /* GAP-148 — large-file mode at THE choke point, so every open path
+     * (File▸Open, session restore, recent, drag-drop, project/doclist
+     * navigation, plugin NPPM_DOOPEN, search-result jumps, CLI) gets the
+     * guard dialog + restrictions, not just the two CLI paths. */
+#define NPP_LARGE_FILE_HARD_MB 2048   /* 2 GB threshold for hard warning */
+    gboolean large = g_prefs.large_file_enabled &&
+        len >= (gsize)g_prefs.large_file_size_mb * 1024u * 1024u;
+    if (large && !g_prefs.large_file_suppress) {
+        gint64 mb = (gint64)(len / (1024 * 1024));
+        GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(s_window),
+            GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING,
+            mb >= NPP_LARGE_FILE_HARD_MB ? GTK_BUTTONS_OK_CANCEL
+                                         : GTK_BUTTONS_YES_NO,
+            "Open %s?", g_path_get_basename(path));
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
+            "This file is %lld MB. Files this large may cause Nextpad++ to\n"
+            "use a lot of memory and disable some features (syntax highlighting,\n"
+            "wrap, autocomplete, smart highlight, brace match).\n\nProceed?",
+            (long long)mb);
+        int resp = gtk_dialog_run(GTK_DIALOG(dlg));
+        gtk_widget_destroy(dlg);
+        if (resp != GTK_RESPONSE_YES && resp != GTK_RESPONSE_OK) {
+            g_free(contents);
+            return FALSE;
+        }
+    }
+
     /* reuse current tab if it's an untouched "new N" */
     NppDoc *cur = editor_current_doc();
     int page;
@@ -3163,9 +3198,29 @@ gboolean editor_open_path(const char *path)
     cur->encoding = g_strdup(enc_name);
     cur->has_bom  = encoding_has_bom(enc_name);
 
+    /* GAP-148 — pre-insert undo gate (macOS: undo collection disabled
+     * BEFORE the text lands and stays off for large tabs; the undo
+     * buffer would otherwise shadow the whole multi-GB insert). */
+    sci_msg(sci, SCI_SETUNDOCOLLECTION, large ? 0 : 1, 0);
     sci_msg(sci, SCI_SETTEXT, 0, (sptr_t)utf8);
     sci_msg(sci, SCI_SETSAVEPOINT, 0, 0);
     sci_msg(sci, SCI_EMPTYUNDOBUFFER, 0, 0);
+    /* Per-widget marking + feature-allow flags (read by
+     * main_large_file_allows at the gated feature sites). */
+    g_object_set_data(G_OBJECT(sci), "npp-is-large",
+                      GINT_TO_POINTER(large ? 1 : 0));
+    if (large) {
+        g_object_set_data(G_OBJECT(sci), "npp-lf-allow-ac",
+            GINT_TO_POINTER(g_prefs.large_file_allow_autocomplete));
+        g_object_set_data(G_OBJECT(sci), "npp-lf-allow-sh",
+            GINT_TO_POINTER(g_prefs.large_file_allow_smart_hilite));
+        g_object_set_data(G_OBJECT(sci), "npp-lf-allow-bm",
+            GINT_TO_POINTER(g_prefs.large_file_allow_brace_match));
+        g_object_set_data(G_OBJECT(sci), "npp-lf-allow-url",
+            GINT_TO_POINTER(g_prefs.large_file_allow_url_click));
+        if (g_prefs.large_file_no_wrap)
+            sci_msg(sci, SCI_SETWRAPMODE, SC_WRAP_NONE, 0);
+    }
     /* Loading is not editing — start with a clean change-history
      * margin (macOS parity: ChangeHistorySet runs post-load there). */
     changehistory_clear(sci);
@@ -3199,7 +3254,11 @@ gboolean editor_open_path(const char *path)
      * (handled by Scintilla's own commands; the bit only blocks edits). */
     sci_msg(sci, SCI_SETREADONLY, access(path, W_OK) == 0 ? 0 : 1, 0);
 
-    lexer_apply_from_path(sci, path);
+    /* GAP-148 — no lexer on large files (macOS setLanguage:@""): a full
+     * lex of a multi-GB buffer dominates open time. Plain text keeps the
+     * theme's default colours. */
+    if (large) lexer_apply(sci, "");
+    else       lexer_apply_from_path(sci, path);
     {
         const char *nl = (const char *)g_object_get_data(G_OBJECT(sci),
                                                          "npp-lang");
@@ -4203,9 +4262,16 @@ void editor_apply_prefs(void)
         sci_msg(sci, SCI_SETZOOM,             (uptr_t)g_prefs.zoom_level, 0);
 
         /* Wrap + virtual space + drag/drop */
-        if (cjk_flip)   /* GAP-119 — force re-layout under the new gate */
+        /* GAP-148 — a large-file tab with no-wrap active must not be
+         * re-wrapped by a global pref pass (macOS keeps the per-view
+         * _wordWrapEnabled=NO). */
+        gboolean lf_nowrap =
+            g_object_get_data(G_OBJECT(sci), "npp-is-large") &&
+            g_prefs.large_file_no_wrap;
+        if (cjk_flip && !lf_nowrap)  /* GAP-119 — force re-layout */
             sci_msg(sci, SCI_SETWRAPMODE, 0, 0);
-        sci_msg(sci, SCI_SETWRAPMODE,         g_prefs.word_wrap ? 1 : 0, 0);
+        if (!lf_nowrap)
+            sci_msg(sci, SCI_SETWRAPMODE,     g_prefs.word_wrap ? 1 : 0, 0);
         sci_msg(sci, SCI_SETVIRTUALSPACEOPTIONS,
                 g_prefs.virtual_space ? (SCVS_RECTANGULARSELECTION | SCVS_USERACCESSIBLE) : 0, 0);
         /* Drag/drop disable not exposed by Scintilla as a single message;

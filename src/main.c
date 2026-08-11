@@ -5813,66 +5813,10 @@ static gboolean cmd_on_entry_keypress(GtkEventControllerKey *ctl, guint keyval,
  * like wrap / autocomplete / smart-highlight can short-circuit.
  * ────────────────────────────────────────────────────────────────────── */
 
-#define NPP_LARGE_FILE_HARD_MB   2048    /* 2 GB threshold for hard warning */
-
-/* Returns TRUE if the file is safe to open as-is, FALSE if user cancelled. */
-static gboolean large_file_guard(const char *path) {
-    if (!path) return TRUE;
-    /* P3 — gate large-file restrictions on the pref. When disabled,
-     * always proceed without prompting. */
-    if (!g_prefs.large_file_enabled) return TRUE;
-    struct stat st;
-    if (stat(path, &st) != 0) return TRUE;
-    gint64 mb = st.st_size / (1024 * 1024);
-    if (mb < g_prefs.large_file_size_mb) return TRUE;
-
-    /* large_file_suppress: skip the dialog entirely; just proceed. */
-    if (g_prefs.large_file_suppress) return TRUE;
-
-    GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(g_window),
-        GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING,
-        mb >= NPP_LARGE_FILE_HARD_MB ? GTK_BUTTONS_OK_CANCEL : GTK_BUTTONS_YES_NO,
-        "Open %s?", g_path_get_basename(path));
-    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
-        "This file is %lld MB. Files this large may cause Nextpad++ to\n"
-        "use a lot of memory and disable some features (syntax highlighting,\n"
-        "wrap, autocomplete, smart highlight, brace match).\n\nProceed?",
-        (long long)mb);
-    int resp = gtk_dialog_run(GTK_DIALOG(dlg));
-    gtk_widget_destroy(dlg);
-    return (resp == GTK_RESPONSE_YES || resp == GTK_RESPONSE_OK);
-}
-
-/* Open with size guard; sets "npp-is-large" on the sci widget if applicable.
- * Per-feature allow flags from g_prefs (P3): autocomplete / smart-hilite /
- * brace-match / URL-click can be selectively enabled in large-file mode. */
-static gboolean editor_open_path_guarded(const char *path) {
-    if (!large_file_guard(path)) return FALSE;
-    gboolean ok = editor_open_path(path);
-    if (ok && g_prefs.large_file_enabled) {
-        struct stat st;
-        if (stat(path, &st) == 0 &&
-            st.st_size >= (off_t)g_prefs.large_file_size_mb * 1024L * 1024L) {
-            NppDoc *d = editor_current_doc();
-            if (d && d->sci) {
-                g_object_set_data(G_OBJECT(d->sci), "npp-is-large", GINT_TO_POINTER(1));
-                if (g_prefs.large_file_no_wrap)
-                    scintilla_send_message(SCINTILLA(d->sci), SCI_SETWRAPMODE, SC_WRAP_NONE, 0);
-                /* Per-feature allow flags stashed on the widget so the
-                 * relevant code paths can check them without re-reading prefs. */
-                g_object_set_data(G_OBJECT(d->sci), "npp-lf-allow-ac",
-                    GINT_TO_POINTER(g_prefs.large_file_allow_autocomplete));
-                g_object_set_data(G_OBJECT(d->sci), "npp-lf-allow-sh",
-                    GINT_TO_POINTER(g_prefs.large_file_allow_smart_hilite));
-                g_object_set_data(G_OBJECT(d->sci), "npp-lf-allow-bm",
-                    GINT_TO_POINTER(g_prefs.large_file_allow_brace_match));
-                g_object_set_data(G_OBJECT(d->sci), "npp-lf-allow-url",
-                    GINT_TO_POINTER(g_prefs.large_file_allow_url_click));
-            }
-        }
-    }
-    return ok;
-}
+/* GAP-148 — the large-file guard dialog, marking, no-wrap, lexer and
+ * undo gating all moved into editor_open_path (the choke point every
+ * open path funnels through). main_large_file_allows below reads the
+ * per-widget flags it stamps. */
 
 /* Public helper for other modules to check large-file allow flags. */
 gboolean main_large_file_allows(GtkWidget *sci, const char *feature) {
@@ -9233,7 +9177,7 @@ static void cli_open_folder(const char *dir)
         if (r != GTK_RESPONSE_OK) { g_ptr_array_free(files, TRUE); return; }
     }
     for (guint i = 0; i < files->len; i++)
-        editor_open_path_guarded(g_ptr_array_index(files, i));
+        editor_open_path(g_ptr_array_index(files, i));
     g_ptr_array_free(files, TRUE);
 }
 
@@ -9283,7 +9227,7 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
             }
             continue;
         }
-        editor_open_path_guarded(path);             /* G17 size guard */
+        editor_open_path(path);   /* guard lives in editor_open_path */
     }
     /* G3.14: apply parsed CLI flags to whichever file is now active. */
     apply_cli_flags_to_current();

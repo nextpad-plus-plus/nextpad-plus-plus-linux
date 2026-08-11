@@ -133,6 +133,15 @@ void autocomplete_on_char_added(GtkWidget *sci, int ch)
      * 0 = Function (API only), 1 = Word, 2 = Function and word. */
     gboolean want_func = (g_prefs.ac_mode == 0 || g_prefs.ac_mode == 2);
     gboolean want_word = (g_prefs.ac_mode == 1 || g_prefs.ac_mode == 2);
+    /* GAP-148 — on a large file only the document-scanning WORD component
+     * is gated; function completion never scans and stays available
+     * (macOS wordBlocked). */
+    {
+        extern gboolean main_large_file_allows(GtkWidget *, const char *);
+        if (!main_large_file_allows(sci, "autocomplete"))
+            want_word = FALSE;
+    }
+    if (!want_func && !want_word) return;
 
     const char *lang = (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
 
