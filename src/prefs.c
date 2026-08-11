@@ -483,6 +483,18 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "paddingLeft"))        g_prefs.padding_left           = atoi(val);
         else if (!strcmp(attr, "paddingRight"))       g_prefs.padding_right          = atoi(val);
         else if (!strcmp(attr, "edgeMultiColumnPos")) g_prefs.edge_column            = (*val) ? atoi(val) : 0;
+        else if (!strcmp(attr, "lineHeightMultiplier")) {
+            /* GAP-161 — the macOS schema for line spacing (MWC:507:
+             * lineHeightMultiplier="1.2"). Written by both ports now;
+             * the legacy Linux <LineSpacing value="12"> group is still
+             * read for old configs (last parsed wins — both are kept in
+             * sync by the writer, so order never matters). */
+            double m = g_ascii_strtod(val, NULL);
+            if (m > 0) {
+                int v10 = (int)(m * 10.0 + 0.5);
+                if (v10 >= 10 && v10 <= 15) g_prefs.line_spacing10 = v10;
+            }
+        }
         else if (!strcmp(attr, "isEdgeBgMode")) {
             /* Final edge_mode decided in finalise step — store bg flag for now. */
             if (is_yes(val)) g_prefs.edge_mode = EDGE_BACKGROUND;
@@ -937,7 +949,10 @@ g_prefs.tab_max_label_width,
         g_prefs.panel_dock_sides);
 
     /* ScintillaPrimaryView */
-    char edgeCol[32], edgeModeAttr[32];
+    char edgeCol[32], edgeModeAttr[32], lineMult[16];
+    /* GAP-161 — macOS-schema line spacing ("1.2"-style, locale-safe). */
+    g_ascii_formatd(lineMult, sizeof(lineMult), "%g",
+                    g_prefs.line_spacing10 / 10.0);
     if (g_prefs.edge_mode != EDGE_NONE && g_prefs.edge_column > 0)
         g_snprintf(edgeCol, sizeof(edgeCol), "%d", g_prefs.edge_column);
     else
@@ -957,7 +972,8 @@ g_prefs.tab_max_label_width,
         "currentLineIndicator=\"%s\" "
         "whiteSpaceShow=\"%s\" eolShow=\"%s\" eolMode=\"%d\" "
         "zoom=\"%d\" smoothFont=\"%d\" paddingLeft=\"%d\" paddingRight=\"%d\" "
-        "edgeMultiColumnPos=\"%s\" isEdgeBgMode=\"%s\"%s />\n",
+        "edgeMultiColumnPos=\"%s\" isEdgeBgMode=\"%s\" "
+        "lineHeightMultiplier=\"%s\"%s />\n",
         b2sh(g_prefs.show_line_numbers), b2yn(g_prefs.line_num_dyn_width),
         b2sh(g_prefs.show_bookmark_margin), fold_int_to_str(g_prefs.fold_style),
         b2yn(g_prefs.virtual_space), b2yn(g_prefs.scroll_beyond_last_line),
@@ -968,7 +984,8 @@ g_prefs.tab_max_label_width,
         sc_eol_to_mac(g_prefs.default_eol),
         g_prefs.zoom_level,
         g_prefs.font_quality, g_prefs.padding_left, g_prefs.padding_right,
-        edgeCol, b2yn(g_prefs.edge_mode == EDGE_BACKGROUND), edgeModeAttr);
+        edgeCol, b2yn(g_prefs.edge_mode == EDGE_BACKGROUND),
+        lineMult, edgeModeAttr);
 
     /* Linux-only additions — namespaced so a future macOS merge can pick
      * them up without colliding with existing macOS GUIConfig groups. */
