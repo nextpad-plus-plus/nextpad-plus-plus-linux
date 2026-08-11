@@ -928,12 +928,17 @@ static void append_row(GtkListStore *ls, PlugRow *r,
         -1);
 }
 
-/* qsort helper — macOS sorts _allAvailable case-insensitively by display
- * name (localizedCaseInsensitiveCompare), native and Windows-only rows
- * MIXED in one alphabet. */
+/* qsort helper. macOS mixes native and Windows-only rows in one
+ * case-insensitive alphabet; HERE (deliberate Linux improvement, user
+ * request 2026-08-11) the Linux-installable rows sort alphabetically at
+ * the TOP and the not-yet-ported Windows rows follow, alphabetically —
+ * the ported ecosystem reads at a glance. Header-click sorting (GAP-48)
+ * still re-sorts by any column on demand. */
 static gint cmp_display_ci(gconstpointer a, gconstpointer b) {
     const PlugRow *ra = *(PlugRow *const *)a;
     const PlugRow *rb = *(PlugRow *const *)b;
+    if (ra->from_win_only != rb->from_win_only)
+        return ra->from_win_only ? 1 : -1;    /* Linux rows first */
     gchar *la = g_utf8_casefold(ra->display ? ra->display : ra->folder, -1);
     gchar *lb = g_utf8_casefold(rb->display ? rb->display : rb->folder, -1);
     gint c = g_utf8_collate(la, lb);
