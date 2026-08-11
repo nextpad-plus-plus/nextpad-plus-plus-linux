@@ -301,6 +301,50 @@ static void on_popover_closed(GtkPopover *p, gpointer ud)
     g_idle_add_full(G_PRIORITY_HIGH, teardown_idle, ud, NULL);
 }
 
+/* GAP-156 — GtkPopoverMenu clips the tail of long menus. The popover
+ * surface is sized from a pre-map measurement in which GtkMenuSectionBox
+ * counts the item rows but NOT the inter-section separators (verified:
+ * a 9-row 4-section menu measures 216 = 9x24 before map, and 255 =
+ * 216 + 3x13 once allocated), so every separator costs ~13 hidden px —
+ * the 11-item Project-panel workspace menu lost "Run Macro on Files…",
+ * the Folder-panel menus lost "Open Terminal Here". Fixing the size
+ * after map closes the popover, so correct it up-front: measure the
+ * internal scrolled window's viewport, add the separator deficit
+ * computed from the menu model, and pin min-content-height (capped near
+ * the toplevel height so a huge menu still scrolls). */
+static void popover_fix_height(GtkWidget *pop, NppMenu *root)
+{
+    int nsec = g_menu_model_get_n_items(G_MENU_MODEL(root->model));
+    if (nsec < 2) return;                  /* no separators, no deficit */
+    GQueue q = G_QUEUE_INIT;
+    g_queue_push_tail(&q, pop);
+    while (!g_queue_is_empty(&q)) {
+        GtkWidget *w = g_queue_pop_head(&q);
+        if (GTK_IS_SCROLLED_WINDOW(w)) {
+            GtkWidget *vp = gtk_widget_get_first_child(w);
+            if (vp) {
+                int min = 0, nat = 0;
+                gtk_widget_measure(vp, GTK_ORIENTATION_VERTICAL, -1,
+                                   &min, &nat, NULL, NULL);
+                int want = nat + (nsec - 1) * 13 + 2;
+                GtkRoot *rw = gtk_widget_get_root(pop);
+                if (rw && GTK_IS_WIDGET(rw)) {
+                    int wh = gtk_widget_get_height(GTK_WIDGET(rw));
+                    if (wh > 120 && want > wh - 60) want = wh - 60;
+                }
+                gtk_scrolled_window_set_min_content_height(
+                    GTK_SCROLLED_WINDOW(w), want);
+            }
+            g_queue_clear(&q);
+            return;   /* main page only — submenu pages are shorter */
+        }
+        for (GtkWidget *c = gtk_widget_get_first_child(w); c;
+             c = gtk_widget_get_next_sibling(c))
+            g_queue_push_tail(&q, c);
+    }
+    g_queue_clear(&q);
+}
+
 static GtkWidget *build_popover(NppMenu *root)
 {
     /* Insert the action group BEFORE handing the model over: the menu
@@ -339,6 +383,7 @@ void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
     GdkRectangle r = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(root->popover), &r);
     gtk_widget_set_parent(root->popover, anchor);
+    popover_fix_height(root->popover, root);
     gtk_popover_popup(GTK_POPOVER(root->popover));
 }
 

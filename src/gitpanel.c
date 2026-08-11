@@ -275,6 +275,15 @@ static void on_unstage_selected(GtkButton *mi, gpointer u) {
     g_free(p);
     refresh_status();
 }
+/* GAP-156 — macOS GitPanel.mm _openSelected: open the file in the
+ * editor (paths in the status list are repo-relative). */
+static void on_open_selected(GtkButton *mi, gpointer u) {
+    (void)mi; (void)u;
+    gchar *p = status_selected_path(); if (!p) return;
+    gchar *abs = g_build_filename(s_repo_dir, p, NULL);
+    editor_open_path(abs);
+    g_free(abs); g_free(p);
+}
 static void on_discard_selected(GtkButton *mi, gpointer u) {
     (void)mi; (void)u;
     gchar *p = status_selected_path(); if (!p) return;
@@ -307,6 +316,9 @@ static void on_status_row_rightclick(GtkGestureClick *gesture, int n_press,
     npp_menu_add(menu, "Stage",            G_CALLBACK(on_stage_selected),   NULL);
     npp_menu_add(menu, "Unstage",          G_CALLBACK(on_unstage_selected), NULL);
     npp_menu_add_separator(menu);
+    /* GAP-156 — macOS has "Open File" here; Discard Changes… is a
+     * deliberate Linux extra kept below it. */
+    npp_menu_add(menu, "Open File",         G_CALLBACK(on_open_selected),    NULL);
     npp_menu_add(menu, "Discard Changes…", G_CALLBACK(on_discard_selected), NULL);
     npp_menu_popup_at(menu, tv, x, y);
 }

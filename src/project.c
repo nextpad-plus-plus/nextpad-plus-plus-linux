@@ -822,6 +822,36 @@ static void ctx_save_as_ws    (GtkButton *m, gpointer u) {
     g_free(w->file_path); w->file_path = NULL;
     project_save();
 }
+/* GAP-156 — macOS _saveCopyAs (ProjectPanel.mm:725): save to a chosen
+ * path WITHOUT adopting it — file_path and dirty state are restored
+ * (ws_save updates both). */
+static void ctx_save_copy_ws  (GtkButton *m, gpointer u) {
+    (void)m;(void)u;
+    Workspace *w = cur();
+    GtkWidget *dlg = gtk_file_chooser_dialog_new("Save a Copy As…",
+        GTK_WINDOW(s_window), GTK_FILE_CHOOSER_ACTION_SAVE,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Save",   GTK_RESPONSE_ACCEPT, NULL);
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg),
+        "untitled.workspace");
+    GtkFileFilter *ff = gtk_file_filter_new();
+    gtk_file_filter_set_name(ff, "Workspace (*.workspace)");
+    gtk_file_filter_add_pattern(ff, "*.workspace");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), ff);
+    char *chosen = NULL;
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT)
+        chosen = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+    gtk_widget_destroy(dlg);
+    if (!chosen) return;
+    char    *orig_path  = g_strdup(w->file_path);
+    gboolean orig_dirty = w->is_dirty;
+    ws_save(w, chosen);
+    g_free(w->file_path);
+    w->file_path = orig_path;      /* a copy, not a rename */
+    w->is_dirty  = orig_dirty;
+    g_free(chosen);
+}
 static void ctx_reload_ws     (GtkButton *m, gpointer u) {
     (void)m;(void)u;
     Workspace *w = cur();
@@ -879,6 +909,67 @@ static void ctx_run_macro_on_files(GtkButton *m, gpointer u)
     g_ptr_array_free(files, TRUE);
 }
 
+/* GAP-156 — macOS _runMacroOnWorkspace: every file in the whole
+ * workspace tree, regardless of selection. */
+static void ctx_run_macro_on_ws(GtkButton *m, gpointer u)
+{
+    (void)m;(void)u;
+    Workspace *w = cur();
+    GtkTreeModel *model = GTK_TREE_MODEL(w->store);
+    GtkTreeIter root;
+    if (!gtk_tree_model_get_iter_first(model, &root)) return;
+
+    GPtrArray *files = g_ptr_array_new_with_free_func(g_free);
+    collect_files_under(model, &root, files);
+
+    char *name = NULL;
+    gtk_tree_model_get(model, &root, COL_NAME, &name, -1);
+    gchar *desc = g_strdup_printf("Workspace: %s", name ? name : "");
+    macrobatch_show_dialog_files(s_window ? GTK_WINDOW(s_window) : NULL,
+                                 files, desc);
+    g_free(desc);
+    g_free(name);
+    g_ptr_array_free(files, TRUE);
+}
+
+/* GAP-156 — macOS _modifyFilePath (ProjectPanel.mm:931): repoint a
+ * file node at a different on-disk file; the node is renamed to the
+ * new basename and the workspace marked dirty. */
+static void ctx_modify_file_path(GtkButton *m, gpointer u)
+{
+    (void)m;(void)u;
+    Workspace *w = cur();
+    GtkTreeIter it; NodeKind k;
+    if (!selected_kind(w, &it, &k) || k != NK_FILE) return;
+
+    char *old_path = NULL;
+    gtk_tree_model_get(GTK_TREE_MODEL(w->store), &it, COL_PATH, &old_path, -1);
+
+    GtkWidget *dlg = gtk_file_chooser_dialog_new("Modify File Path",
+        GTK_WINDOW(s_window), GTK_FILE_CHOOSER_ACTION_OPEN,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Open",   GTK_RESPONSE_ACCEPT, NULL);
+    if (old_path && *old_path) {
+        char *dir = g_path_get_dirname(old_path);
+        GFile *gf = g_file_new_for_path(dir);
+        gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), gf, NULL);
+        g_object_unref(gf);
+        g_free(dir);
+    }
+    char *chosen = NULL;
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT)
+        chosen = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+    gtk_widget_destroy(dlg);
+    g_free(old_path);
+    if (!chosen) return;
+
+    char *name = g_path_get_basename(chosen);
+    gtk_tree_store_set(w->store, &it, COL_PATH, chosen, COL_NAME, name, -1);
+    g_free(name);
+    g_free(chosen);
+    mark_dirty(w);
+}
+
 /* ------------------------------------------------------------------ */
 /* Right-click menu                                                   */
 /* ------------------------------------------------------------------ */
@@ -916,12 +1007,14 @@ void on_project_tree_button_press(GtkGestureClick *gesture, int n_press,
         menu_add(menu, NULL, NULL);
         menu_add(menu, "Save",             G_CALLBACK(ctx_save_ws));
         menu_add(menu, "Save As…",         G_CALLBACK(ctx_save_as_ws));
+        menu_add(menu, "Save a Copy As…",  G_CALLBACK(ctx_save_copy_ws));
         menu_add(menu, NULL, NULL);
         menu_add(menu, "Add New Project",  G_CALLBACK(ctx_add_project));
         menu_add(menu, NULL, NULL);
         /* GAP-136 — macOS ProjectPanel.mm:607: delegates to Find in
          * Files at the workspace file's directory. */
         menu_add(menu, "Find in Projects…", G_CALLBACK(ctx_find_in_projects));
+        menu_add(menu, "Run Macro on Files…", G_CALLBACK(ctx_run_macro_on_ws));
     } else if (k == NK_PROJECT || k == NK_FOLDER) {
         /* Project / Folder menu — matches macOS ProjectPanel.mm:582-600. */
         menu_add(menu, "Move Up",                   G_CALLBACK(ctx_move_up));
@@ -941,6 +1034,8 @@ void on_project_tree_button_press(GtkGestureClick *gesture, int n_press,
         menu_add(menu, NULL, NULL);
         menu_add(menu, "Rename…",   G_CALLBACK(ctx_rename));
         menu_add(menu, "Remove",    G_CALLBACK(ctx_remove));
+        menu_add(menu, "Modify File Path…",
+                 G_CALLBACK(ctx_modify_file_path));
     }
 
     npp_menu_popup_at(menu, tv, x, y);

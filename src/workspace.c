@@ -3,6 +3,7 @@
 #include "npp_menu.h"
 #include "editor.h"
 #include "macrobatch.h"
+#include "find_window.h"
 #include <gtk/gtk.h>
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -344,6 +345,42 @@ static void ctx_run_macro_on_files(GtkButton *mi, gpointer u) {
     g_free(dir); g_free(p);
 }
 
+/* GAP-156 — remaining macOS context-menu rows (FolderTreePanel.mm
+ * _menuCopyPath/_menuCopyFileName/_menuFindInFiles/_menuRemoveFolder/
+ * _menuOpenFile). */
+static void ctx_copy_path(GtkButton *mi, gpointer u) {
+    (void)mi; (void)u;
+    char *p = workspace_selected_path();
+    if (p) { npp_clipboard_set_text(p); g_free(p); }
+}
+static void ctx_copy_file_name(GtkButton *mi, gpointer u) {
+    (void)mi; (void)u;
+    char *p = workspace_selected_path();
+    if (!p) return;
+    char *name = g_path_get_basename(p);
+    npp_clipboard_set_text(name);
+    g_free(name); g_free(p);
+}
+static void ctx_find_in_files(GtkButton *mi, gpointer u) {
+    (void)mi; (void)u;
+    char *p = workspace_selected_path();
+    if (!p) return;
+    char *dir = g_file_test(p, G_FILE_TEST_IS_DIR)
+              ? g_strdup(p) : g_path_get_dirname(p);
+    find_window_show_fif_dir(s_window ? GTK_WINDOW(s_window) : NULL, dir);
+    g_free(dir); g_free(p);
+}
+static void ctx_remove_root(GtkButton *mi, gpointer u) {
+    (void)mi; (void)u;
+    char *p = workspace_selected_path();
+    if (p) { workspace_remove_folder(p); g_free(p); }
+}
+static void ctx_open_file(GtkButton *mi, gpointer u) {
+    (void)mi; (void)u;
+    char *p = workspace_selected_path();
+    if (p) { editor_open_path(p); g_free(p); }
+}
+
 /* Empty-panel context-menu callbacks. "Remove All" clears the in-memory
  * tree only — no on-disk deletion (matches macOS FolderTreePanel.mm). */
 static void ctx_add_folder(GtkButton *mi, gpointer u);
@@ -383,17 +420,52 @@ static void on_tree_button_press(GtkGestureClick *gesture, int n_press,
     } else {
         gtk_tree_selection_select_path(
             gtk_tree_view_get_selection(GTK_TREE_VIEW(s_tree)), path);
-        struct { const char *label; GCallback cb; } items[] = {
-            { "Rename…",              G_CALLBACK(ctx_rename)               },
-            { "Open Terminal Here",   G_CALLBACK(ctx_terminal_here)        },
-            { "Run by System",        G_CALLBACK(ctx_run_by_system)        },
-            { "Open in File Manager", G_CALLBACK(ctx_open_in_file_manager) },
-        };
-        for (size_t i = 0; i < G_N_ELEMENTS(items); i++)
-            npp_menu_add(menu, items[i].label, items[i].cb, NULL);
-        /* GAP-21 — batch macro runner on this folder. */
-        npp_menu_add(menu, "Run Macro on Files…",
-                     G_CALLBACK(ctx_run_macro_on_files), NULL);
+        /* GAP-156 — branch on directory/file/root like macOS
+         * FolderTreePanel.mm:571-676 ("Finder Here" → "Open in File
+         * Manager", "Terminal Here" → "Open Terminal Here"). */
+        gboolean is_dir = FALSE;
+        gboolean is_root = gtk_tree_path_get_depth(path) == 1;
+        GtkTreeIter it;
+        if (gtk_tree_model_get_iter(GTK_TREE_MODEL(s_store), &it, path))
+            gtk_tree_model_get(GTK_TREE_MODEL(s_store), &it,
+                               COL_IS_DIR, &is_dir, -1);
+        if (is_dir) {
+            if (is_root) {
+                /* Root folders are removed, not renamed. */
+                npp_menu_add(menu, "Remove", G_CALLBACK(ctx_remove_root), NULL);
+                npp_menu_add_separator(menu);
+            }
+            npp_menu_add(menu, "Copy Path", G_CALLBACK(ctx_copy_path), NULL);
+            npp_menu_add(menu, "Find in Files…",
+                         G_CALLBACK(ctx_find_in_files), NULL);
+            /* GAP-21 — batch macro runner on this folder. */
+            npp_menu_add(menu, "Run Macro on Files…",
+                         G_CALLBACK(ctx_run_macro_on_files), NULL);
+            if (!is_root) {
+                npp_menu_add_separator(menu);
+                npp_menu_add(menu, "Rename…", G_CALLBACK(ctx_rename), NULL);
+            }
+            npp_menu_add_separator(menu);
+            npp_menu_add(menu, "Open in File Manager",
+                         G_CALLBACK(ctx_open_in_file_manager), NULL);
+            npp_menu_add(menu, "Open Terminal Here",
+                         G_CALLBACK(ctx_terminal_here), NULL);
+        } else {
+            npp_menu_add(menu, "Open", G_CALLBACK(ctx_open_file), NULL);
+            npp_menu_add_separator(menu);
+            npp_menu_add(menu, "Copy Path", G_CALLBACK(ctx_copy_path), NULL);
+            npp_menu_add(menu, "Copy File Name",
+                         G_CALLBACK(ctx_copy_file_name), NULL);
+            npp_menu_add_separator(menu);
+            npp_menu_add(menu, "Rename…", G_CALLBACK(ctx_rename), NULL);
+            npp_menu_add_separator(menu);
+            npp_menu_add(menu, "Run by System",
+                         G_CALLBACK(ctx_run_by_system), NULL);
+            npp_menu_add(menu, "Open in File Manager",
+                         G_CALLBACK(ctx_open_in_file_manager), NULL);
+            npp_menu_add(menu, "Open Terminal Here",
+                         G_CALLBACK(ctx_terminal_here), NULL);
+        }
     }
     if (path) gtk_tree_path_free(path);
 
