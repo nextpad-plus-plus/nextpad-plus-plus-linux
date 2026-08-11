@@ -298,10 +298,11 @@ static void apply_cli_flags_to_current(void)
 /* Window title                                                        */
 /* ------------------------------------------------------------------ */
 
-/* editor.c manages window title itself via its private update_window_title().
- * This symbol exists only so editor.c's forward declaration links; no need to
- * duplicate the logic here. */
-void main_refresh_title(void) { }
+/* GAP-152 — the "Show full path in title" pref's live-apply hook. The
+ * logic lives in editor.c update_window_title (it reads the pref); this
+ * was an empty stub, so the checkbox did nothing until the next tab
+ * switch (macOS applies immediately, MWC:11553). */
+void main_refresh_title(void) { editor_update_window_title(); }
 
 /* ------------------------------------------------------------------ */
 /* main_* callbacks expected by editor.c                               */

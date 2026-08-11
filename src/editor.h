@@ -73,6 +73,7 @@ GtkWidget *editor_make_tab_controls(void);
 void       editor_new_doc(void);
 gboolean   editor_open_dialog(void);               /* shows GTK open dialog */
 gboolean   editor_open_path(const char *path);     /* open a specific file   */
+void       editor_update_window_title(void);       /* GAP-152 — title live-apply */
 
 /* GAP-37 — clickable links: re-mark the visible range of one editor /
  * full-clear + re-mark every editor after a pref change. */

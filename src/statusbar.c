@@ -47,9 +47,21 @@ static GtkWidget *rlabel(const char *text)
     return l;
 }
 
+/* GAP-152 — the whole bar, for live show/hide from the pref. */
+static GtkWidget *s_bar_box = NULL;
+
+/* Live-apply for the "Show status bar" pref (was only a weak no-op stub
+ * in prefs.c — the checkbox did nothing until restart; macOS applies it
+ * immediately, MWC:10907). */
+void statusbar_set_visible(gboolean v)
+{
+    if (s_bar_box) gtk_widget_set_visible(s_bar_box, v);
+}
+
 GtkWidget *statusbar_init(void)
 {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    s_bar_box = box;
     gtk_widget_set_margin_top(box, 2);
     gtk_widget_set_margin_bottom(box, 2);
 

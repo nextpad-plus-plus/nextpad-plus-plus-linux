@@ -4,6 +4,8 @@
 #include <gtk/gtk.h>
 
 GtkWidget *statusbar_init(void);
+/* GAP-152 — live show/hide (the "Show status bar" pref). */
+void       statusbar_set_visible(gboolean v);
 void       statusbar_update_from_sci(GtkWidget *sci);
 void       statusbar_set_language(const char *lang);
 void       statusbar_set_encoding(const char *enc);

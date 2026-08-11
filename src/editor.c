@@ -1949,6 +1949,11 @@ void editor_refresh_tab_chrome(void)
     main_doclist_refresh();
 }
 
+/* GAP-152 — exported wrapper: main.c's main_refresh_title (the
+ * "Show full path in title" live-apply hook) delegates here. */
+void editor_update_window_title(void);
+void editor_update_window_title(void) { update_window_title(); }
+
 static void update_window_title(void)
 {
     if (!s_window) return;
