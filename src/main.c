@@ -5352,58 +5352,181 @@ static void action_find_volatile_prev(GSimpleAction *a, GVariant *p, gpointer u)
 }
 
 /* ──────────────────────────────────────────────────────────────────────
- * G22 Incremental search bar (Ctrl+I)
- *
- * Simple bar at the bottom of the window over the active editor: search
- * entry + Next / Prev / Highlight-All toggles. Esc dismisses.
+ * G22 Incremental search bar (Ctrl+I) — GAP-142: full macOS
+ * IncrementalSearchBar.mm parity. Find: label + entry + ◀/▶ + Match
+ * Case + red "Not found" status + ✕. Typing highlights EVERY match
+ * (indicator 28, green ROUNDBOX — EditorView highlightAllMatches) and
+ * selects the next one; Enter/Shift+Enter and the arrows step; Esc/✕
+ * clears the highlights and dismisses.
  * ────────────────────────────────────────────────────────────────────── */
+
+#define ISEARCH_INDICATOR 28   /* macOS kIndicatorIncSearch */
 
 static GtkWidget *g_isearch_revealer = NULL;
 static GtkWidget *g_isearch_entry    = NULL;
+static GtkWidget *g_isearch_case     = NULL;
+static GtkWidget *g_isearch_status   = NULL;
 
-static void isearch_do_find(int direction) {
-    if (!g_isearch_entry) return;
+static void isearch_clear_highlights(void) {
     GtkWidget *sci = current_sci(); if (!sci) return;
-    const char *needle = gtk_entry_get_text(GTK_ENTRY(g_isearch_entry));
-    if (!needle || !*needle) return;
     ScintillaObject *s = SCINTILLA(sci);
-    sptr_t pos = scintilla_send_message(s, SCI_GETCURRENTPOS, 0, 0);
+    scintilla_send_message(s, SCI_SETINDICATORCURRENT, ISEARCH_INDICATOR, 0);
+    scintilla_send_message(s, SCI_INDICATORCLEARRANGE, 0,
+        scintilla_send_message(s, SCI_GETLENGTH, 0, 0));
+}
+
+/* EditorView.mm highlightAllMatches: green semi-transparent round box
+ * on every occurrence (colour value passed to Scintilla verbatim). */
+static void isearch_highlight_all(const char *needle, gboolean mc) {
+    GtkWidget *sci = current_sci(); if (!sci) return;
+    ScintillaObject *s = SCINTILLA(sci);
     sptr_t doc_len = scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
-    if (direction > 0)
-        scintilla_send_message(s, SCI_SETTARGETRANGE, pos, doc_len);
-    else
-        scintilla_send_message(s, SCI_SETTARGETRANGE, pos - 1, 0);
-    scintilla_send_message(s, SCI_SETSEARCHFLAGS, 0, 0);
-    sptr_t hit = scintilla_send_message(s, SCI_SEARCHINTARGET,
-                                        (uptr_t)strlen(needle), (sptr_t)needle);
-    if (hit < 0) {
-        /* Wrap. */
-        scintilla_send_message(s, SCI_SETTARGETRANGE,
-            direction > 0 ? 0 : doc_len,
-            direction > 0 ? pos : 0);
-        hit = scintilla_send_message(s, SCI_SEARCHINTARGET,
-                                     (uptr_t)strlen(needle), (sptr_t)needle);
-    }
-    if (hit >= 0) {
+    scintilla_send_message(s, SCI_SETINDICATORCURRENT, ISEARCH_INDICATOR, 0);
+    scintilla_send_message(s, SCI_INDICATORCLEARRANGE, 0, doc_len);
+    if (!needle || !*needle) return;
+
+    scintilla_send_message(s, SCI_INDICSETSTYLE, ISEARCH_INDICATOR,
+                           INDIC_ROUNDBOX);
+    scintilla_send_message(s, SCI_INDICSETFORE,  ISEARCH_INDICATOR, 0x00AA44);
+    scintilla_send_message(s, SCI_INDICSETALPHA, ISEARCH_INDICATOR, 80);
+    scintilla_send_message(s, SCI_SETSEARCHFLAGS,
+                           mc ? SCFIND_MATCHCASE : 0, 0);
+    sptr_t pos = 0;
+    size_t n = strlen(needle);
+    while (pos < doc_len) {
+        scintilla_send_message(s, SCI_SETTARGETRANGE, (uptr_t)pos, doc_len);
+        sptr_t found = scintilla_send_message(s, SCI_SEARCHINTARGET,
+                                              (uptr_t)n, (sptr_t)needle);
+        if (found < 0) break;
         sptr_t end = scintilla_send_message(s, SCI_GETTARGETEND, 0, 0);
-        scintilla_send_message(s, SCI_SETSEL, hit, end);
+        scintilla_send_message(s, SCI_INDICATORFILLRANGE, (uptr_t)found,
+                               end - found);
+        pos = (end > found) ? end : found + 1;
     }
 }
+
+/* Cocoa ScintillaView findAndHighlightText: anchor a forward search at
+ * the selection END (incremental typing keeps matching in place), wrap
+ * from the top, restore the old selection on a miss. One deliberate
+ * divergence: the Cocoa original wraps a BACKWARD search with
+ * SCI_SEARCHNEXT from the doc end (an upstream bug — backward wrap
+ * never matches there); we use SCI_SEARCHPREV so it works. */
+static gboolean isearch_find(const char *needle, gboolean mc, int direction) {
+    GtkWidget *sci = current_sci(); if (!sci) return FALSE;
+    ScintillaObject *s = SCINTILLA(sci);
+    guint flags = mc ? SCFIND_MATCHCASE : 0;
+    sptr_t sel_a = scintilla_send_message(s, SCI_GETSELECTIONSTART, 0, 0);
+    sptr_t sel_b = scintilla_send_message(s, SCI_GETSELECTIONEND,   0, 0);
+    sptr_t hit;
+    if (direction > 0) {
+        scintilla_send_message(s, SCI_SETSELECTIONSTART, (uptr_t)sel_b, 0);
+        scintilla_send_message(s, SCI_SEARCHANCHOR, 0, 0);
+        hit = scintilla_send_message(s, SCI_SEARCHNEXT, flags,
+                                     (sptr_t)needle);
+        if (hit < 0) {
+            scintilla_send_message(s, SCI_SETSELECTIONSTART, 0, 0);
+            scintilla_send_message(s, SCI_SEARCHANCHOR, 0, 0);
+            hit = scintilla_send_message(s, SCI_SEARCHNEXT, flags,
+                                         (sptr_t)needle);
+        }
+    } else {
+        scintilla_send_message(s, SCI_SEARCHANCHOR, 0, 0);
+        hit = scintilla_send_message(s, SCI_SEARCHPREV, flags,
+                                     (sptr_t)needle);
+        if (hit < 0) {
+            scintilla_send_message(s, SCI_SETSELECTIONSTART,
+                (uptr_t)scintilla_send_message(s, SCI_GETLENGTH, 0, 0), 0);
+            scintilla_send_message(s, SCI_SEARCHANCHOR, 0, 0);
+            hit = scintilla_send_message(s, SCI_SEARCHPREV, flags,
+                                         (sptr_t)needle);
+        }
+    }
+    if (hit >= 0) {
+        scintilla_send_message(s, SCI_SCROLLCARET, 0, 0);
+        return TRUE;
+    }
+    scintilla_send_message(s, SCI_SETSELECTIONSTART, (uptr_t)sel_a, 0);
+    scintilla_send_message(s, SCI_SETSELECTIONEND,   (uptr_t)sel_b, 0);
+    return FALSE;
+}
+
+static void isearch_set_status(gboolean found) {
+    if (!g_isearch_status) return;
+    if (found)
+        gtk_label_set_text(GTK_LABEL(g_isearch_status), "");
+    else  /* macOS red (0.9, 0, 0) */
+        gtk_label_set_markup(GTK_LABEL(g_isearch_status),
+            "<span foreground=\"#E60000\">Not found</span>");
+}
+
+/* MWC incrementalSearchBar:findText:matchCase:forward: — highlight all,
+ * step to the next/prev one, post "Not found" in red on a miss. */
+static void isearch_run(int direction) {
+    if (!g_isearch_entry) return;
+    /* GtkSearchEntry is NOT a GtkEntry in GTK4 — go through GtkEditable
+     * (the old GTK_ENTRY cast made the stub bar a silent no-op). */
+    const char *needle =
+        gtk_editable_get_text(GTK_EDITABLE(g_isearch_entry));
+    gboolean mc = gtk_toggle_button_get_active(
+        GTK_TOGGLE_BUTTON(g_isearch_case));
+    if (!needle || !*needle) {
+        isearch_clear_highlights();
+        isearch_set_status(TRUE);
+        return;
+    }
+    isearch_highlight_all(needle, mc);
+    isearch_set_status(isearch_find(needle, mc, direction));
+}
+
+static void isearch_close(void) {
+    isearch_clear_highlights();
+    isearch_set_status(TRUE);
+    gtk_revealer_set_reveal_child(GTK_REVEALER(g_isearch_revealer), FALSE);
+    GtkWidget *sci = current_sci(); if (sci) gtk_widget_grab_focus(sci);
+}
+
 static void on_isearch_changed(GtkEntry *e, gpointer u) {
     (void)e; (void)u;
-    isearch_do_find(+1);
+    isearch_run(+1);
+}
+static void on_isearch_case_toggled(GtkToggleButton *b, gpointer u) {
+    (void)b; (void)u;
+    isearch_run(+1);   /* macOS optionChanged: re-runs the live search */
+}
+static void on_isearch_next(GtkButton *b, gpointer u) {
+    (void)b; (void)u;
+    isearch_run(+1);
+}
+static void on_isearch_prev(GtkButton *b, gpointer u) {
+    (void)b; (void)u;
+    isearch_run(-1);
+}
+static void on_isearch_close_clicked(GtkButton *b, gpointer u) {
+    (void)b; (void)u;
+    isearch_close();
 }
 static gboolean on_isearch_keypress(GtkEventControllerKey *ctl, guint keyval,
                                     guint keycode, GdkModifierType state,
                                     gpointer u) {
     (void)ctl; (void)keycode; (void)u;
     if (keyval == GDK_KEY_Escape) {
-        gtk_revealer_set_reveal_child(GTK_REVEALER(g_isearch_revealer), FALSE);
-        GtkWidget *sci = current_sci(); if (sci) gtk_widget_grab_focus(sci);
+        isearch_close();
         return TRUE;
     }
     if (keyval == GDK_KEY_Return) {
-        isearch_do_find((state & GDK_SHIFT_MASK) ? -1 : +1);
+        isearch_run((state & GDK_SHIFT_MASK) ? -1 : +1);
+        return TRUE;
+    }
+    return FALSE;
+}
+/* Esc anywhere inside the bar (Match Case, arrows…) closes it — macOS
+ * cancelOperation: reaches the bar from any first responder in it. */
+static gboolean on_isearch_bar_escape(GtkEventControllerKey *ctl,
+                                      guint keyval, guint keycode,
+                                      GdkModifierType state, gpointer u) {
+    (void)ctl; (void)keycode; (void)state; (void)u;
+    if (keyval == GDK_KEY_Escape) {
+        isearch_close();
         return TRUE;
     }
     return FALSE;
@@ -5413,6 +5536,9 @@ static void action_incremental_search(GSimpleAction *a, GVariant *p, gpointer u)
     if (!g_isearch_revealer) return;
     gtk_revealer_set_reveal_child(GTK_REVEALER(g_isearch_revealer), TRUE);
     gtk_widget_grab_focus(g_isearch_entry);
+    /* macOS: an NSTextField selects its text on becoming first
+     * responder — retyping replaces the previous needle. */
+    gtk_editable_select_region(GTK_EDITABLE(g_isearch_entry), 0, -1);
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -8538,27 +8664,70 @@ static void build_main_window(GtkApplication *app)
         side_dock_register_frame(side_frames[i]);   /* GAP-99 */
     }
 
-    /* G22 incremental search bar — revealer above the status bar. */
+    /* G22 incremental search bar — revealer above the status bar.
+     * GAP-142: full macOS IncrementalSearchBar widget set — separator,
+     * Find: label, entry, ◀/▶, Match Case, status, ✕. */
     g_isearch_revealer = gtk_revealer_new();
     gtk_revealer_set_transition_type(GTK_REVEALER(g_isearch_revealer),
                                      GTK_REVEALER_TRANSITION_TYPE_SLIDE_UP);
     {
-        GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        npp_box_pack(GTK_BOX(outer),
+                     gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, 0);
+        GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
         gtk_container_set_border_width(GTK_CONTAINER(bar), 4);
         GtkWidget *lbl = gtk_label_new("Find:");
         g_isearch_entry = gtk_search_entry_new();
         gtk_widget_set_hexpand(g_isearch_entry, TRUE);
+        g_object_set(g_isearch_entry, "placeholder-text",
+                     "Type to search…", NULL);
         g_signal_connect(g_isearch_entry, "search-changed",
                          G_CALLBACK(on_isearch_changed), NULL);
         {
+            /* CAPTURE phase: GtkSearchEntry's inner GtkText consumes
+             * Return (activate) and Escape (stop-search) before a
+             * bubble-phase controller would ever see them. */
             GtkEventController *kc = gtk_event_controller_key_new();
+            gtk_event_controller_set_propagation_phase(kc,
+                GTK_PHASE_CAPTURE);
             g_signal_connect(kc, "key-pressed",
                              G_CALLBACK(on_isearch_keypress), NULL);
             gtk_widget_add_controller(g_isearch_entry, kc);
         }
+        GtkWidget *prev = gtk_button_new_with_label("◀");
+        GtkWidget *next = gtk_button_new_with_label("▶");
+        gtk_widget_set_tooltip_text(prev, "Find Previous (Shift+Enter)");
+        gtk_widget_set_tooltip_text(next, "Find Next (Enter)");
+        g_signal_connect(prev, "clicked", G_CALLBACK(on_isearch_prev), NULL);
+        g_signal_connect(next, "clicked", G_CALLBACK(on_isearch_next), NULL);
+        g_isearch_case = gtk_check_button_new_with_label("Match Case");
+        g_signal_connect(g_isearch_case, "toggled",
+                         G_CALLBACK(on_isearch_case_toggled), NULL);
+        g_isearch_status = gtk_label_new("");
+        gtk_widget_set_size_request(g_isearch_status, 80, -1);
+        gtk_label_set_xalign(GTK_LABEL(g_isearch_status), 0.0f);
+        GtkWidget *close = gtk_button_new_with_label("✕");
+        gtk_button_set_has_frame(GTK_BUTTON(close), FALSE);
+        gtk_widget_set_tooltip_text(close, "Close (Esc)");
+        g_signal_connect(close, "clicked",
+                         G_CALLBACK(on_isearch_close_clicked), NULL);
         npp_box_pack(GTK_BOX(bar), lbl, FALSE, 0);
         npp_box_pack(GTK_BOX(bar), g_isearch_entry, TRUE, 0);
-        gtk_container_add(GTK_CONTAINER(g_isearch_revealer), bar);
+        npp_box_pack(GTK_BOX(bar), prev, FALSE, 0);
+        npp_box_pack(GTK_BOX(bar), next, FALSE, 0);
+        npp_box_pack(GTK_BOX(bar), g_isearch_case, FALSE, 0);
+        npp_box_pack(GTK_BOX(bar), g_isearch_status, FALSE, 0);
+        npp_box_pack(GTK_BOX(bar), close, FALSE, 0);
+        npp_box_pack(GTK_BOX(outer), bar, FALSE, 0);
+        {
+            GtkEventController *bc = gtk_event_controller_key_new();
+            gtk_event_controller_set_propagation_phase(bc,
+                GTK_PHASE_CAPTURE);
+            g_signal_connect(bc, "key-pressed",
+                             G_CALLBACK(on_isearch_bar_escape), NULL);
+            gtk_widget_add_controller(outer, bc);
+        }
+        gtk_container_add(GTK_CONTAINER(g_isearch_revealer), outer);
     }
     gtk_revealer_set_reveal_child(GTK_REVEALER(g_isearch_revealer), FALSE);
 
