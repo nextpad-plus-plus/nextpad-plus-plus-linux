@@ -885,12 +885,26 @@ int findreplace_mark_all(void) {
     guint flags = 0;
     if (!prep_search(&needle, &needle_raw, &needle_len, &flags, &mode)) return 0;
 
-    /* "Purge for each search" — drop previous marks first. */
-    if (s_mark_purge) findreplace_clear_marks();
+    /* "Purge for each search" — drop previous marks first. Bookmarks
+     * go too, but ONLY when this operation bookmarks lines (macOS
+     * SearchEngine markAllInView purge branch, GAP-144 — a purge with
+     * Bookmark-line off leaves earlier bookmarks alone, unlike the
+     * unconditional "Clear all marks" button). */
+    if (s_mark_purge) {
+        sci_msg(s_sci, SCI_SETINDICATORCURRENT, NPP_FIND_MARK_INDICATOR, 0);
+        sci_msg(s_sci, SCI_INDICATORCLEARRANGE, 0,
+                sci_msg(s_sci, SCI_GETLENGTH, 0, 0));
+        if (s_mark_bookmark)
+            sci_msg(s_sci, SCI_MARKERDELETEALL, SC_MARKNUM_BOOKMARK, 0);
+    }
 
     sci_msg(s_sci, SCI_SETSEARCHFLAGS, (uptr_t)flags, 0);
     sci_msg(s_sci, SCI_INDICSETSTYLE,  NPP_FIND_MARK_INDICATOR, INDIC_ROUNDBOX);
-    sci_msg(s_sci, SCI_INDICSETFORE,   NPP_FIND_MARK_INDICATOR, 0x0080FF); /* orange BGR */
+    /* GAP-144 — the macOS value verbatim (SearchEngine.mm:733). Its
+     * comment says "orange" but 0xFF8000 in Scintilla BGR is azure
+     * blue — the VALUE is the parity contract, both ports render it
+     * identically. (The old 0x0080FF here was the byte-reversal.) */
+    sci_msg(s_sci, SCI_INDICSETFORE,   NPP_FIND_MARK_INDICATOR, 0xFF8000);
     sci_msg(s_sci, SCI_INDICSETALPHA,  NPP_FIND_MARK_INDICATOR, 100);
     sci_msg(s_sci, SCI_SETINDICATORCURRENT, NPP_FIND_MARK_INDICATOR, 0);
 
@@ -925,4 +939,8 @@ void findreplace_clear_marks(void) {
     sci_msg(s_sci, SCI_SETINDICATORCURRENT, NPP_FIND_MARK_INDICATOR, 0);
     sptr_t doc_len = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
     sci_msg(s_sci, SCI_INDICATORCLEARRANGE, 0, doc_len);
+    /* GAP-144 — "Clear all marks" also drops the bookmark markers that
+     * Mark All's "Bookmark line" placed (macOS FindWindow _clearMarks
+     * sends MARKERDELETEALL 20 unconditionally). */
+    sci_msg(s_sci, SCI_MARKERDELETEALL, SC_MARKNUM_BOOKMARK, 0);
 }
