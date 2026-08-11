@@ -269,6 +269,34 @@ typedef struct {
     GString *text;        /* accumulated text content of the element */
 } ParseState;
 
+/* GAP-141 — Find-window search histories (macOS kHistory* arrays). */
+static GPtrArray *s_hist[PREFS_HIST_N];
+
+GPtrArray *prefs_history(PrefsHistKind kind)
+{
+    if (kind < 0 || kind >= PREFS_HIST_N) kind = PREFS_HIST_FIND;
+    if (!s_hist[kind])
+        s_hist[kind] = g_ptr_array_new_with_free_func(g_free);
+    return s_hist[kind];
+}
+
+void prefs_history_add(PrefsHistKind kind, const char *text)
+{
+    if (!text || !*text) return;
+    GPtrArray *h = prefs_history(kind);
+    /* Dedupe (case-sensitive, like NSArray removeObject:), prepend,
+     * cap at 20 — macOS _addToHistory verbatim. */
+    for (guint i = 0; i < h->len; i++) {
+        if (strcmp((const char *)g_ptr_array_index(h, i), text) == 0) {
+            g_ptr_array_remove_index(h, i);
+            break;
+        }
+    }
+    g_ptr_array_insert(h, 0, g_strdup(text));
+    while (h->len > 20) g_ptr_array_remove_index(h, h->len - 1);
+    prefs_save();
+}
+
 static void apply_attr(const char *group, const char *attr, const char *val)
 {
     /* Bail on null/empty input. */
@@ -331,6 +359,21 @@ static void apply_attr(const char *group, const char *attr, const char *val)
     else if (!strcmp(group, "SmartHighLight")) {
         if      (!strcmp(attr, "matchCase"))          g_prefs.smart_hilite_case      = is_yes(val);
         else if (!strcmp(attr, "wholeWordOnly"))      g_prefs.smart_hilite_word      = is_yes(val);
+    }
+    else if (!strncmp(group, "FindHistory", 11)) {   /* GAP-141 */
+        /* Attrs are e0..e19 in newest-first order; GMarkup delivers them
+         * in document order, so a plain append reconstructs the list. */
+        static const char *kinds[PREFS_HIST_N] =
+            { "Find", "Replace", "Filter", "Dir" };
+        if (attr[0] == 'e') {
+            for (int k = 0; k < PREFS_HIST_N; k++) {
+                if (!strcmp(group + 11, kinds[k])) {
+                    GPtrArray *h = prefs_history((PrefsHistKind)k);
+                    if (h->len < 20) g_ptr_array_add(h, g_strdup(val));
+                    break;
+                }
+            }
+        }
     }
     else if (!strcmp(group, "Searching")) {
         if      (!strcmp(attr, "monospacedFontFindDlg"))         g_prefs.mono_font_find         = is_yes(val);
@@ -811,6 +854,25 @@ g_prefs.tab_max_label_width,
         b2yn(g_prefs.confirm_replace_all), b2yn(g_prefs.replace_and_stop),
         b2yn(g_prefs.use_boost_regex),
         g_prefs.in_sel_threshold);
+
+    /* Find-window search histories (GAP-141). Skipped when empty. */
+    {
+        static const char *kinds[PREFS_HIST_N] =
+            { "Find", "Replace", "Filter", "Dir" };
+        for (int k = 0; k < PREFS_HIST_N; k++) {
+            GPtrArray *h = s_hist[k];
+            if (!h || h->len == 0) continue;
+            g_string_append_printf(b,
+                "        <GUIConfig name=\"FindHistory%s\"", kinds[k]);
+            for (guint i = 0; i < h->len; i++) {
+                gchar *esc = g_markup_escape_text(
+                    (const char *)g_ptr_array_index(h, i), -1);
+                g_string_append_printf(b, " e%u=\"%s\"", i, esc);
+                g_free(esc);
+            }
+            g_string_append(b, " />\n");
+        }
+    }
 
     /* DarkMode + theme preset. Omit theme attr when at the default to
      * keep our output byte-compatible with macOS for the common case. */

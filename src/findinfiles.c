@@ -82,7 +82,12 @@ typedef struct {
     gboolean  match_case;
     gboolean  whole_word;
     gboolean  subdirs;
+    gboolean  hidden;      /* GAP-141: search dot-files / dot-dirs */
+    gboolean  dot_nl;      /* GAP-141: regex `.` matches newline */
     int       mode;        /* 0=Normal 1=Extended 2=Regex (GAP-122) */
+    FifProgress progress;          /* GAP-141: optional, main thread */
+    gpointer    progress_user;
+    gint64      last_progress_us;  /* worker-side throttle stamp */
     GPtrArray *paths;      /* GAP-136: explicit file list (owned; char*).
                               Non-NULL → iterate it instead of walking
                               `directory` (which is then unused). */
@@ -110,6 +115,9 @@ static GRegex *fif_build_regex(FifJob *job, GError **err)
 {
     GRegexCompileFlags cflags =
         (job->match_case ? 0 : G_REGEX_CASELESS) | G_REGEX_MULTILINE;
+    /* GAP-141 — ". matches newline" (regex mode only). Inert for the
+     * line-based search scan, meaningful for whole-file replace. */
+    if (job->mode == 2 && job->dot_nl) cflags |= G_REGEX_DOTALL;
     gchar *pattern = NULL;
     if (job->mode == 2) {                       /* Regex — raw pattern */
         pattern = g_strdup(job->needle);
@@ -131,6 +139,42 @@ static GRegex *fif_build_regex(FifJob *job, GError **err)
     GRegex *rx = g_regex_new(pattern, cflags, 0, err);
     g_free(pattern);
     return rx;
+}
+
+/* GAP-141 — marshal a per-file progress tick to the main thread
+ * (macOS _findInFiles progressBlock: "Searching… N hit(s) — file").
+ * Throttled worker-side to ~12 posts/s; macOS posts per file, but an
+ * unthrottled g_idle_add per file floods the GTK main loop on big
+ * trees. The completion status is always exact. */
+typedef struct {
+    char       *basename;
+    int         hits;
+    FifProgress cb;
+    gpointer    user;
+} FifProgressMsg;
+
+static gboolean progress_idle(gpointer data)
+{
+    FifProgressMsg *m = data;
+    m->cb(m->basename, m->hits, m->user);
+    g_free(m->basename);
+    g_free(m);
+    return G_SOURCE_REMOVE;
+}
+
+static void maybe_post_progress(FifJob *job, const char *filepath)
+{
+    if (!job->progress) return;
+    gint64 now = g_get_monotonic_time();
+    if (job->last_progress_us && now - job->last_progress_us < 80000)
+        return;
+    job->last_progress_us = now;
+    FifProgressMsg *m = g_new0(FifProgressMsg, 1);
+    m->basename = g_path_get_basename(filepath);
+    m->hits     = (int)job->hits->len;
+    m->cb       = job->progress;
+    m->user     = job->progress_user;
+    g_idle_add(progress_idle, m);
 }
 
 static void search_file(const char *filepath, FifJob *job, GRegex *regex)
@@ -161,8 +205,12 @@ static void search_file(const char *filepath, FifJob *job, GRegex *regex)
     }
     g_strfreev(lines);
     if (any) job->file_count++;
+    maybe_post_progress(job, filepath);   /* GAP-141 */
 }
 
+/* GAP-141 — hidden-entry policy matches macOS SearchEngine.mm:822-830:
+ * unless "In hidden folders" is on, BOTH dot-directories and dot-files
+ * are skipped (previously dot-files were searched unconditionally). */
 static void search_dir(const char *dirpath, FifJob *job, GRegex *regex)
 {
     GDir *dir = g_dir_open(dirpath, 0, NULL);
@@ -170,9 +218,10 @@ static void search_dir(const char *dirpath, FifJob *job, GRegex *regex)
 
     const gchar *name;
     while ((name = g_dir_read_name(dir))) {
+        if (!job->hidden && name[0] == '.') continue;
         gchar *full = g_build_filename(dirpath, name, NULL);
         if (g_file_test(full, G_FILE_TEST_IS_DIR)) {
-            if (job->subdirs && name[0] != '.')
+            if (job->subdirs)
                 search_dir(full, job, regex);
         } else if (name_matches_filter(name, job->filter)) {
             search_file(full, job, regex);
@@ -305,9 +354,10 @@ static void replace_dir(const char *dirpath, FifJob *job, GRegex *regex)
     if (!dir) return;
     const gchar *name;
     while ((name = g_dir_read_name(dir))) {
+        if (!job->hidden && name[0] == '.') continue;   /* GAP-141 */
         gchar *full = g_build_filename(dirpath, name, NULL);
         if (g_file_test(full, G_FILE_TEST_IS_DIR)) {
-            if (job->subdirs && name[0] != '.')
+            if (job->subdirs)
                 replace_dir(full, job, regex);
         } else if (name_matches_filter(name, job->filter)) {
             replace_file(full, job, regex);
@@ -718,7 +768,10 @@ void findinfiles_show(GtkWidget *parent, const char *find_text)
 
 void findinfiles_run(const char *needle, const char *directory,
                      const char *filter, gboolean match_case,
-                     gboolean whole_word, int mode, gboolean subdirs)
+                     gboolean whole_word, int mode, gboolean dot_nl,
+                     gboolean subdirs, gboolean hidden,
+                     FifProgress progress, gpointer progress_user,
+                     FifSearchDone done, gpointer done_user)
 {
     if (!needle || !*needle || !directory || !*directory) return;
 
@@ -729,7 +782,13 @@ void findinfiles_run(const char *needle, const char *directory,
     job->match_case  = match_case;
     job->whole_word  = whole_word;
     job->subdirs     = subdirs;
+    job->hidden      = hidden;                    /* GAP-141 */
+    job->dot_nl      = dot_nl;                    /* GAP-141 */
     job->mode        = mode;   /* was silently dropped pre-GAP-122 */
+    job->progress        = progress;              /* GAP-141 */
+    job->progress_user   = progress_user;
+    job->on_search_done      = done;              /* GAP-141 */
+    job->on_search_done_user = done_user;
     job->hits        = g_ptr_array_new_with_free_func(fif_hit_free);
     job->file_count  = 0;
     g_thread_new("fif-search", search_thread, job);
@@ -738,7 +797,7 @@ void findinfiles_run(const char *needle, const char *directory,
 /* GAP-136 — Find in Projects: same worker over an explicit file list. */
 void findinfiles_run_paths(const char *needle, GPtrArray *paths,
                            const char *filter, gboolean match_case,
-                           gboolean whole_word, int mode,
+                           gboolean whole_word, int mode, gboolean dot_nl,
                            FifSearchDone done, gpointer user)
 {
     if (!needle || !*needle || !paths) {
@@ -752,6 +811,7 @@ void findinfiles_run_paths(const char *needle, GPtrArray *paths,
     job->match_case  = match_case;
     job->whole_word  = whole_word;
     job->mode        = mode;
+    job->dot_nl      = dot_nl;                    /* GAP-141 */
     job->on_search_done      = done;
     job->on_search_done_user = user;
     job->hits        = g_ptr_array_new_with_free_func(fif_hit_free);
@@ -762,7 +822,8 @@ void findinfiles_run_paths(const char *needle, GPtrArray *paths,
 void findinfiles_replace_run(const char *needle, const char *replacement,
                              const char *directory, const char *filter,
                              gboolean match_case, gboolean whole_word,
-                             int mode, gboolean subdirs,
+                             int mode, gboolean dot_nl,
+                             gboolean subdirs, gboolean hidden,
                              FifReplaceDone done, gpointer user)
 {
     if (!needle || !*needle || !directory || !*directory) return;
@@ -775,6 +836,8 @@ void findinfiles_replace_run(const char *needle, const char *replacement,
     job->match_case  = match_case;
     job->whole_word  = whole_word;
     job->subdirs     = subdirs;
+    job->hidden      = hidden;                    /* GAP-141 */
+    job->dot_nl      = dot_nl;                    /* GAP-141 */
     job->mode        = mode;
     job->write_failures = g_ptr_array_new_with_free_func(g_free);
     job->on_done     = done;
@@ -796,7 +859,7 @@ void findinfiles_replace_run_paths(const char *needle,
                                    const char *replacement,
                                    GPtrArray *paths, const char *filter,
                                    gboolean match_case, gboolean whole_word,
-                                   int mode,
+                                   int mode, gboolean dot_nl,
                                    FifReplaceDone done, gpointer user)
 {
     if (!needle || !*needle || !paths) {
@@ -811,6 +874,7 @@ void findinfiles_replace_run_paths(const char *needle,
     job->match_case  = match_case;
     job->whole_word  = whole_word;
     job->mode        = mode;
+    job->dot_nl      = dot_nl;                    /* GAP-141 */
     job->write_failures = g_ptr_array_new_with_free_func(g_free);
     job->on_done     = done;
     job->on_done_user = user;

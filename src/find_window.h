@@ -21,4 +21,7 @@ void find_window_show(GtkWindow *parent, FwTab tab, const char *initial_text);
  * Project panel's "Find in Projects…" context item). */
 void find_window_show_fif_dir(GtkWindow *parent, const char *dir);
 
+/* GAP-141 — open the Replace tab with "In selection" pre-checked. */
+void find_window_show_replace_in_selection(GtkWindow *parent);
+
 #endif

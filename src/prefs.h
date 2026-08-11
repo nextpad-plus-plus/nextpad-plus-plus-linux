@@ -264,6 +264,23 @@ const char *const *prefs_workspace_roots(int *out_n);
  * Pass NULL/0 to clear. */
 void prefs_workspace_roots_set(const char *const *paths, int n);
 
+/* GAP-141 — Find-window search history (macOS FindWindow kHistory*
+ * NSUserDefaults arrays: newest first, deduped, capped at 20).
+ * Persisted in config.xml as <GUIConfig name="FindHistory<Kind>" …/>. */
+typedef enum {
+    PREFS_HIST_FIND = 0,
+    PREFS_HIST_REPLACE,
+    PREFS_HIST_FILTER,
+    PREFS_HIST_DIR,
+    PREFS_HIST_N
+} PrefsHistKind;
+
+/* Returned array (char* items) is owned by prefs.c; never NULL. */
+GPtrArray *prefs_history(PrefsHistKind kind);
+
+/* Prepend `text` (dedupe, cap 20) and save. Empty/NULL is a no-op. */
+void prefs_history_add(PrefsHistKind kind, const char *text);
+
 /* Load from ~/<APP_CONFIG_DIR>/config.xml (call before building UI) */
 void prefs_load(void);
 

@@ -4600,11 +4600,13 @@ static void action_find_all_all_docs(GSimpleAction *a, GVariant *p, gpointer u) 
     gtk_widget_destroy(dlg);
 }
 
-/* "Replace in Selection": only replace within the current selection range. */
+/* "Replace in Selection": the 5-tab Replace tab with "In selection"
+ * pre-checked (GAP-141 — was opening the legacy dialog, which cannot
+ * scope to the selection). */
 static void action_replace_in_selection(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    /* For v1, just open the regular Replace dialog with a hint dialog first. */
-    findreplace_show(GTK_WIDGET(g_window), NULL, TRUE);
+    find_window_show_replace_in_selection(
+        g_window ? GTK_WINDOW(g_window) : NULL);
 }
 
 /* ──────────────────────────────────────────────────────────────────────

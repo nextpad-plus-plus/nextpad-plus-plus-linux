@@ -66,19 +66,19 @@ typedef struct {
     GtkWidget *fif_find, *fif_repl, *fif_filters, *fif_dir;
     GtkWidget *fif_word, *fif_case;
     GtkWidget *fif_subfolders, *fif_hidden;
-    GtkWidget *fif_rb_normal, *fif_rb_ext, *fif_rb_regex;
+    GtkWidget *fif_rb_normal, *fif_rb_ext, *fif_rb_regex, *fif_dot_newline;
 
     /* Find in Projects */
     GtkWidget *fip_find, *fip_repl, *fip_filters;
     GtkWidget *fip_word, *fip_case;
     GtkWidget *fip_proj1, *fip_proj2, *fip_proj3;
-    GtkWidget *fip_rb_normal, *fip_rb_ext, *fip_rb_regex;
+    GtkWidget *fip_rb_normal, *fip_rb_ext, *fip_rb_regex, *fip_dot_newline;
 
     /* Mark */
     GtkWidget *m_find;
     GtkWidget *m_in_sel, *m_bookmark_line, *m_purge;
     GtkWidget *m_back, *m_word, *m_case, *m_wrap;
-    GtkWidget *m_rb_normal, *m_rb_ext, *m_rb_regex;
+    GtkWidget *m_rb_normal, *m_rb_ext, *m_rb_regex, *m_dot_newline;
 
     /* Shared status line at the bottom of the dialog. */
     GtkWidget *status;
@@ -208,27 +208,97 @@ static void push_replace_options(void) {
         chk(w->r_in_sel), chk(w->r_dot_newline));
 }
 
+/* ── Search history (GAP-141 — macOS _addToHistory/_restoreHistory) ──
+ * macOS shares ONE combo per field kind across tabs; here each tab has
+ * its own, so the four persisted histories fan out to every combo of
+ * their kind. Entry text survives the model rebuild (saved/restored
+ * around it — remove_all can clear the child entry mid-rebuild). */
+static void hist_fill_combo(GtkWidget *combo, PrefsHistKind kind)
+{
+    if (!combo) return;
+    GtkWidget *e = gtk_bin_get_child(GTK_BIN(combo));
+    char *keep = e ? g_strdup(gtk_entry_get_text(GTK_ENTRY(e))) : NULL;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(combo));
+    GPtrArray *h = prefs_history(kind);
+    for (guint i = 0; i < h->len; i++)
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo),
+            (const char *)g_ptr_array_index(h, i));
+    if (keep) {
+        gtk_entry_set_text(GTK_ENTRY(e), keep);
+        g_free(keep);
+    }
+}
+
+static void hist_refresh_kind(FW *w, PrefsHistKind kind)
+{
+    switch (kind) {
+    case PREFS_HIST_FIND:
+        hist_fill_combo(w->f_find,   kind);
+        hist_fill_combo(w->r_find,   kind);
+        hist_fill_combo(w->fif_find, kind);
+        hist_fill_combo(w->fip_find, kind);
+        hist_fill_combo(w->m_find,   kind);
+        break;
+    case PREFS_HIST_REPLACE:
+        hist_fill_combo(w->r_repl,   kind);
+        hist_fill_combo(w->fif_repl, kind);
+        hist_fill_combo(w->fip_repl, kind);
+        break;
+    case PREFS_HIST_FILTER:
+        hist_fill_combo(w->fif_filters, kind);
+        hist_fill_combo(w->fip_filters, kind);
+        break;
+    case PREFS_HIST_DIR:
+        hist_fill_combo(w->fif_dir, kind);
+        break;
+    default: break;
+    }
+}
+
+static void hist_add(FW *w, PrefsHistKind kind, GtkWidget *combo)
+{
+    const char *t = combo_text(combo);
+    if (!t || !*t) return;
+    prefs_history_add(kind, t);
+    hist_refresh_kind(w, kind);
+}
+
 /* ── Find tab actions ──────────────────────────────────────────────── */
 static void on_find_next(GtkButton *b, gpointer u) {
     (void)b; (void)u; FW *w = s_fw; if (!w) return;
-    push_find_options();
+    /* Tab-aware (GAP-141): the Replace tab's Find Next must read ITS
+     * fields (macOS currentOptions is per-tab); it used to read the
+     * Find tab's combo, searching for stale/empty text. */
+    int tab = gtk_notebook_get_current_page(GTK_NOTEBOOK(w->notebook));
+    GtkWidget *back;
+    if (tab == 1) {
+        push_replace_options();
+        hist_add(w, PREFS_HIST_FIND, w->r_find);
+        back = w->r_back;
+    } else {
+        push_find_options();
+        hist_add(w, PREFS_HIST_FIND, w->f_find);
+        back = w->f_back;
+    }
     /* "Backward direction" flips Find Next (macOS FindWindow parity). */
-    if (chk(w->f_back)) findreplace_find_prev();
-    else                findreplace_find_next();
+    if (chk(back)) findreplace_find_prev();
+    else           findreplace_find_next();
 }
 
 static void on_find_count(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_find_options();
-    int n = findreplace_count();
     FW *w = s_fw; if (!w) return;
+    hist_add(w, PREFS_HIST_FIND, w->f_find);
+    int n = findreplace_count();
     gchar *msg = g_strdup_printf("%d match%s found", n, n == 1 ? "" : "es");
     gtk_label_set_text(GTK_LABEL(w->status), msg);
     g_free(msg);
 }
 static void on_find_all_current(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_find_options();
-    int n = findreplace_find_all_current();
     FW *w = s_fw; if (!w) return;
+    hist_add(w, PREFS_HIST_FIND, w->f_find);
+    int n = findreplace_find_all_current();
     gchar *msg = g_strdup_printf("Find All in Current Document: %d hit%s", n,
                                  n == 1 ? "" : "s");
     gtk_label_set_text(GTK_LABEL(w->status), msg);
@@ -236,6 +306,7 @@ static void on_find_all_current(GtkButton *b, gpointer u) {
 }
 static void on_find_all_docs(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_find_options();
+    if (s_fw) hist_add(s_fw, PREFS_HIST_FIND, s_fw->f_find);
     /* All-Documents: switch through each open tab and run Find All
      * Current on it. Each call begins/ends its own block in the Search
      * Results panel so the user sees per-file groupings. */
@@ -261,12 +332,17 @@ static void on_find_all_docs(GtkButton *b, gpointer u) {
 /* ── Replace tab actions ───────────────────────────────────────────── */
 static void on_replace_one(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_replace_options();
+    FW *w = s_fw; if (!w) return;
+    hist_add(w, PREFS_HIST_FIND,    w->r_find);
+    hist_add(w, PREFS_HIST_REPLACE, w->r_repl);
     findreplace_replace_one();
 }
 static void on_replace_all(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_replace_options();
-    int n = findreplace_replace_all();
     FW *w = s_fw; if (!w) return;
+    hist_add(w, PREFS_HIST_FIND,    w->r_find);
+    hist_add(w, PREFS_HIST_REPLACE, w->r_repl);
+    int n = findreplace_replace_all();
     gchar *msg = g_strdup_printf("Replaced %d occurrence%s", n,
                                  n == 1 ? "" : "s");
     gtk_label_set_text(GTK_LABEL(w->status), msg);
@@ -274,6 +350,10 @@ static void on_replace_all(GtkButton *b, gpointer u) {
 }
 static void on_replace_in_all_docs(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_replace_options();
+    if (s_fw) {
+        hist_add(s_fw, PREFS_HIST_FIND,    s_fw->r_find);
+        hist_add(s_fw, PREFS_HIST_REPLACE, s_fw->r_repl);
+    }
     int total = 0;
     int n_pages = editor_page_count();
     GtkWidget *nb = editor_get_notebook();
@@ -290,6 +370,27 @@ static void on_replace_in_all_docs(GtkButton *b, gpointer u) {
 
 /* ── Find in Files actions ─────────────────────────────────────────── */
 static void on_fif_choose_dir(GtkButton *b, gpointer u);
+
+/* GAP-141 — live progress + completion status in the shared status
+ * line (macOS _findInFiles progressBlock + _showStatus). */
+static void fif_progress_cb(const char *base, int hits, gpointer u) {
+    (void)u;
+    FW *w = s_fw; if (!w) return;
+    gchar *msg = g_strdup_printf("Searching… %d hit(s) — %s", hits, base);
+    gtk_label_set_text(GTK_LABEL(w->status), msg);
+    g_free(msg);
+}
+static void fif_search_done_cb(int hits, int files, gpointer u) {
+    (void)u;
+    FW *w = s_fw; if (!w) return;
+    gchar *msg = hits
+        ? g_strdup_printf("Find in Files: %d hit(s) in %d file(s).",
+                          hits, files)
+        : g_strdup("Find in Files: 0 hits.");
+    gtk_label_set_text(GTK_LABEL(w->status), msg);
+    g_free(msg);
+}
+
 static void on_fif_find_all(GtkButton *b, gpointer u) {
     (void)b; (void)u;
     FW *w = s_fw; if (!w) return;
@@ -301,13 +402,23 @@ static void on_fif_find_all(GtkButton *b, gpointer u) {
             "Enter a search term and pick a directory.");
         return;
     }
+    hist_add(w, PREFS_HIST_FIND,   w->fif_find);
+    hist_add(w, PREFS_HIST_FILTER, w->fif_filters);
+    hist_add(w, PREFS_HIST_DIR,    w->fif_dir);
+    gtk_label_set_text(GTK_LABEL(w->status), "Searching…");
     /* Hand off to the existing findinfiles backend, which feeds the
-     * shared Search Results panel via searchresults_*. */
+     * shared Search Results panel via searchresults_*. GAP-141: the
+     * sub-folder / hidden-folder checkboxes and ". matches newline"
+     * are finally honoured, and progress/completion land here. */
     findinfiles_run(needle, dir, filt,
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fif_case)),
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fif_word)),
         get_search_mode(w->fif_rb_normal, w->fif_rb_ext, w->fif_rb_regex),
-        TRUE  /* recursive */);
+        chk(w->fif_dot_newline),
+        chk(w->fif_subfolders),
+        chk(w->fif_hidden),
+        fif_progress_cb, NULL,
+        fif_search_done_cb, NULL);
     searchresults_set_visible(TRUE);
 }
 /* GAP-122 — one-shot Replace in Files (macOS _replaceInFiles: parity:
@@ -373,12 +484,18 @@ static void on_fif_replace(GtkButton *b, gpointer u) {
     gtk_widget_destroy(d);
     if (resp != GTK_RESPONSE_OK) return;
 
+    hist_add(w, PREFS_HIST_FIND,    w->fif_find);
+    hist_add(w, PREFS_HIST_REPLACE, w->fif_repl);
+    hist_add(w, PREFS_HIST_FILTER,  w->fif_filters);
+    hist_add(w, PREFS_HIST_DIR,     w->fif_dir);
     gtk_label_set_text(GTK_LABEL(w->status), "Replacing in files…");
     findinfiles_replace_run(needle, repl, dir, filt,
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fif_case)),
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fif_word)),
         get_search_mode(w->fif_rb_normal, w->fif_rb_ext, w->fif_rb_regex),
-        TRUE /* recursive */,
+        chk(w->fif_dot_newline),
+        chk(w->fif_subfolders),
+        chk(w->fif_hidden),
         fif_replace_done, NULL);
 }
 
@@ -390,10 +507,15 @@ static void on_fip_replace(GtkButton *b, gpointer u);
 static void on_mark_all(GtkButton *b, gpointer u) {
     (void)b; (void)u;
     FW *w = s_fw; if (!w) return;
+    hist_add(w, PREFS_HIST_FIND, w->m_find);
+    /* GAP-141: Wrap around and ". matches newline" now flow into the
+     * options (they were hardcoded FALSE). "Backward direction" is
+     * read into opts.direction on macOS but the whole-range mark scan
+     * ignores it there too, so it stays presentation-only here. */
     findreplace_set_options(combo_text(w->m_find), "",
-        chk(w->m_case), chk(w->m_word), FALSE,
+        chk(w->m_case), chk(w->m_word), chk(w->m_wrap),
         get_search_mode(w->m_rb_normal, w->m_rb_ext, w->m_rb_regex),
-        chk(w->m_in_sel), FALSE);
+        chk(w->m_in_sel), chk(w->m_dot_newline));
     findreplace_set_mark_options(chk(w->m_purge), chk(w->m_bookmark_line));
     int n = findreplace_mark_all();
     gchar *msg = g_strdup_printf("Marked %d occurrence%s", n,
@@ -512,11 +634,14 @@ static void on_fip_find_all(GtkButton *b, gpointer u) {
     if (!needle || !*needle) return;          /* macOS: silent return */
     GPtrArray *paths = fip_collect(w);
     if (!paths) return;
+    hist_add(w, PREFS_HIST_FIND,   w->fip_find);
+    hist_add(w, PREFS_HIST_FILTER, w->fip_filters);
     gtk_label_set_text(GTK_LABEL(w->status), "Searching...");
     findinfiles_run_paths(needle, paths, combo_text(w->fip_filters),
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fip_case)),
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fip_word)),
         get_search_mode(w->fip_rb_normal, w->fip_rb_ext, w->fip_rb_regex),
+        chk(w->fip_dot_newline),
         fip_search_done, NULL);
     searchresults_set_visible(TRUE);
 }
@@ -558,12 +683,16 @@ static void on_fip_replace(GtkButton *b, gpointer u) {
     gtk_widget_destroy(d);
     if (resp != GTK_RESPONSE_OK) { g_ptr_array_free(paths, TRUE); return; }
 
+    hist_add(w, PREFS_HIST_FIND,    w->fip_find);
+    hist_add(w, PREFS_HIST_REPLACE, w->fip_repl);
+    hist_add(w, PREFS_HIST_FILTER,  w->fip_filters);
     gtk_label_set_text(GTK_LABEL(w->status), "Replacing in files…");
     findinfiles_replace_run_paths(needle, repl, paths,
         combo_text(w->fip_filters),
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fip_case)),
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w->fip_word)),
         get_search_mode(w->fip_rb_normal, w->fip_rb_ext, w->fip_rb_regex),
+        chk(w->fip_dot_newline),
         fip_replace_done, NULL);
 }
 
@@ -587,10 +716,49 @@ static void on_fif_choose_dir(GtkButton *b, gpointer u) {
 }
 static void on_copy_marked(GtkButton *b, gpointer u);
 
+/* GAP-141 — the `<<` button: fill the FiF directory from the current
+ * document's folder (macOS _fillDirFromDoc:). No-op for unsaved docs. */
+static void on_fif_fill_dir_from_doc(GtkButton *b, gpointer u) {
+    (void)b; (void)u;
+    FW *w = s_fw; if (!w) return;
+    NppDoc *doc = editor_current_doc();
+    if (!doc || !doc->filepath || !*doc->filepath) return;
+    gchar *dir = g_path_get_dirname(doc->filepath);
+    GtkWidget *entry = gtk_bin_get_child(GTK_BIN(w->fif_dir));
+    if (entry) gtk_entry_set_text(GTK_ENTRY(entry), dir);
+    g_free(dir);
+}
+
 /* ── Close ─────────────────────────────────────────────────────────── */
 static void on_close(GtkButton *b, gpointer u) {
     (void)b; (void)u;
     if (s_fw && s_fw->window) gtk_widget_hide(s_fw->window);
+}
+
+/* GAP-141 — Escape closes the window (macOS cancelOperation:). The
+ * bubble-phase window controller still sees Esc when focus sits in a
+ * combo entry, matching the macOS field-editor note. */
+static gboolean on_fw_key(GtkEventControllerKey *c, guint keyval,
+                          guint keycode, GdkModifierType state, gpointer u)
+{
+    (void)c; (void)keycode; (void)state; (void)u;
+    if (keyval == GDK_KEY_Escape) {
+        on_close(NULL, NULL);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* GAP-141 — Enter inside the Find-what combo runs Find Next, strictly
+ * gated to the Find tab (macOS _findComboEnterPressed: issue #37 —
+ * applying it to the other tabs would be surprising). */
+static void on_find_entry_activate(GtkEntry *e, gpointer u)
+{
+    (void)e; (void)u;
+    FW *w = s_fw; if (!w) return;
+    if (gtk_notebook_get_current_page(GTK_NOTEBOOK(w->notebook)) != 0)
+        return;
+    on_find_next(NULL, NULL);
 }
 
 /* ────────────────────────────────────────────────────────────────────── */
@@ -748,6 +916,8 @@ static GtkWidget *build_fif_tab(FW *w) {
     gtk_widget_set_tooltip_text(current_btn, "Use current file's directory");
     g_signal_connect(dir_btn, "clicked",
                      G_CALLBACK(on_fif_choose_dir), NULL);
+    g_signal_connect(current_btn, "clicked",              /* GAP-141 */
+                     G_CALLBACK(on_fif_fill_dir_from_doc), NULL);
     npp_box_pack(GTK_BOX(dirrow), dir_btn, FALSE, 0);
     npp_box_pack(GTK_BOX(dirrow), current_btn, FALSE, 0);
     gtk_grid_attach(GTK_GRID(grid), dirrow, 1, 3, 1, 1);
@@ -768,7 +938,8 @@ static GtkWidget *build_fif_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts_grid, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->fif_rb_normal, &w->fif_rb_ext, &w->fif_rb_regex, NULL, NULL);
+        &w->fif_rb_normal, &w->fif_rb_ext, &w->fif_rb_regex,
+        &w->fif_dot_newline, NULL);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -813,7 +984,8 @@ static GtkWidget *build_fip_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->fip_rb_normal, &w->fip_rb_ext, &w->fip_rb_regex, NULL, NULL);
+        &w->fip_rb_normal, &w->fip_rb_ext, &w->fip_rb_regex,
+        &w->fip_dot_newline, NULL);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -875,7 +1047,8 @@ static GtkWidget *build_mark_tab(FW *w) {
     npp_box_pack(GTK_BOX(left), opts, FALSE, 0);
 
     GtkWidget *mode = make_search_mode_frame(
-        &w->m_rb_normal, &w->m_rb_ext, &w->m_rb_regex, NULL, NULL);
+        &w->m_rb_normal, &w->m_rb_ext, &w->m_rb_regex,
+        &w->m_dot_newline, NULL);
     npp_box_pack(GTK_BOX(left), mode, FALSE, 0);
     npp_box_pack(GTK_BOX(outer), left, TRUE, 0);
 
@@ -1033,19 +1206,53 @@ void find_window_show(GtkWindow *parent, FwTab tab, const char *initial_text) {
         /* Dim on losing focus / restore when active again (GAP-53). */
         g_signal_connect(s_fw->window, "notify::is-active",
                          G_CALLBACK(on_tr_active_changed), NULL);
+
+        /* GAP-141 — Escape closes (macOS cancelOperation:). */
+        GtkEventController *kc = gtk_event_controller_key_new();
+        g_signal_connect(kc, "key-pressed", G_CALLBACK(on_fw_key), NULL);
+        gtk_widget_add_controller(s_fw->window, kc);
+
+        /* GAP-141 — Enter in the Find tab's find field = Find Next. */
+        GtkWidget *fe = gtk_bin_get_child(GTK_BIN(s_fw->f_find));
+        if (fe) g_signal_connect(fe, "activate",
+                                 G_CALLBACK(on_find_entry_activate), NULL);
+
+        /* GAP-141 — restore the persisted search histories into every
+         * combo of each kind (macOS _restoreHistory). */
+        for (int k = 0; k < PREFS_HIST_N; k++)
+            hist_refresh_kind(s_fw, (PrefsHistKind)k);
     }
 
     /* Pre-fill the appropriate find-entry. */
-    if (initial_text && *initial_text) {
+    const char *fill = initial_text;
+    char *sel_fill = NULL;
+    if ((!fill || !*fill) && g_prefs.fill_find_with_selection) {
+        /* GAP-141 — the pref was honoured only by the legacy dialog;
+         * same rules as findreplace_show: non-empty selection < 1 KiB. */
+        NppDoc *doc = editor_current_doc();
+        if (doc && doc->sci) {
+            ScintillaObject *sci = SCINTILLA(doc->sci);
+            sptr_t a = scintilla_send_message(sci, SCI_GETSELECTIONSTART, 0, 0);
+            sptr_t b = scintilla_send_message(sci, SCI_GETSELECTIONEND,   0, 0);
+            if (b > a && (b - a) < 1024) {
+                sel_fill = g_malloc((gsize)(b - a) + 1);
+                scintilla_send_message(sci, SCI_GETSELTEXT, 0,
+                                       (sptr_t)sel_fill);
+                fill = sel_fill;
+            }
+        }
+    }
+    if (fill && *fill) {
         GtkWidget *combos[5] = {
             s_fw->f_find, s_fw->r_find, s_fw->fif_find,
             s_fw->fip_find, s_fw->m_find,
         };
         if (tab < 5 && combos[tab]) {
             GtkWidget *e = gtk_bin_get_child(GTK_BIN(combos[tab]));
-            if (e) gtk_entry_set_text(GTK_ENTRY(e), initial_text);
+            if (e) gtk_entry_set_text(GTK_ENTRY(e), fill);
         }
     }
+    g_free(sel_fill);
     gtk_notebook_set_current_page(GTK_NOTEBOOK(s_fw->notebook), (int)tab);
     gtk_widget_show_all(s_fw->window);
     gtk_window_present(GTK_WINDOW(s_fw->window));
@@ -1067,6 +1274,16 @@ void find_window_show(GtkWindow *parent, FwTab tab, const char *initial_text) {
             }
         }
     }
+}
+
+/* GAP-141 — "Replace in Selection": the Replace tab with In-selection
+ * pre-checked (was routing to the legacy 1-tab dialog, which cannot
+ * scope to the selection at all). */
+void find_window_show_replace_in_selection(GtkWindow *parent)
+{
+    find_window_show(parent, FW_TAB_REPLACE, NULL);
+    if (s_fw && s_fw->r_in_sel)
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s_fw->r_in_sel), TRUE);
 }
 
 /* GAP-136 — Project panel's "Find in Projects…" context item: open the

@@ -10,6 +10,7 @@
 #include "gtk_compat.h"
 #include "editor.h"
 #include "findreplace.h"
+#include "find_window.h"
 #include "macro.h"
 #include "doclist.h"
 #include "docmap.h"
@@ -349,12 +350,14 @@ static void on_paste(GtkButton *i, gpointer d) { (void)i;(void)d; editor_paste()
 static void on_undo (GtkButton *i, gpointer d) { (void)i;(void)d; editor_undo(); }
 static void on_redo (GtkButton *i, gpointer d) { (void)i;(void)d; editor_redo(); }
 
+/* GAP-141 — the toolbar buttons open the same 5-tab Find window as the
+ * menu (they were still routing to the legacy 1-tab dialog). */
 static void on_find(GtkButton *i, gpointer d)
 {
     (void)i;
     NppDoc *doc = editor_current_doc();
     if (doc) findreplace_set_sci(doc->sci);
-    findreplace_show((GtkWidget *)d, NULL, FALSE);
+    find_window_show(d ? GTK_WINDOW(d) : NULL, FW_TAB_FIND, NULL);
 }
 
 static void on_replace(GtkButton *i, gpointer d)
@@ -362,7 +365,7 @@ static void on_replace(GtkButton *i, gpointer d)
     (void)i;
     NppDoc *doc = editor_current_doc();
     if (doc) findreplace_set_sci(doc->sci);
-    findreplace_show((GtkWidget *)d, NULL, TRUE);
+    find_window_show(d ? GTK_WINDOW(d) : NULL, FW_TAB_REPLACE, NULL);
 }
 
 static void on_zoom_in (GtkButton *i, gpointer d)
