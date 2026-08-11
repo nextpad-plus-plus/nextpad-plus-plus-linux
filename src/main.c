@@ -7024,6 +7024,13 @@ static void set_accel(GtkApplication *app, const char *action_detail,
     gtk_application_set_accels_for_action(app, action_detail, accels);
 }
 
+/* GAP-151b — two bindings for one action (Ctrl+PgDn AND Ctrl+Tab). */
+static void set_accel2(GtkApplication *app, const char *action_detail,
+                       const char *a1, const char *a2) {
+    const char *accels[3] = { a1, a2, NULL };
+    gtk_application_set_accels_for_action(app, action_detail, accels);
+}
+
 /* ------------------------------------------------------------------ */
 /* Menu construction                                                   */
 /* ------------------------------------------------------------------ */
@@ -7162,6 +7169,12 @@ static GMenuModel *build_menu_model(void)
         g_menu_append(print_group, "Print Now", "app.print-now");
         g_menu_append_section(file, NULL, G_MENU_MODEL(print_group));
         g_object_unref(print_group);
+    }
+    {   /* GAP-151a — Windows N++ File menu ends with Exit. */
+        GMenu *exit_group = g_menu_new();
+        g_menu_append(exit_group, "Exit", "app.quit");
+        g_menu_append_section(file, NULL, G_MENU_MODEL(exit_group));
+        g_object_unref(exit_group);
     }
     g_menu_append_submenu(bar, "_File", G_MENU_MODEL(file));
     g_object_unref(file);
@@ -9221,10 +9234,15 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.new",        "<Primary>n");
     set_accel(app, "app.open",       "<Primary>o");
     set_accel(app, "app.save",       "<Primary>s");
-    set_accel(app, "app.save-as",    "<Primary><Shift>s");
-    set_accel(app, "app.save-all",   "<Primary><Alt>s");
+    /* GAP-151c — Windows N++ layout: Save As = Ctrl+Alt+S,
+     * Save All = Ctrl+Shift+S (was reversed here). */
+    set_accel(app, "app.save-as",    "<Primary><Alt>s");
+    set_accel(app, "app.save-all",   "<Primary><Shift>s");
     set_accel(app, "app.close",      "<Primary>w");
-    set_accel(app, "app.quit",       "<Primary>q");
+    set_accel(app, "app.close-all",  "<Primary><Shift>w");
+    /* GAP-151 — Ctrl+Q belongs to Toggle Single Line Comment (Windows
+     * N++); it was double-bound to quit AND the comment toggle. Exit
+     * lives in the File menu; Alt+F4 closes via the WM. */
     set_accel(app, "app.undo",       "<Primary>z");
     set_accel(app, "app.redo",       "<Primary>y");
     set_accel(app, "app.cut",        "<Primary>x");
@@ -9265,8 +9283,9 @@ static void on_startup(GtkApplication *app, gpointer ud)
     }
     set_accel(app, "app.word-wrap",    "<Primary><Alt>w");
     set_accel(app, "app.fullscreen",   "F11");
-    set_accel(app, "app.tab-next",     "<Primary>Page_Down");
-    set_accel(app, "app.tab-prev",     "<Primary>Page_Up");
+    set_accel2(app, "app.tab-next", "<Primary>Page_Down", "<Primary>Tab");
+    set_accel2(app, "app.tab-prev", "<Primary>Page_Up",
+               "<Primary><Shift>Tab");
     set_accel(app, "app.print",        "<Primary>p");
     set_accel(app, "app.help-about",   "F1");
     /* G16 brace matching shortcuts (matches macOS Cmd+M / Cmd+Shift+M) */
@@ -9274,12 +9293,25 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.select-in-brackets",  "<Primary><Shift>m");
     /* G12 keyboard accelerators */
     set_accel(app, "app.line-duplicate",       "<Primary>d");
-    set_accel(app, "app.line-delete",          "<Primary><Shift>k");
+    /* Windows N++ SCI_LINEDELETE = Ctrl+Shift+L; Ctrl+Shift+K goes to
+     * Single Line Uncomment below. */
+    set_accel(app, "app.line-delete",          "<Primary><Shift>l");
     set_accel(app, "app.line-move-up",         "<Primary><Shift>Up");
     set_accel(app, "app.line-move-down",       "<Primary><Shift>Down");
     set_accel(app, "app.indent",               "<Primary>bracketright");
     set_accel(app, "app.unindent",             "<Primary>bracketleft");
     set_accel(app, "app.toggle-line-comment",  "<Primary>q");
+    /* GAP-151b — Windows N++ comment family + selection/hint/tab-move
+     * accels that had menu items but no keys. */
+    set_accel(app, "app.comment-line-add",     "<Primary>k");
+    set_accel(app, "app.comment-line-remove",  "<Primary><Shift>k");
+    set_accel(app, "app.block-comment-add",    "<Primary><Shift>q");
+    set_accel(app, "app.begin-end-select",     "<Primary><Shift>b");
+    set_accel(app, "app.begin-end-select-column", "<Alt><Shift>b");
+    set_accel(app, "app.ac-hint-prev",         "<Alt>Up");
+    set_accel(app, "app.ac-hint-next",         "<Alt>Down");
+    set_accel(app, "app.tab-move-forward",     "<Primary><Shift>Page_Down");
+    set_accel(app, "app.tab-move-backward",    "<Primary><Shift>Page_Up");
     set_accel(app, "app.column-mode",          "<Primary><Alt>c");
     /* G13 + G15 + G22 keys */
     /* Q4 — bookmark accels match macOS Notepad++:
