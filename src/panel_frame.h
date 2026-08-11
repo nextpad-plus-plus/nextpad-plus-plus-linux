@@ -28,6 +28,10 @@
  * (caller zooms the editor instead). macOS _focusedZoomablePanel port. */
 gboolean panel_frame_zoom_from_focus(GtkWidget *focus, int step);
 
+/* GAP-143 follow-up — reload the chrome palette + per-palette icons on
+ * a runtime light/dark switch (called from theme_apply). */
+void panel_frame_retheme(void);
+
 GtkWidget *panel_frame_new(const char *name,
                            const char *title,
                            GtkWidget   *content,

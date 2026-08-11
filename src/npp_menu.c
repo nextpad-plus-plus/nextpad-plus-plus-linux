@@ -303,8 +303,18 @@ static void on_popover_closed(GtkPopover *p, gpointer ud)
 
 static GtkWidget *build_popover(NppMenu *root)
 {
-    GtkWidget *pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(root->model));
+    /* Insert the action group BEFORE handing the model over: the menu
+     * tracker resolves actions while building the items, and a stateful
+     * (check) item whose action is missing at that moment is created
+     * role-less and stays invisible even after the group appears
+     * ("action rcm.iN missing from the start" under GTK_DEBUG=actions —
+     * this silently dropped every npp_menu_add_check item that shared a
+     * popover with enough earlier items, e.g. the Search-results
+     * wrap/purge toggles). */
+    GtkWidget *pop = gtk_popover_menu_new_from_model(NULL);
     gtk_widget_insert_action_group(pop, "rcm", G_ACTION_GROUP(root->actions));
+    gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(pop),
+                                    G_MENU_MODEL(root->model));
     gtk_popover_set_has_arrow(GTK_POPOVER(pop), FALSE);
     g_signal_connect(pop, "closed",
                      G_CALLBACK(on_popover_closed), root);
@@ -314,6 +324,17 @@ static GtkWidget *build_popover(NppMenu *root)
 void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
 {
     NppMenu *root = m->root;
+    if (g_getenv("NPP_MENU_DEBUG")) {
+        int ns = g_menu_model_get_n_items(G_MENU_MODEL(root->model));
+        g_printerr("npp_menu: %d sections\n", ns);
+        for (int i = 0; i < ns; i++) {
+            GMenuModel *sec = g_menu_model_get_item_link(
+                G_MENU_MODEL(root->model), i, G_MENU_LINK_SECTION);
+            g_printerr("  sec %d: %d items\n", i,
+                       sec ? g_menu_model_get_n_items(sec) : -1);
+            if (sec) g_object_unref(sec);
+        }
+    }
     root->popover = build_popover(root);
     GdkRectangle r = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(root->popover), &r);

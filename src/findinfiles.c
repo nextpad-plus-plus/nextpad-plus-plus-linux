@@ -33,11 +33,16 @@ static GtkWidget    *s_parent_win   = NULL;
 /* ------------------------------------------------------------------ */
 /* Hit and result types                                                */
 /* ------------------------------------------------------------------ */
-typedef struct { char *filepath; int line; char *text; } FifHit;
+typedef struct { char *filepath; int line; char *text;
+                 int match_start; int match_len; /* GAP-143: byte offsets in text, -1 none */
+} FifHit;
 
 typedef struct {
     GPtrArray *hits;
     int        file_count;
+    int        files_scanned;     /* GAP-143: every candidate read */
+    int        mode;              /* GAP-143: header [Mode: …] suffix */
+    gboolean   match_case, whole_word;
     char      *needle;
     FifSearchDone done;       /* GAP-136: optional completion status cb */
     gpointer      done_user;
@@ -95,6 +100,7 @@ typedef struct {
     gpointer      on_search_done_user;
     GPtrArray *hits;       /* output: array of FifHit* */
     int        file_count; /* output */
+    int        files_scanned; /* output (GAP-143) — every file read */
     /* ── Replace in Files (GAP-122) ── */
     char      *replacement;        /* NULL = search job */
     int        total_replacements; /* only replacements that reached disk */
@@ -187,6 +193,7 @@ static void search_file(const char *filepath, FifJob *job, GRegex *regex)
     gchar **lines = g_strsplit(contents, "\n", -1);
     g_free(contents);
 
+    job->files_scanned++;   /* GAP-143: "of N searched" header */
     gboolean any = FALSE;
     for (int i = 0; lines[i]; i++) {
         /* strip trailing \r for CRLF files */
@@ -194,14 +201,32 @@ static void search_file(const char *filepath, FifJob *job, GRegex *regex)
         if (ll > 0 && lines[i][ll - 1] == '\r')
             lines[i][ll - 1] = '\0';
 
-        if (g_regex_match(regex, lines[i], 0, NULL)) {
+        GMatchInfo *mi = NULL;
+        if (g_regex_match(regex, lines[i], 0, &mi)) {
+            /* GAP-143: first match's byte span, shifted for the strip. */
+            gint ms = -1, me = -1;
+            g_match_info_fetch_pos(mi, 0, &ms, &me);
             FifHit *h   = g_new(FifHit, 1);
             h->filepath = g_strdup(filepath);
             h->line     = i + 1;
-            h->text     = g_strdup(g_strstrip(lines[i]));
+            char *stripped = g_strstrip(lines[i]);
+            long lead = stripped - lines[i];
+            h->text = g_strdup(stripped);
+            if (ms >= 0 && me > ms) {
+                long len = (long)strlen(h->text);
+                long a = ms - lead, b = me - lead;
+                if (a < 0) a = 0;
+                if (b > len) b = len;
+                h->match_start = (a < len && b > a) ? (int)a : -1;
+                h->match_len   = (a < len && b > a) ? (int)(b - a) : 0;
+            } else {
+                h->match_start = -1;
+                h->match_len   = 0;
+            }
             g_ptr_array_add(job->hits, h);
             any = TRUE;
         }
+        g_match_info_free(mi);
     }
     g_strfreev(lines);
     if (any) job->file_count++;
@@ -417,6 +442,10 @@ static gpointer search_thread(gpointer data)
     FifResult *res  = g_new(FifResult, 1);
     res->hits       = job->hits;
     res->file_count = job->file_count;
+    res->files_scanned = job->files_scanned;      /* GAP-143 */
+    res->mode          = job->mode;
+    res->match_case    = job->match_case;
+    res->whole_word    = job->whole_word;
     res->needle     = g_strdup(job->needle); /* copy before freeing job */
     res->done       = job->on_search_done;
     res->done_user  = job->on_search_done_user;
@@ -453,8 +482,9 @@ static gboolean post_results(gpointer data)
             gtk_label_set_text(GTK_LABEL(s_status_lbl), "No matches found.");
         /* Still emit an empty header so the Search Results panel shows
          * what was searched. */
-        searchresults_begin(res->needle);
-        searchresults_end(0, res->file_count);
+        searchresults_begin(res->needle, res->mode,
+                            res->match_case, res->whole_word);
+        searchresults_end(0, res->file_count, res->files_scanned);
         if (res->done) res->done(0, 0, res->done_user);   /* GAP-136 */
         g_ptr_array_unref(res->hits);
         g_free(res->needle);
@@ -517,17 +547,20 @@ static gboolean post_results(gpointer data)
         gtk_tree_view_expand_all(GTK_TREE_VIEW(s_tree_view));
 
     /* Feed the same results into the dockable Search Results panel */
-    searchresults_begin(res->needle);
+    searchresults_begin(res->needle, res->mode,
+                        res->match_case, res->whole_word);
     for (guint fi = 0; fi < files->len; fi++) {
         const char *fp    = files->pdata[fi];
         GPtrArray  *fhits = g_hash_table_lookup(by_file, fp);
         searchresults_add_file(fp, (int)fhits->len);
         for (guint hi = 0; hi < fhits->len; hi++) {
             FifHit *h = fhits->pdata[hi];
-            searchresults_add_hit(fp, h->line, h->text);
+            searchresults_add_hit(fp, h->line, h->text,
+                                  h->match_start, h->match_len);
         }
     }
-    searchresults_end((int)res->hits->len, res->file_count);
+    searchresults_end((int)res->hits->len, res->file_count,
+                      res->files_scanned);
 
     /* Free grouping structures */
     for (guint fi = 0; fi < files->len; fi++)

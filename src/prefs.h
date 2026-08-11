@@ -232,6 +232,11 @@ typedef struct {
     /* ── Backup tab ─────────────────────────────────────────── */
     gboolean backup_enabled;          /* default TRUE */
     int      backup_interval_secs;    /* seconds between backup writes, default 60 */
+
+    /* ── Search Results panel (GAP-143; macOS SearchResultsWordWrap /
+     *    SearchResultsPurge NSUserDefaults) ─────────────────────── */
+    gboolean sr_word_wrap;            /* default FALSE */
+    gboolean sr_purge;                /* default FALSE */
 } NppPrefs;
 
 extern NppPrefs g_prefs;

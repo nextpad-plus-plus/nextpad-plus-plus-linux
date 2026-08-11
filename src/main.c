@@ -871,7 +871,11 @@ static void action_cut(GSimpleAction *a, GVariant *p, gpointer ud) {
     (void)a; (void)p; (void)ud; editor_cut();
 }
 static void action_copy(GSimpleAction *a, GVariant *p, gpointer ud) {
-    (void)a; (void)p; (void)ud; editor_copy();
+    (void)a; (void)p; (void)ud;
+    /* GAP-143 — the accel fires app-wide; give the Search Results
+     * panel first refusal when it owns the focus (macOS copy: hook). */
+    if (searchresults_copy_if_focused()) return;
+    editor_copy();
 }
 static void action_paste(GSimpleAction *a, GVariant *p, gpointer ud) {
     (void)a; (void)p; (void)ud; editor_paste();

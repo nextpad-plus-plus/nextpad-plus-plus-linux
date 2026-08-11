@@ -249,10 +249,18 @@ typedef struct { const char *path; } FuzzyEmit;
 static gboolean fuzzy_emit_cb(sptr_t line, sptr_t start, sptr_t end,
                               const char *text, void *ud)
 {
-    (void)start; (void)end;
     const char *p = text;
     while (*p == ' ' || *p == '\t') p++;   /* strip leading ws like regex path */
-    searchresults_add_hit(((FuzzyEmit *)ud)->path, (int)(line + 1), p);
+    /* GAP-143: span byte offsets within the stripped line text. */
+    sptr_t lstart = sci_msg(s_sci, SCI_POSITIONFROMLINE, (uptr_t)line, 0);
+    long ms = (long)(start - lstart) - (long)(p - text);
+    long ml = (long)(end - start);
+    long plen = (long)strlen(p);
+    if (ms < 0) { ml += ms; ms = 0; }
+    if (ms + ml > plen) ml = plen - ms;
+    gboolean ok = (ms >= 0 && ms < plen && ml > 0);
+    searchresults_add_hit(((FuzzyEmit *)ud)->path, (int)(line + 1), p,
+                          ok ? (int)ms : -1, ok ? (int)ml : 0);
     return TRUE;
 }
 
@@ -784,12 +792,12 @@ int findreplace_find_all_current(void) {
 
     if (mode == (int)MODE_FUZZY) {
         gboolean mc = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_case));
-        searchresults_begin(needle_raw);
+        searchresults_begin(needle_raw, 3 /* Fuzzy */, mc, FALSE);
         int total = fuzzy_scan(needle_raw, mc, NULL, NULL);
         searchresults_add_file(path, total);
         FuzzyEmit fe = { path };
         fuzzy_scan(needle_raw, mc, fuzzy_emit_cb, &fe);
-        searchresults_end(total, 1);
+        searchresults_end(total, 1, 1);
         searchresults_set_visible(TRUE);
         return total;
     }
@@ -798,7 +806,9 @@ int findreplace_find_all_current(void) {
     sptr_t range_start, doc_len;
     loop_range(&range_start, &doc_len);
 
-    searchresults_begin(needle_raw);
+    searchresults_begin(needle_raw, mode,
+                        (flags & SCFIND_MATCHCASE) != 0,
+                        (flags & SCFIND_WHOLEWORD) != 0);
 
     int total = 0;
     sptr_t pos = range_start;
@@ -835,15 +845,24 @@ int findreplace_find_all_current(void) {
             /* Strip leading whitespace for readability — macOS does same. */
             char *p = buf;
             while (*p == ' ' || *p == '\t') p++;
-            searchresults_add_hit(path, (int)(line + 1), p);
+            /* GAP-143: match span within the stripped text; clamp to
+             * this line (a regex can span lines). */
+            long ms = (long)(found - lstart) - (long)(p - buf);
+            long ml = (long)(end - found);
+            long plen = (long)strlen(p);
+            if (ms < 0) { ml += ms; ms = 0; }
+            if (ms + ml > plen) ml = plen - ms;
+            gboolean ok = (ms >= 0 && ms < plen && ml > 0);
+            searchresults_add_hit(path, (int)(line + 1), p,
+                                  ok ? (int)ms : -1, ok ? (int)ml : 0);
             g_free(buf);
         } else {
-            searchresults_add_hit(path, (int)(line + 1), "");
+            searchresults_add_hit(path, (int)(line + 1), "", -1, 0);
         }
         pos = (end > found) ? end : found + 1;
     }
 
-    searchresults_end(total, 1);
+    searchresults_end(total, 1, 1);
     searchresults_set_visible(TRUE);
 
     if (needle != needle_raw) free(needle);

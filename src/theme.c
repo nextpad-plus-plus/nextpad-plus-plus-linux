@@ -279,6 +279,14 @@ void theme_apply(ThemeMode mode)
      *    startup-time call is safe. */
     extern void main_refresh_theme_chrome(void);
     main_refresh_theme_chrome();
+
+    /* 8) GAP-143 — panel-frame title bars (shared CSS provider + baked
+     *    per-palette icons) and the Search Results palette. Both no-op
+     *    before their widgets exist. */
+    extern void panel_frame_retheme(void);
+    panel_frame_retheme();
+    extern void searchresults_apply_theme(void);
+    searchresults_apply_theme();
 }
 
 /* ================================================================== */

@@ -166,17 +166,35 @@ static gboolean pf_is_dark(void) {
     return dark;
 }
 
-/* Install the per-frame CSS provider on every styled descendant. We give
- * the provider APPLICATION priority so it overrides theme defaults but
+/* ONE shared provider for the whole frame chrome (GAP-143 follow-up):
+ * reloading its data live-restyles every attached widget, which is what
+ * lets a runtime dark/light switch retheme the title bars — the old
+ * per-widget throwaway providers froze the palette chosen at
+ * construction time. APPLICATION priority: overrides theme defaults,
  * stays below USER. */
+static GtkCssProvider *s_pf_provider = NULL;
+
+static GtkCssProvider *pf_provider(void) {
+    if (!s_pf_provider) {
+        s_pf_provider = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(s_pf_provider,
+            pf_is_dark() ? kFrameCssDark : kFrameCssLight, -1);
+    }
+    return s_pf_provider;
+}
+
 static void pf_apply_css(GtkWidget *target) {
-    GtkCssProvider *p = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(p, pf_is_dark() ? kFrameCssDark : kFrameCssLight,
-                                    -1);
     gtk_style_context_add_provider(gtk_widget_get_style_context(target),
-                                   GTK_STYLE_PROVIDER(p),
+                                   GTK_STYLE_PROVIDER(pf_provider()),
                                    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(p);
+}
+
+/* Live frames — for icon refresh on retheme. */
+static GPtrArray *s_pf_frames = NULL;
+
+static void pf_frame_gone(gpointer data, GObject *dead) {
+    (void)data;
+    if (s_pf_frames) g_ptr_array_remove(s_pf_frames, dead);
 }
 
 /* ─────────────────────────────────────────────────────────────────────── */
@@ -525,6 +543,10 @@ GtkWidget *panel_frame_new(const char *name,
     st->on_close_user  = user;
     g_object_set_data_full(G_OBJECT(frame), PF_STATE_KEY, st, pf_state_free);
 
+    if (!s_pf_frames) s_pf_frames = g_ptr_array_new();
+    g_ptr_array_add(s_pf_frames, frame);
+    g_object_weak_ref(G_OBJECT(frame), pf_frame_gone, NULL);
+
     /* ── Title bar ── */
     st->title_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_size_request(st->title_bar, -1, 25);
@@ -677,4 +699,23 @@ void panel_frame_set_detachable(GtkWidget *frame, gboolean detachable) {
     PanelFrameState *st = pf_state(frame);
     if (!st || !st->pop_button) return;
     gtk_widget_set_visible(st->pop_button, detachable);
+}
+
+/* GAP-143 follow-up — re-skin every panel-frame title bar after a
+ * light/dark switch: reload the shared CSS provider (restyles all
+ * attached chrome widgets in place) and refresh the SF-symbol icons,
+ * which are baked per-palette PNGs. Called from theme_apply(). */
+void panel_frame_retheme(void)
+{
+    if (s_pf_provider)
+        gtk_css_provider_load_from_data(s_pf_provider,
+            pf_is_dark() ? kFrameCssDark : kFrameCssLight, -1);
+    if (!s_pf_frames) return;
+    for (guint i = 0; i < s_pf_frames->len; i++) {
+        GtkWidget *frame = g_ptr_array_index(s_pf_frames, i);
+        PanelFrameState *st = pf_state(frame);
+        if (!st) continue;
+        pf_refresh_move_icon(st);
+        pf_refresh_pop_icon(st);
+    }
 }

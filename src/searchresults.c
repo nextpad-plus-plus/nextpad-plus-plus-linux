@@ -14,6 +14,8 @@
 #include "npp_menu.h"
 #include "sci_c.h"
 #include "stylestore.h"
+#include "theme.h"
+#include "prefs.h"
 #include <gtk/gtk.h>
 #include <string.h>
 #include <stdio.h>
@@ -45,6 +47,7 @@ enum { SR_SEARCH = 0, SR_FILE = 1, SR_HIT = 2 };
 #define ST_SEARCH  1   /* search header — yellow bg / blue text   */
 #define ST_FILE    2   /* file header   — green bg / dark-green    */
 #define ST_LINENO  3   /* the "Line N:" prefix of a hit row        */
+#define ST_MATCH   4   /* GAP-143 — matched substring (WORD2SEARCH) */
 
 /* Scintilla colours are 0xBBGGRR. */
 #define SR_RGB(r,g,b)  (((b) << 16) | ((g) << 8) | (r))
@@ -54,6 +57,8 @@ typedef struct {
     char *text;     /* the line's display text (no newline)  */
     char *path;     /* file path (FILE + HIT rows), else NULL */
     int   lineno;   /* 1-based source line (HIT rows), else -1 */
+    int   match_off; /* GAP-143: match byte offset in text (post-prefix), -1 none */
+    int   match_len;
 } SRLine;
 
 /* ------------------------------------------------------------------ */
@@ -65,8 +70,11 @@ static GtkWidget *s_sci         = NULL;
 static GArray    *s_lines       = NULL;   /* of SRLine */
 static int        s_block_start = 0;      /* s_lines index the current search began at */
 static char      *s_needle      = NULL;
-static gboolean   s_word_wrap   = FALSE;
-static gboolean   s_purge       = FALSE;
+static int        s_mode        = 0;      /* GAP-143 — header suffix */
+static gboolean   s_match_case  = FALSE;
+static gboolean   s_whole_word  = FALSE;
+/* Word-wrap / purge live in g_prefs (GAP-143 — macOS
+ * SearchResultsWordWrap / SearchResultsPurge NSUserDefaults). */
 
 /* Filter bar — "search within results". */
 static GtkWidget *s_filter_bar    = NULL;
@@ -89,9 +97,11 @@ static void sr_line_clear(gpointer p)
     g_free(L->path);
 }
 
-static void sr_push(int kind, char *text /*owned*/, const char *path, int lineno)
+static void sr_push(int kind, char *text /*owned*/, const char *path,
+                    int lineno, int match_off, int match_len)
 {
-    SRLine L = { kind, text, path ? g_strdup(path) : NULL, lineno };
+    SRLine L = { kind, text, path ? g_strdup(path) : NULL, lineno,
+                 match_off, match_len };
     g_array_append_val(s_lines, L);
 }
 
@@ -121,12 +131,32 @@ static void sr_rebuild(void)
         } else if (L->kind == SR_FILE) {
             SR_SEND(SCI_SETSTYLING, len, ST_FILE);
         } else {
-            /* Hit row: colour the "<tab>Line N:" prefix, then the text. */
+            /* Hit row: colour the "<tab>Line N:" prefix, then the text,
+             * with the matched substring in ST_MATCH (macOS
+             * WORD2SEARCH, GAP-143). match_off is relative to the text
+             * AFTER the prefix. */
             const char *colon = L->text ? strchr(L->text, ':') : NULL;
             long pfx = colon ? (long)(colon - L->text) + 1 : 0;
             if (pfx > len) pfx = len;
             SR_SEND(SCI_SETSTYLING, pfx, ST_LINENO);
-            SR_SEND(SCI_SETSTYLING, len - pfx, ST_HIT);
+            long body = len - pfx;
+            long mo = -1, ml = 0;
+            if (L->match_off >= 0 && L->match_len > 0) {
+                /* +1 skips the space after "Line N:". */
+                long skip = (pfx > 0 && pfx < len && L->text[pfx] == ' ')
+                            ? 1 : 0;
+                mo = L->match_off + skip;
+                ml = L->match_len;
+                if (mo > body) mo = -1;
+                else if (mo + ml > body) ml = body - mo;
+            }
+            if (mo >= 0 && ml > 0) {
+                SR_SEND(SCI_SETSTYLING, mo, ST_HIT);
+                SR_SEND(SCI_SETSTYLING, ml, ST_MATCH);
+                SR_SEND(SCI_SETSTYLING, body - mo - ml, ST_HIT);
+            } else {
+                SR_SEND(SCI_SETSTYLING, body, ST_HIT);
+            }
         }
         int lvl = (L->kind == SR_SEARCH)
                       ? (SC_FOLDLEVELBASE | SC_FOLDLEVELHEADERFLAG)
@@ -402,16 +432,22 @@ static void on_menu_clear_all(GtkButton *b, gpointer d)
     SR_SEND(SCI_CLEARALL, 0, 0);
     SR_SEND(SCI_SETREADONLY, 1, 0);
 }
+/* npp_menu invokes check callbacks with a NULL widget (the state lives
+ * in the transient GAction), so flip the flag directly — exactly what
+ * macOS _toggleWordWrap/_togglePurge do. */
 static void on_menu_toggle_wrap(GtkCheckButton *c, gpointer d)
 {
-    (void)d;
-    s_word_wrap = gtk_check_button_get_active(c);
-    SR_SEND(SCI_SETWRAPMODE, s_word_wrap ? SC_WRAP_WORD : SC_WRAP_NONE, 0);
+    (void)c; (void)d;
+    g_prefs.sr_word_wrap = !g_prefs.sr_word_wrap;
+    SR_SEND(SCI_SETWRAPMODE,
+            g_prefs.sr_word_wrap ? SC_WRAP_WORD : SC_WRAP_NONE, 0);
+    prefs_save();   /* GAP-143 — macOS SearchResultsWordWrap default */
 }
 static void on_menu_toggle_purge(GtkCheckButton *c, gpointer d)
 {
-    (void)d;
-    s_purge = gtk_check_button_get_active(c);
+    (void)c; (void)d;
+    g_prefs.sr_purge = !g_prefs.sr_purge;
+    prefs_save();   /* GAP-143 — macOS SearchResultsPurge default */
 }
 
 static void on_tree_right_click(GtkGestureClick *g, int n_press,
@@ -432,12 +468,18 @@ static void on_tree_right_click(GtkGestureClick *g, int n_press,
     npp_menu_add(m, "Select all",                G_CALLBACK(on_menu_select_all), NULL);
     npp_menu_add(m, "Clear all",                 G_CALLBACK(on_menu_clear_all),  NULL);
     npp_menu_add_separator(m);
-    npp_menu_add(m, "Open Selected Pathname(s)", G_CALLBACK(on_menu_open_paths), NULL);
-    npp_menu_add_separator(m);
-    npp_menu_add_check(m, "Word wrap long lines", s_word_wrap,
+    /* GTK quirk (probed under GTK_DEBUG=actions + model dumps): this
+     * GTK's GtkPopoverMenu silently drops a TRAILING section whose
+     * items are all stateful (check) actions — the wrap/purge toggles
+     * vanished when they sat last, exactly as macOS orders them. Any
+     * non-check item after them makes the section render, so the check
+     * section sits before "Open Selected Pathname(s)" here. */
+    npp_menu_add_check(m, "Word wrap long lines", g_prefs.sr_word_wrap,
                        G_CALLBACK(on_menu_toggle_wrap),  NULL);
-    npp_menu_add_check(m, "Purge for every search", s_purge,
+    npp_menu_add_check(m, "Purge for every search", g_prefs.sr_purge,
                        G_CALLBACK(on_menu_toggle_purge), NULL);
+    npp_menu_add_separator(m);
+    npp_menu_add(m, "Open Selected Pathname(s)", G_CALLBACK(on_menu_open_paths), NULL);
     npp_menu_popup_at(m, anchor, x, y);
 }
 
@@ -452,17 +494,69 @@ static void sr_apply_fold_style(void)
 {
     stylestore_apply_fold_marks(s_sci);
     SR_SEND(SCI_MARKERENABLEHIGHLIGHT, 0, 0);
-    /* macOS-style fold marks: a crisp box with a black border and black
-     * +/- glyph on a white interior. In this Scintilla's LineMarker.cxx
-     * the box FILL is the marker FORE colour and the box BORDER + glyph
-     * are the BACK colour — so FORE = white, BACK = black. (The BoxMinus
-     * down-connector stub is dropped by an NPP Scintilla patch.) */
-    SR_SEND(SCI_SETFOLDMARGINCOLOUR,   1, 0xF2F2F2);
-    SR_SEND(SCI_SETFOLDMARGINHICOLOUR, 1, 0xF2F2F2);
+    /* macOS-style fold marks: a crisp box. In this Scintilla's
+     * LineMarker.cxx the box FILL is the marker FORE colour and the box
+     * BORDER + glyph are the BACK colour. Light: white box, black
+     * border. Dark (GAP-143, macOS _applyTheme brightness fallbacks):
+     * panel-bg box, light-grey border. Margin colour from the theme's
+     * "Fold margin" entry when present. */
+    gboolean dark = theme_effective_dark();
+    NppStyleEntry fm;
+    int margin = (stylestore_get_global_entry("Fold margin", &fm) &&
+                  fm.bg != -1) ? fm.bg : (dark ? 0x2D2D2D : 0xF2F2F2);
+    SR_SEND(SCI_SETFOLDMARGINCOLOUR,   1, margin);
+    SR_SEND(SCI_SETFOLDMARGINHICOLOUR, 1, margin);
     for (int mn = SC_MARKNUM_FOLDEREND; mn <= SC_MARKNUM_FOLDEROPEN; mn++) {
-        SR_SEND(SCI_MARKERSETFORE, mn, 0xFFFFFF);  /* box interior */
-        SR_SEND(SCI_MARKERSETBACK, mn, 0x000000);  /* border + glyph */
+        SR_SEND(SCI_MARKERSETFORE, mn, dark ? 0x2D2D2D : 0xFFFFFF);
+        SR_SEND(SCI_MARKERSETBACK, mn, dark ? 0xCCCCCC : 0x000000);
     }
+}
+
+/* GAP-143 — the macOS _applyTheme palette (SearchResultsPanel.mm:332):
+ * base colours from the style store, per-kind colours as BGR literals
+ * copied verbatim (same Scintilla, same interpretation). Styling bytes
+ * survive a style-definition change, so no re-render is needed. */
+static void sr_apply_theme_colors(void)
+{
+    if (!s_sci) return;
+    gboolean dark = theme_effective_dark();
+    int fg = dark ? 0xE8E8E8 : 0x1A1A1A;
+    int bg = dark ? 0x1E1E1E : 0xFFFFFF;
+    NppStyleEntry def;
+    if (stylestore_get_global_entry("Default Style", &def)) {
+        if (def.fg != -1) fg = def.fg;
+        if (def.bg != -1) bg = def.bg;
+    }
+    SR_SEND(SCI_STYLESETFORE, STYLE_DEFAULT, fg);
+    SR_SEND(SCI_STYLESETBACK, STYLE_DEFAULT, bg);
+    SR_SEND(SCI_STYLECLEARALL, 0, 0);
+
+    SR_SEND(SCI_STYLESETFORE, ST_SEARCH, dark ? 0xFCBEBE : 0x7E0501);
+    SR_SEND(SCI_STYLESETBACK, ST_SEARCH, dark ? 0x3A3A50 : 0xFCBEBE);
+    SR_SEND(SCI_STYLESETBOLD, ST_SEARCH, 1);
+    SR_SEND(SCI_STYLESETEOLFILLED, ST_SEARCH, 1);
+
+    SR_SEND(SCI_STYLESETFORE, ST_FILE, dark ? 0x80FF80 : 0x007000);
+    SR_SEND(SCI_STYLESETBACK, ST_FILE, dark ? 0x2E4A2E : 0xD0F0D0);
+    SR_SEND(SCI_STYLESETBOLD, ST_FILE, 1);
+    SR_SEND(SCI_STYLESETEOLFILLED, ST_FILE, 1);
+
+    SR_SEND(SCI_STYLESETFORE, ST_LINENO, dark ? 0x808080 : 0x008000);
+    SR_SEND(SCI_STYLESETBACK, ST_LINENO, bg);
+
+    SR_SEND(SCI_STYLESETFORE, ST_MATCH, dark ? 0x00AAFF : 0x050BFF);
+    SR_SEND(SCI_STYLESETBACK, ST_MATCH, dark ? 0x404000 : 0xBFFFFF);
+    SR_SEND(SCI_STYLESETBOLD, ST_MATCH, 1);
+
+    SR_SEND(SCI_SETCARETLINEBACK, dark ? 0x404040 : 0xE8E8E8, 0);
+    SR_SEND(SCI_SETCARETFORE, fg, 0);
+
+    sr_apply_fold_style();
+}
+
+void searchresults_apply_theme(void)
+{
+    sr_apply_theme_colors();
 }
 
 static void sr_setup_sci(void)
@@ -499,22 +593,13 @@ static void sr_setup_sci(void)
      * parent" flood, then a crash). */
     SR_SEND(SCI_USEPOPUP, SC_POPUP_NEVER, 0);
 
-    /* Styles (manual — no lexer). */
-    SR_SEND(SCI_STYLESETFORE, STYLE_DEFAULT, SR_RGB(0x1a, 0x1a, 0x1a));
-    SR_SEND(SCI_STYLESETBACK, STYLE_DEFAULT, SR_RGB(0xff, 0xff, 0xff));
-    SR_SEND(SCI_STYLECLEARALL, 0, 0);
+    /* Styles (manual — no lexer): theme-driven light/dark palette
+     * (GAP-143). Re-applied from theme_apply on every switch. */
+    sr_apply_theme_colors();
 
-    SR_SEND(SCI_STYLESETFORE,      ST_SEARCH, SR_RGB(0x00, 0x40, 0xa0));
-    SR_SEND(SCI_STYLESETBACK,      ST_SEARCH, SR_RGB(0xff, 0xf3, 0xa0));
-    SR_SEND(SCI_STYLESETBOLD,      ST_SEARCH, 1);
-    SR_SEND(SCI_STYLESETEOLFILLED, ST_SEARCH, 1);
-
-    SR_SEND(SCI_STYLESETFORE,      ST_FILE, SR_RGB(0x00, 0x60, 0x20));
-    SR_SEND(SCI_STYLESETBACK,      ST_FILE, SR_RGB(0xd8, 0xf0, 0xd8));
-    SR_SEND(SCI_STYLESETBOLD,      ST_FILE, 1);
-    SR_SEND(SCI_STYLESETEOLFILLED, ST_FILE, 1);
-
-    SR_SEND(SCI_STYLESETFORE, ST_LINENO, SR_RGB(0x00, 0x80, 0x00));
+    /* Persisted word wrap (GAP-143 — prefs load before UI build). */
+    SR_SEND(SCI_SETWRAPMODE,
+            g_prefs.sr_word_wrap ? SC_WRAP_WORD : SC_WRAP_NONE, 0);
 
     SR_SEND(SCI_SETHSCROLLBAR, 1, 0);
     SR_SEND(SCI_SETREADONLY, 1, 0);
@@ -596,10 +681,12 @@ GtkWidget *searchresults_init(void)
     return s_panel;
 }
 
-void searchresults_begin(const char *needle)
+void searchresults_begin(const char *needle, int mode,
+                         gboolean match_case, gboolean whole_word)
 {
     if (!s_lines) return;
-    if (s_purge) {
+    s_mode = mode; s_match_case = match_case; s_whole_word = whole_word;
+    if (g_prefs.sr_purge) {
         g_array_set_size(s_lines, 0);
         SR_SEND(SCI_SETREADONLY, 0, 0);
         SR_SEND(SCI_CLEARALL, 0, 0);
@@ -618,38 +705,55 @@ void searchresults_add_file(const char *filepath, int hit_count)
     char *text = g_strdup_printf(" %s  (%d %s)",
                                  filepath ? filepath : "",
                                  hit_count, hit_count == 1 ? "hit" : "hits");
-    sr_push(SR_FILE, text, filepath, -1);
+    sr_push(SR_FILE, text, filepath, -1, -1, 0);
 }
 
-void searchresults_add_hit(const char *filepath, int line, const char *text)
+void searchresults_add_hit(const char *filepath, int line, const char *text,
+                           int match_start, int match_len)
 {
     if (!s_lines) return;
     char *disp = g_strdup_printf("\tLine %d: %s", line, text ? text : "");
-    sr_push(SR_HIT, disp, filepath, line);
+    sr_push(SR_HIT, disp, filepath, line, match_start, match_len);
 }
 
-void searchresults_end(int total_hits, int total_files)
+void searchresults_end(int total_hits, int total_files, int files_searched)
 {
     if (!s_lines) return;
 
-    /* Insert the search-header row at the block start, now totals are in. */
-    /* Timestamped header (macOS 7dc206a). */
-    char tstamp[16] = "";
+    /* Insert the search-header row at the block start, now totals are in.
+     * macOS header (SearchResultsPanel.mm:494-531): mode/options suffix
+     * + full date-and-time stamp with a lowercase am/pm marker. */
+    const char *mode_label = s_mode == 1 ? "Extended"
+                           : s_mode == 2 ? "Regex"
+                           : s_mode == 3 ? "Fuzzy" : "Normal";
+    char opts[24] = "";
+    if (s_match_case && s_whole_word) g_strlcpy(opts, ": Case/Word", sizeof opts);
+    else if (s_match_case)            g_strlcpy(opts, ": Case", sizeof opts);
+    else if (s_whole_word)            g_strlcpy(opts, ": Word", sizeof opts);
+
+    char tstamp[40] = "";
     {
         GDateTime *now = g_date_time_new_now_local();
         if (now) {
-            gchar *t = g_date_time_format(now, "%H:%M:%S");
-            g_snprintf(tstamp, sizeof tstamp, "%s", t ? t : "");
-            g_free(t);
+            gchar *t = g_date_time_format(now, "%Y-%m-%d %I:%M:%S %p");
+            if (t) {
+                gchar *lower = g_ascii_strdown(t, -1);   /* "am"/"pm" */
+                g_snprintf(tstamp, sizeof tstamp, "%s", lower);
+                g_free(lower);
+                g_free(t);
+            }
             g_date_time_unref(now);
         }
     }
-    char *hdr = g_strdup_printf("Search \"%s\"  (%d match%s in %d file%s)  [%s]",
-                                s_needle ? s_needle : "",
-                                total_hits,  total_hits  == 1 ? "" : "es",
-                                total_files, total_files == 1 ? "" : "s",
-                                tstamp);
-    SRLine L = { SR_SEARCH, hdr, NULL, -1 };
+    char *hdr = g_strdup_printf(
+        "Search \"%s\" (%d hit%s in %d file%s of %d searched) [%s%s]  %s",
+        s_needle ? s_needle : "",
+        total_hits,  total_hits  == 1 ? "" : "s",
+        total_files, total_files == 1 ? "" : "s",
+        files_searched,
+        mode_label, opts,
+        tstamp);
+    SRLine L = { SR_SEARCH, hdr, NULL, -1, -1, 0 };
     if (s_block_start >= 0 && (guint)s_block_start <= s_lines->len)
         g_array_insert_val(s_lines, s_block_start, L);
     else
@@ -726,4 +830,23 @@ void searchresults_set_visible(gboolean v)
 gboolean searchresults_is_visible(void)
 {
     return s_panel && gtk_widget_get_visible(s_panel);
+}
+
+/* GAP-143 — Ctrl+C hook (macOS SearchResultsPanel copy:). The global
+ * <Primary>c accelerator routes to editor_copy() regardless of focus,
+ * so the panel could never be copied from; the copy action now offers
+ * the keystroke here first. Returns TRUE when the panel view has focus
+ * (copies its selection, or the whole current line when empty). */
+gboolean searchresults_copy_if_focused(void)
+{
+    if (!s_sci || !gtk_widget_get_visible(s_panel)) return FALSE;
+    GtkWidget *focus = gtk_root_get_focus(gtk_widget_get_root(s_sci));
+    if (!focus ||
+        !(focus == s_sci || gtk_widget_is_ancestor(focus, s_panel)))
+        return FALSE;
+    long a = SR_SEND(SCI_GETSELECTIONSTART, 0, 0);
+    long b = SR_SEND(SCI_GETSELECTIONEND,   0, 0);
+    if (b > a) SR_SEND(SCI_COPY, 0, 0);
+    else       SR_SEND(SCI_COPYALLOWLINE, 0, 0);
+    return TRUE;
 }

@@ -212,6 +212,8 @@ NppPrefs g_prefs = {
     /* Backup */
     .backup_enabled          = TRUE,
     .backup_interval_secs    = 60,
+    .sr_word_wrap            = FALSE,
+    .sr_purge                = FALSE,
 };
 
 /* ------------------------------------------------------------------ */
@@ -374,6 +376,10 @@ static void apply_attr(const char *group, const char *attr, const char *val)
                 }
             }
         }
+    }
+    else if (!strcmp(group, "SearchResults")) {   /* GAP-143 */
+        if      (!strcmp(attr, "wordWrap"))  g_prefs.sr_word_wrap = is_yes(val);
+        else if (!strcmp(attr, "purge"))     g_prefs.sr_purge     = is_yes(val);
     }
     else if (!strcmp(group, "Searching")) {
         if      (!strcmp(attr, "monospacedFontFindDlg"))         g_prefs.mono_font_find         = is_yes(val);
@@ -854,6 +860,11 @@ g_prefs.tab_max_label_width,
         b2yn(g_prefs.confirm_replace_all), b2yn(g_prefs.replace_and_stop),
         b2yn(g_prefs.use_boost_regex),
         g_prefs.in_sel_threshold);
+
+    /* Search Results panel toggles (GAP-143). */
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"SearchResults\" wordWrap=\"%s\" purge=\"%s\" />\n",
+        b2yn(g_prefs.sr_word_wrap), b2yn(g_prefs.sr_purge));
 
     /* Find-window search histories (GAP-141). Skipped when empty. */
     {
