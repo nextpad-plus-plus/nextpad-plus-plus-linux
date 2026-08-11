@@ -825,6 +825,102 @@ void editor_refresh_clickable_links(void)
 
 /* Plain double-click on a marked range opens the URL. Returns TRUE when
  * handled (macOS collapses the word selection Scintilla made first). */
+/* GAP-147 — Ctrl+double-click selection between the configured Open /
+ * Close delimiters (macOS _handleDelimiterDoubleClick, itself a port of
+ * Windows NppNotification.cpp:218-369). Plain double-click falls through
+ * to Scintilla's native word select. Entire-document mode scans the
+ * zero-copy SCI_GETCHARACTERPOINTER buffer (held only for this
+ * synchronous scan); single-line mode copies the line. Same-delimiter
+ * pairs (e.g. ") scan outward with backslash-escape awareness; distinct
+ * pairs use a stack scan picking the innermost pair bracketing the
+ * click. The selection is set with SCI_SETSEL — with Ctrl held,
+ * Scintilla ADDS the clicked word as an extra selection, and only
+ * SETSEL collapses that multi-selection back to the single range. */
+static void delimiter_double_click(GtkWidget *sci, sptr_t click_abs,
+                                   int modifiers)
+{
+    if (modifiers != SCMOD_CTRL) return;
+
+    const char open_ch  = g_prefs.delim_open[0]  ? g_prefs.delim_open[0]  : '(';
+    const char close_ch = g_prefs.delim_close[0] ? g_prefs.delim_close[0] : ')';
+    /* Single-byte ASCII only — a multi-byte UTF-8 delimiter cannot be
+     * matched byte-by-byte (macOS rejects the same way). */
+    if ((guchar)open_ch > 0x7E || (guchar)close_ch > 0x7E) return;
+
+    if (click_abs < 0) click_abs = sci_msg(sci, SCI_GETCURRENTPOS, 0, 0);
+    if (click_abs < 0) return;
+
+    const char *buf = NULL;
+    char  *line_copy  = NULL;
+    sptr_t buf_len    = 0;
+    sptr_t line_start = 0;   /* absolute offset of buf[0] */
+    sptr_t click_rel;
+
+    if (g_prefs.delim_entire_doc) {
+        buf_len = sci_msg(sci, SCI_GETLENGTH, 0, 0);
+        if (buf_len <= 0) return;
+        buf = (const char *)sci_msg(sci, SCI_GETCHARACTERPOINTER, 0, 0);
+        if (!buf) return;
+        click_rel = click_abs;
+    } else {
+        sptr_t line     = sci_msg(sci, SCI_LINEFROMPOSITION, (uptr_t)click_abs, 0);
+        sptr_t line_len = sci_msg(sci, SCI_LINELENGTH, (uptr_t)line, 0);
+        if (line_len <= 0) return;
+        line_copy = g_malloc((gsize)line_len + 1);
+        sci_msg(sci, SCI_GETLINE, (uptr_t)line, (sptr_t)line_copy);
+        line_copy[line_len] = '\0';
+        buf        = line_copy;
+        buf_len    = line_len;
+        line_start = sci_msg(sci, SCI_POSITIONFROMLINE, (uptr_t)line, 0);
+        click_rel  = click_abs - line_start;
+    }
+
+    if (click_rel < 0 || click_rel >= buf_len) { g_free(line_copy); return; }
+
+    sptr_t leftmost = -1, rightmost = -1;
+
+    if (open_ch == close_ch) {
+        for (sptr_t i = click_rel; i >= 0; --i) {
+            if (buf[i] == open_ch) {
+                if (open_ch == '"' && i > 0 && buf[i - 1] == '\\') continue;
+                leftmost = i;
+                break;
+            }
+        }
+        if (leftmost < 0) { g_free(line_copy); return; }
+        for (sptr_t i = click_rel; i < buf_len; ++i) {
+            if (buf[i] == close_ch) {
+                if (close_ch == '"' && i > 0 && buf[i - 1] == '\\') continue;
+                rightmost = i;
+                break;
+            }
+        }
+    } else {
+        GArray *opens = g_array_sized_new(FALSE, FALSE, sizeof(sptr_t), 64);
+        for (sptr_t i = 0; i < buf_len; ++i) {
+            if (buf[i] == open_ch) {
+                g_array_append_val(opens, i);
+            } else if (buf[i] == close_ch && opens->len) {
+                sptr_t opener = g_array_index(opens, sptr_t, opens->len - 1);
+                g_array_set_size(opens, opens->len - 1);
+                if (opener <= click_rel && i >= click_rel &&
+                    (leftmost < 0 || opener > leftmost)) {
+                    leftmost  = opener;
+                    rightmost = i;
+                }
+            }
+        }
+        g_array_free(opens, TRUE);
+    }
+    g_free(line_copy);
+
+    if (leftmost < 0 || rightmost < 0) return;
+
+    /* Content between the delimiters, exclusive. */
+    sci_msg(sci, SCI_SETSEL, (uptr_t)(line_start + leftmost + 1),
+            line_start + rightmost);
+}
+
 static gboolean link_double_click(GtkWidget *sci, sptr_t pos, int modifiers)
 {
     if (modifiers != 0) return FALSE;          /* plain double-click only */
@@ -2421,8 +2517,12 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         if (g_prefs.tab_follow_zoom)
             editor_refresh_all_tab_labels();
     } else if (code == SCN_DOUBLECLICK) {
-        /* GAP-37 — plain double-click on a marked link opens it. */
-        link_double_click(sci, (sptr_t)n->position, (int)n->modifiers);
+        /* GAP-37 — plain double-click on a marked link opens it;
+         * otherwise the Ctrl+double-click delimiter handler gets a look
+         * (GAP-147, macOS SCN_DOUBLECLICK dispatch). */
+        if (!link_double_click(sci, (sptr_t)n->position, (int)n->modifiers))
+            delimiter_double_click(sci, (sptr_t)n->position,
+                                   (int)n->modifiers);
     } else if (code == SCN_CALLTIPCLICK) {
         /* Up/down arrows in an API calltip cycle through overloads. */
         autocomplete_on_calltip_click(sci, (int)n->position);
