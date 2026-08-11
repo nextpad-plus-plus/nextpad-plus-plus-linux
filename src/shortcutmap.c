@@ -17,6 +17,7 @@
  */
 
 #include "shortcutmap.h"
+#include "run.h"
 #include "paths.h"
 #include "gtk_compat.h"
 #include "branding.h"
@@ -1191,6 +1192,10 @@ static void do_save(void) {
     macro_push_accels();
     /* GAP-52 — Scintilla-command overrides become live immediately. */
     editor_foreach_sci(shortcutmap_apply_sci_overrides);
+    /* GAP-145 — the Run tab edits the same <UserDefinedCommands> store
+     * the Run menu lists; re-read it so edits/deletes appear at once
+     * (macOS rebuildRunMenu after every shortcuts.xml write). */
+    run_menu_rebuild();
     G->dirty = FALSE;
 }
 

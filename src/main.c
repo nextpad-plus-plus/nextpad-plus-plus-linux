@@ -2748,6 +2748,15 @@ static void action_modify_shortcut_macro(GSimpleAction *a, GVariant *p, gpointer
     if (app) g_action_group_activate_action(G_ACTION_GROUP(app),
                                             "shortcut-map", NULL);
 }
+/* GAP-145 — a saved Run-menu command (target = the command text). */
+static void action_run_saved(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a; (void)u;
+    const char *cmd = p ? g_variant_get_string(p, NULL) : NULL;
+    if (!cmd || !*cmd) return;
+    NppDoc *d = editor_current_doc();
+    run_execute(g_window ? GTK_WINDOW(g_window) : NULL, cmd,
+                d ? d->filepath : NULL);
+}
 static void action_modify_shortcut_run(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     GApplication *app = g_application_get_default();
@@ -6368,6 +6377,7 @@ static const GActionEntry kAppActions[] = {
     { "macro-batch",      action_macro_batch,      NULL, NULL, NULL },
     /* Tools / Settings */
     { "run",              action_run,              NULL, NULL, NULL },
+    { "run-saved",        action_run_saved,        "s",  NULL, NULL },
     { "preferences",      action_preferences,      NULL, NULL, NULL },
     { "shortcut-map",     action_shortcut_map,     NULL, NULL, NULL },
     { "style-editor",     action_style_editor,     NULL, NULL, NULL },
@@ -7791,6 +7801,18 @@ static GMenuModel *build_menu_model(void)
         g_menu_append(grp, "Open selected file path in new instance","app.open-in-new-instance");
         g_menu_append_section(run_menu, NULL, G_MENU_MODEL(grp));
         g_object_unref(grp);
+    }
+    /* GAP-145 — dynamic user-command section (macOS rebuildRunMenu):
+     * saved shortcuts.xml <UserDefinedCommands> entries appear here,
+     * between the canned helpers and the Modify/Delete item. run.c owns
+     * the refill; an empty section renders nothing. */
+    {
+        GMenu *user_sec = g_menu_new();
+        g_menu_append_section(run_menu, NULL, G_MENU_MODEL(user_sec));
+        run_menu_set_section(GTK_APPLICATION(g_application_get_default()),
+                             user_sec);
+        g_object_unref(user_sec);
+        run_menu_rebuild();   /* GAP-145 — populate from shortcuts.xml */
     }
     g_menu_append(run_menu, "Modify Shortcut/Delete Command…", "app.modify-shortcut-run");
     g_menu_append_submenu(bar, "_Run", G_MENU_MODEL(run_menu));

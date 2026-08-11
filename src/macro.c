@@ -687,28 +687,36 @@ static gssize find_outside_comments(const char *xml, const char *token)
     return -1;
 }
 
-char *macro_xml_splice_macros(const char *xml, const char *section)
+/* GAP-145 — generalised for any top-level section (Macros,
+ * UserDefinedCommands, …): run.c splices the Run-command store with the
+ * same comment-aware machinery. */
+char *npp_xml_splice_section(const char *xml, const char *tag,
+                             const char *section)
 {
+    char open_tok[64], close_tok[64];
+    g_snprintf(open_tok,  sizeof open_tok,  "<%s",   tag);
+    g_snprintf(close_tok, sizeof close_tok, "</%s>", tag);
+
     if (!xml || !*xml) {
         return g_strdup_printf(
             "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n"
             "<NotepadPlus>\n%s</NotepadPlus>\n", section);
     }
 
-    gssize open = find_outside_comments(xml, "<Macros");
+    gssize open = find_outside_comments(xml, open_tok);
     if (open >= 0) {
-        /* Span end: self-closing "<Macros ... />" or "</Macros>". */
+        /* Span end: self-closing "<Tag ... />" or "</Tag>". */
         const char *tag_end = strchr(xml + open, '>');
         if (!tag_end) return g_strdup(xml);           /* malformed — keep */
         gssize end;
         if (tag_end > xml + open && tag_end[-1] == '/') {
             end = (tag_end + 1) - xml;
         } else {
-            gssize close = find_outside_comments(xml + open, "</Macros>");
+            gssize close = find_outside_comments(xml + open, close_tok);
             if (close < 0) return g_strdup(xml);      /* malformed — keep */
-            end = open + close + (gssize)strlen("</Macros>");
+            end = open + close + (gssize)strlen(close_tok);
         }
-        /* Consume indentation before <Macros and one trailing newline so
+        /* Consume indentation before the tag and one trailing newline so
          * the spliced section (which carries its own) doesn't stack up. */
         gssize start = open;
         while (start > 0 && (xml[start-1] == ' ' || xml[start-1] == '\t'))
@@ -722,7 +730,7 @@ char *macro_xml_splice_macros(const char *xml, const char *section)
         return g_string_free(out, FALSE);
     }
 
-    /* No <Macros> section — insert before </NotepadPlus>. */
+    /* No such section — insert before </NotepadPlus>. */
     gssize root_close = find_outside_comments(xml, "</NotepadPlus>");
     if (root_close < 0) {
         return g_strdup_printf(
@@ -734,6 +742,11 @@ char *macro_xml_splice_macros(const char *xml, const char *section)
     g_string_append(out, section);
     g_string_append(out, xml + root_close);
     return g_string_free(out, FALSE);
+}
+
+char *macro_xml_splice_macros(const char *xml, const char *section)
+{
+    return npp_xml_splice_section(xml, "Macros", section);
 }
 
 /* ── Load / save / legacy migration ─────────────────────────────────── */

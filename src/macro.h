@@ -97,5 +97,8 @@ void macro_set_changed_hook(void (*fn)(void));
  * shortcuts.xml document. xml may be NULL/empty → minimal skeleton.
  * Comment-aware. Returns newly-allocated full file text. Testable. */
 char *macro_xml_splice_macros(const char *xml, const char *section);
+/* GAP-145 — same splice for any top-level shortcuts.xml section. */
+char *npp_xml_splice_section(const char *xml, const char *tag,
+                             const char *section);
 
 #endif /* MACRO_H */
