@@ -206,6 +206,29 @@ static void push_replace_options(void) {
         chk(w->r_case), chk(w->r_word), chk(w->r_wrap),
         get_search_mode(w->r_rb_normal, w->r_rb_ext, w->r_rb_regex),
         chk(w->r_in_sel), chk(w->r_dot_newline));
+    /* GAP-163e — Replace-All honours the tab's Backward direction. */
+    findreplace_set_backward(chk(w->r_back));
+}
+
+/* GAP-163c — F3/Shift+F3 must search with the LIVE tab state, not the
+ * options captured by the last button press. Re-push from whichever
+ * find/replace tab is current when the window exists. */
+void find_window_sync_options(void)
+{
+    FW *w = s_fw; if (!w) return;
+    int tab = gtk_notebook_get_current_page(GTK_NOTEBOOK(w->notebook));
+    if (tab == 1) push_replace_options();
+    else          push_find_options();
+}
+
+/* GAP-163h — macOS _showStatus:found: coloring (blue found / red not). */
+static void status_result(FW *w, const char *msg, gboolean found)
+{
+    gchar *esc = g_markup_escape_text(msg, -1);
+    gchar *mk  = g_strdup_printf("<span foreground='%s'>%s</span>",
+                                 found ? "#0000B0" : "#C00000", esc);
+    gtk_label_set_markup(GTK_LABEL(w->status), mk);
+    g_free(mk); g_free(esc);
 }
 
 /* ── Search history (GAP-141 — macOS _addToHistory/_restoreHistory) ──
@@ -281,8 +304,11 @@ static void on_find_next(GtkButton *b, gpointer u) {
         back = w->f_back;
     }
     /* "Backward direction" flips Find Next (macOS FindWindow parity). */
-    if (chk(back)) findreplace_find_prev();
-    else           findreplace_find_next();
+    gboolean hit = chk(back) ? findreplace_find_prev_b()
+                             : findreplace_find_next_b();
+    /* GAP-163h — colored result status (macOS _showStatus:found:). */
+    if (hit) gtk_label_set_text(GTK_LABEL(w->status), "");
+    else     status_result(w, "Not found.", FALSE);
 }
 
 static void on_find_count(GtkButton *b, gpointer u) {
@@ -317,6 +343,10 @@ static void on_find_all_docs(GtkButton *b, gpointer u) {
     for (int i = 0; i < n_pages; i++) {
         gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), i);
         push_find_options();   /* sci pointer in findreplace.c updates */
+        /* GAP-163a — "In selection" only scopes the CURRENT document;
+         * all-open-documents always scans each file in full (macOS
+         * _findAllOpened, Windows ALL_OPEN_DOCS — issue #235). */
+        findreplace_set_in_selection(FALSE);
         total += findreplace_find_all_current();
     }
     gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), original);
@@ -337,9 +367,27 @@ static void on_replace_one(GtkButton *b, gpointer u) {
     hist_add(w, PREFS_HIST_REPLACE, w->r_repl);
     findreplace_replace_one();
 }
+/* GAP-163g — the 5-tab Replace All paths bypassed the
+ * confirm-replace-all pref that the legacy dialog honours. One prompt,
+ * shared by both buttons. */
+static gboolean replace_all_confirmed(const char *scope)
+{
+    if (!g_prefs.confirm_replace_all) return TRUE;
+    FW *w = s_fw;
+    GtkWidget *dlg = gtk_message_dialog_new(
+        w ? GTK_WINDOW(w->window) : NULL,
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL,
+        "Replace all occurrences %s?", scope);
+    int r = gtk_dialog_run(GTK_DIALOG(dlg));
+    gtk_widget_destroy(dlg);
+    return r == GTK_RESPONSE_OK;
+}
+
 static void on_replace_all(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_replace_options();
     FW *w = s_fw; if (!w) return;
+    if (!replace_all_confirmed("in this document")) return;
     hist_add(w, PREFS_HIST_FIND,    w->r_find);
     hist_add(w, PREFS_HIST_REPLACE, w->r_repl);
     int n = findreplace_replace_all();
@@ -350,6 +398,8 @@ static void on_replace_all(GtkButton *b, gpointer u) {
 }
 static void on_replace_in_all_docs(GtkButton *b, gpointer u) {
     (void)b; (void)u; push_replace_options();
+    /* GAP-163g — same confirm pref as every other Replace-All. */
+    if (!replace_all_confirmed("in ALL open documents")) return;
     if (s_fw) {
         hist_add(s_fw, PREFS_HIST_FIND,    s_fw->r_find);
         hist_add(s_fw, PREFS_HIST_REPLACE, s_fw->r_repl);
@@ -357,10 +407,15 @@ static void on_replace_in_all_docs(GtkButton *b, gpointer u) {
     int total = 0;
     int n_pages = editor_page_count();
     GtkWidget *nb = editor_get_notebook();
+    int original = editor_current_page();   /* GAP-163b */
     for (int i = 0; i < n_pages; i++) {
         gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), i);
+        push_replace_options();  /* rebind sci to the switched page */
+        /* GAP-163a/#235 — in-selection never scopes an all-docs op. */
+        findreplace_set_in_selection(FALSE);
         total += findreplace_replace_all();
     }
+    gtk_notebook_set_current_page(GTK_NOTEBOOK(nb), original);
     FW *w = s_fw; if (!w) return;
     gchar *msg = g_strdup_printf("Replaced %d occurrence%s in %d document%s",
         total, total == 1 ? "" : "s", n_pages, n_pages == 1 ? "" : "s");

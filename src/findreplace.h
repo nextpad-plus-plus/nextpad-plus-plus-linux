@@ -44,6 +44,12 @@ int  findreplace_count(void);
 int  findreplace_find_all_current(void);     /* returns total hits      */
 void findreplace_replace_one(void);
 int  findreplace_replace_all(void);          /* returns replaced count  */
+/* GAP-163 — semantics polish hooks for the 5-tab Find window. */
+void     findreplace_set_in_selection(gboolean on);   /* (a) force off  */
+void     findreplace_set_backward(gboolean back);     /* (e) direction  */
+gboolean findreplace_has_needle(void);                /* (h) F3 gate    */
+gboolean findreplace_find_next_b(void);               /* (h) status     */
+gboolean findreplace_find_prev_b(void);
 int  findreplace_mark_all(void);             /* returns mark count      */
 void findreplace_clear_marks(void);
 

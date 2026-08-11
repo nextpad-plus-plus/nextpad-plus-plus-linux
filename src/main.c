@@ -690,10 +690,27 @@ static void action_replace(GSimpleAction *a, GVariant *p, gpointer u) {
                      FW_TAB_REPLACE, NULL);
 }
 static void action_find_next(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a; (void)p; (void)u; findreplace_find_next();
+    (void)a; (void)p; (void)u;
+    /* GAP-163c — search with the live tab state, not the options from
+     * the last button press. */
+    find_window_sync_options();
+    /* GAP-163h — F3 with nothing to search opens the Find window. */
+    if (!findreplace_has_needle()) {
+        find_window_show(g_window ? GTK_WINDOW(g_window) : NULL,
+                         FW_TAB_FIND, NULL);
+        return;
+    }
+    findreplace_find_next();
 }
 static void action_find_prev(GSimpleAction *a, GVariant *p, gpointer u) {
-    (void)a; (void)p; (void)u; findreplace_find_prev();
+    (void)a; (void)p; (void)u;
+    find_window_sync_options();
+    if (!findreplace_has_needle()) {
+        find_window_show(g_window ? GTK_WINDOW(g_window) : NULL,
+                         FW_TAB_FIND, NULL);
+        return;
+    }
+    findreplace_find_prev();
 }
 static void action_find_in_files(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)p; (void)u;
@@ -3019,13 +3036,13 @@ static void action_begin_end_select_column(GSimpleAction *a, GVariant *p, gpoint
 
 /* Q-align Search → Select and Find Next/Previous: take selection as new
  * needle, then advance. */
+static void volatile_find(int direction);
+/* GAP-163d — Select-and-Find is the SAME macOS gesture as the volatile
+ * pair (selection/word, match-case, wrap, centered) and must not
+ * clobber the shared find-dialog state like the old
+ * findreplace_set_options round-trip did. */
 static void select_and_find(int direction) {
-    gchar *sel = current_selection_or_word();
-    if (!sel) return;
-    findreplace_set_options(sel, "", FALSE, FALSE, TRUE, 0, FALSE, FALSE);
-    g_free(sel);
-    if (direction > 0) findreplace_find_next();
-    else               findreplace_find_prev();
+    volatile_find(direction);
 }
 static void action_select_find_next(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u; select_and_find(+1);
@@ -5554,30 +5571,57 @@ static void action_search_result_prev(GSimpleAction *a, GVariant *p, gpointer u)
 /* Q-fix Search → Find (Volatile) Next/Previous.
  * Macros equivalent: take the word at caret as the needle without opening
  * the Find dialog, then move to the next/previous match. */
+/* GAP-163d — macOS selectAndFindNext/Previous (EditorView.mm:6548):
+ * search the SELECTION (falling back to the word at the caret, which
+ * gets selected first), match-case, wrap around, and reveal the hit
+ * CENTERED. The shared find-dialog state is never touched. */
 static void volatile_find(int direction) {
     GtkWidget *sci = current_sci(); if (!sci) return;
     ScintillaObject *s = SCINTILLA(sci);
-    sptr_t pos = scintilla_send_message(s, SCI_GETCURRENTPOS, 0, 0);
-    sptr_t ws  = scintilla_send_message(s, SCI_WORDSTARTPOSITION, (uptr_t)pos, TRUE);
-    sptr_t we  = scintilla_send_message(s, SCI_WORDENDPOSITION,   (uptr_t)pos, TRUE);
-    if (ws == we) return;
-    sptr_t n = we - ws;
+    sptr_t ss = scintilla_send_message(s, SCI_GETSELECTIONSTART, 0, 0);
+    sptr_t se = scintilla_send_message(s, SCI_GETSELECTIONEND,   0, 0);
+    if (ss == se) {
+        sptr_t pos = scintilla_send_message(s, SCI_GETCURRENTPOS, 0, 0);
+        ss = scintilla_send_message(s, SCI_WORDSTARTPOSITION, (uptr_t)pos, TRUE);
+        se = scintilla_send_message(s, SCI_WORDENDPOSITION,   (uptr_t)pos, TRUE);
+        if (ss == se) return;
+        scintilla_send_message(s, SCI_SETSEL, (uptr_t)ss, se);
+    }
+    sptr_t n = se - ss;
     char *word = g_malloc(n + 1);
-    struct Sci_TextRangeFull tr = {{ws, we}, word};
+    struct Sci_TextRangeFull tr = {{ss, se}, word};
     scintilla_send_message(s, SCI_GETTEXTRANGEFULL, 0, (sptr_t)&tr);
     sptr_t doc_len = scintilla_send_message(s, SCI_GETLENGTH, 0, 0);
     scintilla_send_message(s, SCI_SETSEARCHFLAGS, SCFIND_MATCHCASE, 0);
+    sptr_t hit = -1;
     if (direction > 0) {
-        scintilla_send_message(s, SCI_SETTARGETRANGE, we, doc_len);
+        scintilla_send_message(s, SCI_SETTARGETRANGE, se, doc_len);
+        hit = scintilla_send_message(s, SCI_SEARCHINTARGET, (uptr_t)n, (sptr_t)word);
+        if (hit < 0) {   /* wrap */
+            scintilla_send_message(s, SCI_SETTARGETRANGE, 0, se);
+            hit = scintilla_send_message(s, SCI_SEARCHINTARGET, (uptr_t)n, (sptr_t)word);
+        }
     } else {
-        scintilla_send_message(s, SCI_SETTARGETRANGE, ws, 0);
+        scintilla_send_message(s, SCI_SETTARGETRANGE, ss, 0);
+        hit = scintilla_send_message(s, SCI_SEARCHINTARGET, (uptr_t)n, (sptr_t)word);
+        if (hit < 0) {   /* wrap */
+            scintilla_send_message(s, SCI_SETTARGETRANGE, doc_len, ss);
+            hit = scintilla_send_message(s, SCI_SEARCHINTARGET, (uptr_t)n, (sptr_t)word);
+        }
     }
-    sptr_t hit = scintilla_send_message(s, SCI_SEARCHINTARGET,
-                                        (uptr_t)n, (sptr_t)word);
     if (hit >= 0) {
         sptr_t end = scintilla_send_message(s, SCI_GETTARGETEND, 0, 0);
         scintilla_send_message(s, SCI_SETSEL, (uptr_t)hit, end);
+        /* Centered reveal. */
+        sptr_t line = scintilla_send_message(s, SCI_LINEFROMPOSITION, (uptr_t)hit, 0);
+        sptr_t vis  = scintilla_send_message(s, SCI_VISIBLEFROMDOCLINE, (uptr_t)line, 0);
+        sptr_t page = scintilla_send_message(s, SCI_LINESONSCREEN, 0, 0);
+        sptr_t first = vis - page / 2;
+        if (first < 0) first = 0;
+        scintilla_send_message(s, SCI_SETFIRSTVISIBLELINE, (uptr_t)first, 0);
         scintilla_send_message(s, SCI_SCROLLCARET, 0, 0);
+    } else {
+        npp_beep();
     }
     g_free(word);
 }

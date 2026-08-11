@@ -115,6 +115,7 @@ typedef enum { MODE_NORMAL, MODE_EXTENDED, MODE_REGEX, MODE_FUZZY } SearchMode;
  * findreplace_set_options / findreplace_set_mark_options (i.e. by the
  * 5-tab find window and macro replay); findreplace_show() resets them. */
 static gboolean s_in_selection  = FALSE;   /* scope loop ops to selection */
+static gboolean s_backward      = FALSE;   /* GAP-163e — Replace-All dir  */
 static gboolean s_dot_matches_nl = FALSE;  /* regex: . matches \n         */
 static gboolean s_mark_purge    = FALSE;   /* Mark All: clear old marks   */
 static gboolean s_mark_bookmark = FALSE;   /* Mark All: bookmark hit lines*/
@@ -448,8 +449,24 @@ static int do_replace_all(void)
     sci_msg(s_sci, SCI_SETSEARCHFLAGS, (uptr_t)flags, 0);
     sci_msg(s_sci, SCI_BEGINUNDOACTION,0, 0);
 
+    /* GAP-163e — macOS SearchEngine replaceAllInView range: selection
+     * when In-Selection; whole doc when Wrap; else caret-to-edge in the
+     * search direction. (Find-All/Count keep whole-doc via loop_range —
+     * issue #235 semantics.) */
     sptr_t pos, range_end;
-    loop_range(&pos, &range_end);
+    gboolean wrap = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_chk_wrap));
+    if (s_in_selection) {
+        loop_range(&pos, &range_end);
+    } else if (wrap) {
+        pos = 0;
+        range_end = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
+    } else if (s_backward) {
+        pos = 0;
+        range_end = sci_msg(s_sci, SCI_GETCURRENTPOS, 0, 0);
+    } else {
+        pos = sci_msg(s_sci, SCI_GETCURRENTPOS, 0, 0);
+        range_end = sci_msg(s_sci, SCI_GETLENGTH, 0, 0);
+    }
     int count = 0;
 
     while (pos < range_end) {
@@ -711,6 +728,18 @@ void findreplace_show(GtkWidget *parent_window, const char *find_text, gboolean 
 
 void findreplace_find_next(void) { find_in_sci(TRUE);  }
 void findreplace_find_prev(void) { find_in_sci(FALSE); }
+
+/* GAP-163 — semantics hooks (see findreplace.h). */
+void findreplace_set_in_selection(gboolean on) { s_in_selection = on; }
+void findreplace_set_backward(gboolean back)   { s_backward = back; }
+gboolean findreplace_has_needle(void)
+{
+    if (!s_dialog) return FALSE;
+    const char *t = gtk_entry_get_text(GTK_ENTRY(s_find_entry));
+    return t && *t;
+}
+gboolean findreplace_find_next_b(void) { return find_in_sci(TRUE);  }
+gboolean findreplace_find_prev_b(void) { return find_in_sci(FALSE); }
 
 /* ------------------------------------------------------------------ */
 /* Phase F find-dialog wiring — public helpers that read the currently  */

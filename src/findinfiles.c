@@ -63,7 +63,9 @@ static gboolean name_matches_filter(const char *name, const char *filter)
 {
     if (!filter || !*filter || strcmp(filter, "*") == 0 || strcmp(filter, "*.*") == 0)
         return TRUE;
-    gchar **parts = g_strsplit(filter, ";", -1);
+    /* GAP-163f — accept every separator the two ports emit: Windows
+     * ';', macOS ", " (comma+space), and bare spaces. */
+    gchar **parts = g_strsplit_set(filter, "; ,", -1);
     gboolean ok = FALSE;
     for (int i = 0; parts[i] && !ok; i++) {
         gchar *p = g_strstrip(parts[i]);
