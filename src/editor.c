@@ -2018,6 +2018,33 @@ void editor_set_text_direction(GtkWidget *sci, gboolean rtl)
                       GINT_TO_POINTER(rtl ? 1 : 0));
 }
 
+/* GAP-154 — chrome override for Post-It / Distraction Free: hide the
+ * tab bar entirely, or restore it to its pref-driven state (macOS #183
+ * rule: restore honours the hide-tab-bar pref and the tabstrip mode,
+ * never force-shows). */
+void editor_set_tab_bar_hidden_override(gboolean hide)
+{
+    GtkWidget *nbs[3] = { s_notebook, s_notebook_v, s_notebook_h };
+    if (hide) {
+        for (int i = 0; i < 3; i++)
+            if (nbs[i])
+                gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nbs[i]), FALSE);
+        if (s_tabstrip) gtk_widget_set_visible(s_tabstrip, FALSE);
+    } else {
+        gboolean strip = tabstrip_active();
+        if (s_notebook)
+            gtk_notebook_set_show_tabs(GTK_NOTEBOOK(s_notebook),
+                                       !strip && !g_prefs.hide_tab_bar);
+        for (int i = 1; i < 3; i++)
+            if (nbs[i])
+                gtk_notebook_set_show_tabs(GTK_NOTEBOOK(nbs[i]),
+                                           !g_prefs.hide_tab_bar);
+        if (s_tabstrip)
+            gtk_widget_set_visible(s_tabstrip, strip &&
+                gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) > 0);
+    }
+}
+
 /* GAP-152 — exported wrapper: main.c's main_refresh_title (the
  * "Show full path in title" live-apply hook) delegates here. */
 void editor_update_window_title(void);

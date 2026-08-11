@@ -2515,6 +2515,39 @@ static void action_view_in_custom(GSimpleAction *a, GVariant *p, gpointer u) {
 /* Q-fix View → Distraction Free Mode (matches macOS).
  * Toggles full-screen + hides menubar/toolbar/sidepanel/status for a clean
  * writing surface. Stores prior visibility on the window so we can restore. */
+/* GAP-154 — chrome widgets hidden by Post-It / Distraction Free.
+ * Filled during on_activate UI construction. */
+static GtkWidget *g_toolbar_widget   = NULL;
+static GtkWidget *g_statusbar_widget = NULL;
+static GtkWidget *g_menubar_hide_ref = NULL;   /* = g_menubar_widget */
+
+/* Recompute the window chrome from BOTH mode flags (macOS
+ * togglePostItMode / toggleDistractionFreeMode hide the same widget
+ * set; deriving from the flags keeps the two modes composable — leaving
+ * one while the other is active must not restore chrome). Restore
+ * follows the prefs (#183): tab bar and status bar return to their PREF
+ * state, never force-shown. Menubar: only Distraction Free hides it
+ * (macOS fullscreen auto-hides the system bar but reveals it on hover;
+ * our escape hatch is the Shift+F11 accel). Post-It keeps it — the
+ * macOS system menu bar stays reachable in Post-It. */
+static void chrome_update(void) {
+    if (!g_window) return;
+    GObject *w = G_OBJECT(g_window);
+    gboolean postit = GPOINTER_TO_INT(g_object_get_data(w, "npp-postit"));
+    gboolean dfree  = GPOINTER_TO_INT(g_object_get_data(w, "npp-dfree"));
+    gboolean hide = postit || dfree;
+    if (g_toolbar_widget)
+        gtk_widget_set_visible(g_toolbar_widget, !hide);
+    if (g_statusbar_widget)
+        gtk_widget_set_visible(g_statusbar_widget,
+                               hide ? FALSE : g_prefs.show_status_bar);
+    editor_set_tab_bar_hidden_override(hide);
+    if (g_menubar_hide_ref)
+        gtk_widget_set_visible(g_menubar_hide_ref, !dfree);
+}
+
+/* View → Distraction Free (macOS toggleDistractionFreeMode): fullscreen
+ * + toolbar/status/tab/menu chrome hidden; restore honours prefs. */
 static void action_distraction_free(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     if (!g_window) return;
@@ -2522,13 +2555,21 @@ static void action_distraction_free(GSimpleAction *a, GVariant *p, gpointer u) {
                                                     "npp-dfree"));
     on = !on;
     g_object_set_data(G_OBJECT(g_window), "npp-dfree", GINT_TO_POINTER(on));
+    chrome_update();
     if (on) gtk_window_fullscreen(GTK_WINDOW(g_window));
     else    gtk_window_unfullscreen(GTK_WINDOW(g_window));
 }
 
-/* Q-fix View → Post-It Mode (always-on-top + small floating window).
- * macOS togglePostItMode — we replicate the gist: pin window to top and
- * shrink it. Restoring undoes both. */
+/* View → Post-It Mode (macOS togglePostItMode): borderless sticky-note
+ * window — toolbar/status/tab chrome hidden (menubar stays so the mode
+ * can be left without the F12 accel), window undecorated, 3 px yellow
+ * frame. The macOS keep-above half (NSFloatingWindowLevel) has NO GTK4
+ * equivalent — gtk_window_set_keep_above is a documented no-op on
+ * GTK4/Wayland (same platform limit as Always on Top); still invoked
+ * so X11 environments that honour the hint via the compat layer keep
+ * whatever the WM offers. */
+static GtkCssProvider *g_postit_css = NULL;
+
 static void action_post_it(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     if (!g_window) return;
@@ -2536,8 +2577,20 @@ static void action_post_it(GSimpleAction *a, GVariant *p, gpointer u) {
                                                     "npp-postit"));
     on = !on;
     g_object_set_data(G_OBJECT(g_window), "npp-postit", GINT_TO_POINTER(on));
+    chrome_update();
+    gtk_window_set_decorated(GTK_WINDOW(g_window), !on);
+    if (!g_postit_css) {
+        g_postit_css = gtk_css_provider_new();
+        /* macOS: 3 px border, colour (1.0, 0.85, 0.3). */
+        gtk_css_provider_load_from_data(g_postit_css,
+            "window.npp-postit { border: 3px solid rgb(255,217,77); }", -1);
+        gtk_style_context_add_provider_for_display(
+            gdk_display_get_default(), GTK_STYLE_PROVIDER(g_postit_css),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    if (on) gtk_widget_add_css_class(GTK_WIDGET(g_window), "npp-postit");
+    else    gtk_widget_remove_css_class(GTK_WIDGET(g_window), "npp-postit");
     gtk_window_set_keep_above(GTK_WINDOW(g_window), on);
-    if (on) gtk_window_resize(GTK_WINDOW(g_window), 360, 280);
 }
 
 /* Q-fix View → Hide Line Marks (toggle the bookmark margin width). */
@@ -8647,6 +8700,7 @@ static void build_main_window(GtkApplication *app)
      * them via View → Panels. */
     GtkWidget *vbox     = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     GtkWidget *toolbar  = toolbar_init(GTK_WIDGET(g_window));
+    g_toolbar_widget = toolbar;      /* GAP-154 — chrome-hiding handle */
     GtkWidget *primary  = editor_init(GTK_WIDGET(g_window));
     /* G14 — wrap primary in a horizontal GtkPaned with a hidden secondary
      * pane that hosts cloned Scintilla widgets sharing the document. */
@@ -8660,6 +8714,7 @@ static void build_main_window(GtkApplication *app)
     GtkWidget *gitpanel  = gitpanel_init(GTK_WIDGET(g_window));
     GtkWidget *mdpanel   = mdpreview_init(GTK_WIDGET(g_window));
     GtkWidget *statusbar = statusbar_init();
+    g_statusbar_widget = statusbar;  /* GAP-154 — chrome-hiding handle */
     statusbar_set_language_dblclick(statusbar_open_language_menu);
 
     /* Q1 — match macOS: editor on LEFT, all side panels packed to RIGHT
@@ -8872,6 +8927,7 @@ static void build_main_window(GtkApplication *app)
         if (mbmodel) {
             GtkWidget *menubar = gtk_popover_menu_bar_new_from_model(mbmodel);
             g_menubar_widget = menubar;   /* #7 — for live retranslation */
+            g_menubar_hide_ref = menubar; /* GAP-154 — chrome hiding */
             npp_box_pack(GTK_BOX(vbox), menubar, FALSE, 0);
         }
         /* Tighten the menu-bar dropdowns 20%. GTK4's default is
@@ -9214,6 +9270,11 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.search-result-prev",   "<Shift>F4");
     /* F12 — Post-It Mode toggle. */
     set_accel(app, "app.post-it",              "F12");
+    /* Shift+F11 — Distraction Free toggle (no macOS accel to copy: the
+     * macOS system menubar hover-reveals in fullscreen, so the menu
+     * stays reachable there; our in-window menubar is hidden in this
+     * mode, so an accel is the escape hatch). */
+    set_accel(app, "app.distraction-free",     "<Shift>F11");
     /* Q-align Run menu canned helpers (macOS Alt+F1/F3/F6). */
     set_accel(app, "app.get-php-help",         "<Alt>F1");
     set_accel(app, "app.wikipedia-search",     "<Alt>F3");
