@@ -999,6 +999,44 @@ static void apply_word_chars(GtkWidget *sci)
 /* GAP-148 — main.c owns the per-widget large-file gate lookup. */
 gboolean main_large_file_allows(GtkWidget *sci, const char *feature);
 
+/* GAP-149 — dynamic line-number margin (macOS recomputeLineNumberMargin,
+ * EditorView.mm:2680). Measures "_<linecount>" in STYLE_LINENUMBER via
+ * SCI_TEXTWIDTH (post-zoom pixels; ~µs) and refits margin 0, min 30 px.
+ * The digit count is cached per widget so the per-edit fast path below
+ * is one SCI_GETLINECOUNT + an int compare on the common path; the real
+ * refit only runs when the count crosses a power-of-ten boundary. */
+static int ln_digits(sptr_t n)
+{
+    int d = 1;
+    while (n >= 10) { n /= 10; d++; }
+    return d;
+}
+
+static void recompute_line_margin(GtkWidget *sci)
+{
+    if (!sci) return;
+    if (!g_prefs.show_line_numbers || !g_prefs.line_num_dyn_width) return;
+    sptr_t lc = sci_msg(sci, SCI_GETLINECOUNT, 0, 0);
+    char measure[24];
+    g_snprintf(measure, sizeof measure, "_%ld", (long)lc);
+    sptr_t w = sci_msg(sci, SCI_TEXTWIDTH, STYLE_LINENUMBER,
+                       (sptr_t)measure);
+    if (w < 30) w = 30;
+    sci_msg(sci, SCI_SETMARGINWIDTHN, 0, w);
+    g_object_set_data(G_OBJECT(sci), "npp-ln-digits",
+                      GINT_TO_POINTER(ln_digits(lc)));
+}
+
+static void maintain_line_margin_on_edit(GtkWidget *sci)
+{
+    if (!g_prefs.show_line_numbers || !g_prefs.line_num_dyn_width) return;
+    int digits = ln_digits(sci_msg(sci, SCI_GETLINECOUNT, 0, 0));
+    if (digits == GPOINTER_TO_INT(
+            g_object_get_data(G_OBJECT(sci), "npp-ln-digits")))
+        return;   /* margin already fits — O(1) exit */
+    recompute_line_margin(sci);
+}
+
 static void setup_sci(GtkWidget *sci)
 {
     sci_msg(sci, SCI_SETCODEPAGE,     SC_CP_UTF8, 0);
@@ -1006,6 +1044,7 @@ static void setup_sci(GtkWidget *sci)
     /* Margin 0: line numbers */
     sci_msg(sci, SCI_SETMARGINTYPE,      0, SC_MARGIN_NUMBER);
     sci_msg(sci, SCI_SETMARGINWIDTHN,    0, 44);
+    recompute_line_margin(sci);   /* GAP-149 — dyn width from the start */
     /* Margin 1: bookmarks. Width follows the show_bookmark_margin pref
      * (default TRUE) so the bookmark slot is visible on every new doc —
      * matches macOS, where the margin is always shown. */
@@ -2521,6 +2560,10 @@ brace_done:;
             zoom_save_schedule();
             zoom_propagating = FALSE;
         }
+        /* GAP-149 — refit the line-number margin at the new zoom so
+         * digits don't clip (SCN_ZOOM fires after the zoom lands, so
+         * SCI_TEXTWIDTH returns post-zoom pixels — macOS hook). */
+        recompute_line_margin(sci);
         /* GAP-31 — tabs follow the editor zoom when the pref is on. */
         if (g_prefs.tab_follow_zoom)
             editor_refresh_all_tab_labels();
@@ -2558,6 +2601,11 @@ brace_done:;
         auto_insert_track_modified(sci,
             (Sci_Position)n->position, (Sci_Position)n->length,
             (n->modificationType & SC_MOD_INSERTTEXT) != 0);
+        /* GAP-149 — grow/shrink the line-number margin when an edit
+         * changes the line count; O(1) unless a digit boundary is
+         * crossed (macOS maintainLineNumberWidthOnEdit). */
+        if (n->linesAdded != 0)
+            maintain_line_margin_on_edit(sci);
         link_gen_bump(sci);
         if (doc->filepath)
             gitgutter_update(sci, doc->filepath);
@@ -3253,6 +3301,8 @@ gboolean editor_open_path(const char *path)
      * mark Scintilla read-only. User can clear via Edit → Clear Read-Only
      * (handled by Scintilla's own commands; the bit only blocks edits). */
     sci_msg(sci, SCI_SETREADONLY, access(path, W_OK) == 0 ? 0 : 1, 0);
+
+    recompute_line_margin(sci);   /* GAP-149 — fit the loaded line count */
 
     /* GAP-148 — no lexer on large files (macOS setLanguage:@""): a full
      * lex of a multi-GB buffer dominates open time. Plain text keeps the
@@ -4280,7 +4330,7 @@ void editor_apply_prefs(void)
 
         /* Margins: line-number, bookmark, fold */
         sci_msg(sci, SCI_SETMARGINWIDTHN, 0,
-                g_prefs.show_line_numbers ? 40 : 0);
+                g_prefs.show_line_numbers ? 44 : 0);
         sci_msg(sci, SCI_SETMARGINWIDTHN, 1,
                 g_prefs.show_bookmark_margin ? 16 : 0);
 
@@ -4327,12 +4377,9 @@ void editor_apply_prefs(void)
         }
         sci_msg(sci, SCI_MARKERDEFINE, SC_MARKNUM_FOLDER,     fclose);
         sci_msg(sci, SCI_MARKERDEFINE, SC_MARKNUM_FOLDEROPEN, fopen);
-        /* Line-number margin width style: dynamic adjusts to digit count. */
-        if (g_prefs.show_line_numbers && g_prefs.line_num_dyn_width) {
-            sptr_t ln = sci_msg(sci, SCI_GETLINECOUNT, 0, 0);
-            int digits = (ln >= 100000) ? 6 : (ln >= 10000) ? 5 : (ln >= 1000) ? 4 : 3;
-            sci_msg(sci, SCI_SETMARGINWIDTHN, 0, digits * 10);
-        }
+        /* GAP-149 — measured dynamic width (replaces digits×10
+         * guesswork; no-ops when the dyn pref is off). */
+        recompute_line_margin(sci);
 
         apply_line_spacing(sci);
     }
@@ -4374,6 +4421,10 @@ void editor_reapply_styles(void)
         stylestore_apply_default(sci);
         sci_msg(sci, SCI_STYLECLEARALL, 0, 0);
         stylestore_apply_global(sci);
+        /* GAP-149 — a theme/font change alters STYLE_LINENUMBER metrics;
+         * refit the margin with the new font (macOS funnels this through
+         * applyPreferencesFromDefaults). */
+        recompute_line_margin(sci);
         if (lang && strncmp(lang, "udl:", 4) == 0) {
             /* GAP-97 — a theme toggle may want the OTHER variant of a
              * multi-variant UDL (the markdown light/dark pair). Re-resolve
