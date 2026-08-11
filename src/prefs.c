@@ -1349,6 +1349,13 @@ static void on_str_entry(GtkEntry *e, gpointer d)
     prefs_save();
 }
 
+/* GAP-146 — trampoline: entry "changed" → re-apply editor prefs. */
+static void on_word_chars_changed(GtkEntry *e, gpointer d)
+{
+    (void)e; (void)d;
+    editor_apply_prefs();
+}
+
 static GtkWidget *str_row(GtkWidget *grid, int r, const char *label,
                           char *field, size_t cap)
 {
@@ -1860,7 +1867,14 @@ static GtkWidget *page_delimiter(void)
     gtk_grid_attach(GTK_GRID(g), lb, 0, r++, 2, 1);
 
     make_check(g, r++, "Use Scintilla default word characters", g_prefs.word_chars_use_default, G_CALLBACK(on_wc_default));
-    str_row(g, r++, "Extra word chars:", g_prefs.word_chars, sizeof(g_prefs.word_chars));
+    {
+        GtkWidget *e = str_row(g, r++, "Extra word chars:",
+                               g_prefs.word_chars, sizeof(g_prefs.word_chars));
+        /* GAP-146 — re-apply live; runs after str_row's own handler has
+         * copied the text into g_prefs.word_chars. */
+        g_signal_connect_after(e, "changed",
+                               G_CALLBACK(on_word_chars_changed), NULL);
+    }
 
     return g;
 }

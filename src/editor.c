@@ -864,9 +864,49 @@ static void on_sci_focus_enter(GtkEventControllerFocus *fc, gpointer data)
     if (nb) s_active_notebook = GTK_WIDGET(nb);
 }
 
+/* GAP-146 — effective word-character set (macOS
+ * applyWordCharsFromDefaults, EditorView.mm:2961). Stock Scintilla
+ * list (queried once from a fresh view, before any SETWORDCHARS ran)
+ * plus the user's extra chars, printable-ASCII only and de-duplicated
+ * (Windows addCustomWordChars semantics). Drives double-click select,
+ * word navigation, whole-word find and the autocomplete scan. */
+static const char *default_word_chars(GtkWidget *sci)
+{
+    static char *cached = NULL;
+    if (cached) return cached;
+    sptr_t len = sci_msg(sci, SCI_GETWORDCHARS, 0, 0);
+    if (len > 0 && len < 512) {
+        cached = g_malloc((gsize)len + 1);
+        sci_msg(sci, SCI_GETWORDCHARS, 0, (sptr_t)cached);
+        cached[len] = '\0';
+        return cached;
+    }
+    cached = g_strdup("abcdefghijklmnopqrstuvwxyz"
+                      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
+    return cached;
+}
+
+static void apply_word_chars(GtkWidget *sci)
+{
+    const char *stock = default_word_chars(sci);
+    if (g_prefs.word_chars_use_default || !g_prefs.word_chars[0]) {
+        sci_msg(sci, SCI_SETWORDCHARS, 0, (sptr_t)stock);
+        return;
+    }
+    GString *combined = g_string_new(stock);
+    for (const char *p = g_prefs.word_chars; *p; p++) {
+        if ((guchar)*p < 0x20 || (guchar)*p > 0x7E) continue;
+        if (!strchr(combined->str, *p))
+            g_string_append_c(combined, *p);
+    }
+    sci_msg(sci, SCI_SETWORDCHARS, 0, (sptr_t)combined->str);
+    g_string_free(combined, TRUE);
+}
+
 static void setup_sci(GtkWidget *sci)
 {
     sci_msg(sci, SCI_SETCODEPAGE,     SC_CP_UTF8, 0);
+    apply_word_chars(sci);   /* GAP-146 — before any user interaction */
     /* Margin 0: line numbers */
     sci_msg(sci, SCI_SETMARGINTYPE,      0, SC_MARGIN_NUMBER);
     sci_msg(sci, SCI_SETMARGINWIDTHN,    0, 44);
@@ -4055,6 +4095,7 @@ void editor_apply_prefs(void)
         int  use_t  = ovr ? ovr->use_tabs : g_prefs.use_tabs;
         sci_msg(sci, SCI_SETTABWIDTH,         (uptr_t)tab_w, 0);
         sci_msg(sci, SCI_SETUSETABS,          (uptr_t)use_t, 0);
+        apply_word_chars(sci);   /* GAP-146 */
         sci_msg(sci, SCI_SETCARETLINEVISIBLE, (uptr_t)g_prefs.highlight_current_line, 0);
         sci_msg(sci, SCI_SETCARETWIDTH,       (uptr_t)g_prefs.caret_width, 0);
         sci_msg(sci, SCI_SETCARETPERIOD,      (uptr_t)g_prefs.caret_blink_rate, 0);
