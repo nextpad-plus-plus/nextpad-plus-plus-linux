@@ -673,6 +673,16 @@ static void xl_elem_start(GMarkupParseContext *ctx, const char *elem,
                                      g_strdup(nm));
         if (rtl) g_hash_table_insert(p->out, g_strdup("__rtl__"),
                                      g_ascii_strdown(rtl, -1));
+    } else if (xl_attr(anames, avalues, "title") != NULL &&
+               strcmp(elem, "Item") != 0) {
+        /* GAP-i18n — section elements carry their display text in a
+         * `title` attribute (<Global title="General">, <Toolbar
+         * title="Toolbar">, <Preference title="Preferences"> …); the
+         * Preferences pane names translate through these. */
+        g_hash_table_insert(p->out, g_strconcat("title:", elem, NULL),
+                            g_strdup(xl_attr(anames, avalues, "title")));
+        /* fall through below for elements that ALSO nest Items — the
+         * stack push at the end of this handler is shared. */
     } else if (strcmp(elem, "Item") == 0) {
         const char *name = xl_attr(anames, avalues, "name");
         char *key = NULL;

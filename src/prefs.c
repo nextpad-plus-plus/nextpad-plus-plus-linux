@@ -1152,13 +1152,25 @@ __attribute__((weak)) void toolbar_apply_icon_scale(int scale) { (void)scale; }
 
 static GtkWidget *row(GtkWidget *grid, int r, const char *label, GtkWidget *widget)
 {
-    GtkWidget *lbl = gtk_label_new(label);
+    /* Every row label runs through the macOS-style translator; unknown
+     * strings pass through unchanged (identity for English). */
+    GtkWidget *lbl = gtk_label_new(i18n_translate(label));
     gtk_widget_set_halign(lbl, GTK_ALIGN_START);
     gtk_widget_set_margin_end(lbl, 12);
     gtk_grid_attach(GTK_GRID(grid), lbl, 0, r, 1, 1);
     gtk_widget_set_halign(widget, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(grid), widget, 1, r, 1, 1);
     return widget;
+}
+
+/* Translated <b>…</b> section header (markup can't be used as a
+ * translation key directly). */
+static void prefs_markup_bold(GtkLabel *l, const char *en)
+{
+    gchar *esc = g_markup_escape_text(i18n_translate(en), -1);
+    gchar *mk  = g_strdup_printf("<b>%s</b>", esc);
+    gtk_label_set_markup(l, mk);
+    g_free(mk); g_free(esc);
 }
 
 static GtkWidget *make_grid(void)
@@ -1186,7 +1198,7 @@ static GtkWidget *scroll(GtkWidget *child)
 
 static GtkWidget *make_check(GtkWidget *grid, int r, const char *label, gboolean active, GCallback cb)
 {
-    GtkWidget *c = gtk_check_button_new_with_label(label);
+    GtkWidget *c = gtk_check_button_new_with_label(i18n_translate(label));
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(c), active);
     gtk_grid_attach(GTK_GRID(grid), c, 0, r, 2, 1);
     if (cb) g_signal_connect(c, "toggled", cb, NULL);
@@ -1512,7 +1524,7 @@ static GtkWidget *str_row(GtkWidget *grid, int r, const char *label,
     g_object_set_data(G_OBJECT(e), "buflen", GUINT_TO_POINTER((guint)cap));
     g_signal_connect(e, "changed", G_CALLBACK(on_str_entry), field);
     gtk_widget_set_hexpand(e, TRUE);
-    GtkWidget *lbl = gtk_label_new(label);
+    GtkWidget *lbl = gtk_label_new(i18n_translate(label));
     gtk_widget_set_halign(lbl, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(grid), lbl, 0, r, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), e,   1, r, 1, 1);
@@ -1546,6 +1558,7 @@ static void on_backup_interval(GtkSpinButton *s, gpointer d)
 /* Localization — pick the UI language (Preferences > General). The
  * choice persists; i18n_set_language() reloads the translation tables so
  * dialogs opened afterwards use it (the menu bar updates on next launch). */
+static gboolean prefs_rebuild_idle(gpointer u);   /* fwd — defined below */
 static void on_ui_language(GtkComboBox *c, gpointer d)
 {
     (void)d;
@@ -1558,6 +1571,10 @@ static void on_ui_language(GtkComboBox *c, gpointer d)
     /* Retranslate the menu bar in place — no restart needed (#7). */
     extern void main_retranslate_menu(void);
     main_retranslate_menu();
+    /* The prefs dialog itself is a cached singleton built with the OLD
+     * language — rebuild and re-present it (idle: we are inside a
+     * handler of a widget that lives in that dialog). */
+    g_idle_add(prefs_rebuild_idle, NULL);
 }
 
 static GtkWidget *page_general(void)
@@ -1585,19 +1602,19 @@ static GtkWidget *page_general(void)
 
     make_check(g, r++, "Show status bar",                        g_prefs.show_status_bar,         G_CALLBACK(on_status_visible));
     make_check(g, r++, "Show full file path in title bar",       g_prefs.show_full_path_in_title, G_CALLBACK(on_full_path));
-    make_check(g, r++, "Remember session on quit",               g_prefs.remember_session,        G_CALLBACK(on_remember_sess));
+    make_check(g, r++, "Remember current session for next launch",               g_prefs.remember_session,        G_CALLBACK(on_remember_sess));
 
     /* GAP-70 — Tahoe-inspired section, mirroring the macOS General pane
      * layout. "-inspired" on Linux: there is no actual Tahoe/Liquid Glass
      * here, only our flat interpretation. Restart-gated. */
     GtkWidget *th = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(th), "<b>Tahoe-inspired</b>");
+    prefs_markup_bold(GTK_LABEL(th), "Tahoe-inspired");
     gtk_widget_set_halign(th, GTK_ALIGN_START);
     gtk_widget_set_margin_top(th, 8);
     gtk_grid_attach(GTK_GRID(g), th, 0, r++, 2, 1);
     make_check(g, r++, "Switch to the New Tahoe-inspired look (Beta)",
                g_prefs.appearance_style == 1, G_CALLBACK(on_modern_style));
-    GtkWidget *tn = gtk_label_new("Takes effect on next launch.");
+    GtkWidget *tn = gtk_label_new(i18n_translate("Takes effect on next launch."));
     gtk_widget_set_halign(tn, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), tn, 0, r++, 2, 1);
 
@@ -1605,7 +1622,7 @@ static GtkWidget *page_general(void)
      * (PreferencesWindowController.mm:771). Off also silences the
      * automatic card; the menu command always checks regardless. */
     GtkWidget *uh = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(uh), "<b>Updates</b>");
+    prefs_markup_bold(GTK_LABEL(uh), "Updates");
     gtk_widget_set_halign(uh, GTK_ALIGN_START);
     gtk_widget_set_margin_top(uh, 8);
     gtk_grid_attach(GTK_GRID(g), uh, 0, r++, 2, 1);
@@ -1654,13 +1671,13 @@ static GtkWidget *page_dark_mode(void)
     GtkWidget *g = make_grid();
     int r = 0;
     GtkWidget *header = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(header), "<b>Appearance</b>");
+    prefs_markup_bold(GTK_LABEL(header), "Appearance");
     gtk_widget_set_halign(header, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), header, 0, r++, 2, 1);
 
-    GtkWidget *a = gtk_radio_button_new_with_label(NULL, "Auto (Follow System)");
-    GtkWidget *l = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(a), "Light");
-    GtkWidget *d = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(a), "Dark");
+    GtkWidget *a = gtk_radio_button_new_with_label(NULL, i18n_translate("Auto (Follow System)"));
+    GtkWidget *l = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(a), i18n_translate("Light"));
+    GtkWidget *d = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(a), i18n_translate("Dark"));
     if      (g_prefs.appearance == 0) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a), TRUE);
     else if (g_prefs.appearance == 1) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(l), TRUE);
     else                              gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d), TRUE);
@@ -1695,9 +1712,9 @@ static GtkWidget *page_auto_completion(void)
 
     /* Completion source (macOS Phase 1 / Windows autoCAction). */
     GtkWidget *md = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), "Function completion");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), "Word completion");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), "Function and word completion");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), i18n_translate("Function completion"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), i18n_translate("Word completion"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(md), i18n_translate("Function and word completion"));
     gtk_combo_box_set_active(GTK_COMBO_BOX(md),
         (g_prefs.ac_mode >= 0 && g_prefs.ac_mode <= 2) ? g_prefs.ac_mode : 2);
     row(g, r++, "Completion source:", md);
@@ -1714,7 +1731,7 @@ static GtkWidget *page_auto_completion(void)
         g_prefs.ac_ignore_numbers, G_CALLBACK(on_ac_ignore_numbers));
 
     /* Auto-Insert box (macOS Phase 3 / Windows matched-pair conf). */
-    GtkWidget *hdr = gtk_label_new("Auto-Insert:");
+    GtkWidget *hdr = gtk_label_new(i18n_translate("Auto-Insert:"));
     gtk_widget_set_halign(hdr, GTK_ALIGN_START);
     gtk_widget_set_margin_top(hdr, 10);
     gtk_grid_attach(GTK_GRID(g), hdr, 0, r++, 2, 1);
@@ -1753,12 +1770,12 @@ static GtkWidget *page_misc(void)
     /* 6-step % scale matching macOS PreferencesWindowController.mm:1656.
      * The persisted int is an index 0..5; toolbar.c maps each index to
      * a multiplier in pickScales[]. */
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), "50%");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), "75%");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), "90%");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), "100% (Default)");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), "125%");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), "150%");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), i18n_translate("50%"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), i18n_translate("75%"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), i18n_translate("90%"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), i18n_translate("100% (Default)"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), i18n_translate("125%"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(tb), i18n_translate("150%"));
     int idx = g_prefs.toolbar_icon_scale;
     if (idx < 0 || idx > 5) idx = 3;   /* 100 % default if out of range */
     gtk_combo_box_set_active(GTK_COMBO_BOX(tb), idx);
@@ -1767,12 +1784,12 @@ static GtkWidget *page_misc(void)
 
     /* GAP-159 — macOS MISC "Mouse wheel scroll speed" (PrefWC:3129). */
     GtkWidget *wg = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "1× (off)");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "2×");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "3×");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "5×");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "8×");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "10×");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), i18n_translate("1× (off)"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), i18n_translate("2×"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), i18n_translate("3×"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), i18n_translate("5×"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), i18n_translate("8×"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), i18n_translate("10×"));
     int wi = 0;
     for (int k = 0; k < 6; k++)
         if (k_wheel_gains[k] == g_prefs.scroll_wheel_gain) { wi = k; break; }
@@ -1808,19 +1825,19 @@ static GtkWidget *page_editor(void)
 
     /* Caret + font-quality group below (macOS preferences02.png bottom). */
     GtkWidget *cw = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(cw), "Thin (1px)");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(cw), "Medium (2px)");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(cw), "Thick (3px)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(cw), i18n_translate("Thin (1px)"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(cw), i18n_translate("Medium (2px)"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(cw), i18n_translate("Thick (3px)"));
     gtk_combo_box_set_active(GTK_COMBO_BOX(cw), g_prefs.caret_width - 1);
     row(g, r++, "Caret width:", cw);
 
     /* Line spacing presets (macOS #149). */
     GtkWidget *ls = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.0 (default)");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.2");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.3");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.4");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), "1.5");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), i18n_translate("1.0 (default)"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), i18n_translate("1.2"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), i18n_translate("1.3"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), i18n_translate("1.4"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ls), i18n_translate("1.5"));
     {
         int idx = 0;
         switch (g_prefs.line_spacing10) {
@@ -1841,10 +1858,10 @@ static GtkWidget *page_editor(void)
     g_signal_connect(bl, "value-changed", G_CALLBACK(on_blink), NULL);
 
     GtkWidget *fq = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), "Default");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), "None");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), "Antialiased");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), "LCD Optimized");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), i18n_translate("Default"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), i18n_translate("None"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), i18n_translate("Antialiased"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fq), i18n_translate("LCD Optimized"));
     gtk_combo_box_set_active(GTK_COMBO_BOX(fq), g_prefs.font_quality);
     row(g, r++, "Font rendering:", fq);
     g_signal_connect(fq, "changed", G_CALLBACK(on_font_q), NULL);
@@ -1866,8 +1883,8 @@ static GtkWidget *page_indentation(void)
      * [Default] edits the global pair; a language row edits its
      * TabCustom override, guarded by "Use default value". */
     GtkWidget *lc = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lc), "[Default]");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lc), "Normal text");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lc), i18n_translate("[Default]"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lc), i18n_translate("Normal text"));
     for (int i = 0; ; i++) {
         const char *disp = main_lang_entry(i, NULL);
         if (!disp) break;
@@ -1885,8 +1902,8 @@ static GtkWidget *page_indentation(void)
     row(g, r++, "Tab / indent size:", tw);
     g_signal_connect(tw, "value-changed", G_CALLBACK(on_tab_width), NULL);
 
-    GtkWidget *rtabs = gtk_radio_button_new_with_label(NULL, "Tab character");
-    GtkWidget *rsp   = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(rtabs), "Space characters");
+    GtkWidget *rtabs = gtk_radio_button_new_with_label(NULL, i18n_translate("Tab character"));
+    GtkWidget *rsp   = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(rtabs), i18n_translate("Space characters"));
     if (g_prefs.use_tabs) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rtabs), TRUE);
     else                  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rsp),   TRUE);
     s_ind_tw = tw; s_ind_rtabs = rtabs; s_ind_rsp = rsp;
@@ -1899,9 +1916,9 @@ static GtkWidget *page_indentation(void)
     g_signal_connect(rtabs, "toggled", G_CALLBACK(on_use_tabs),   NULL);
     g_signal_connect(rsp,   "toggled", G_CALLBACK(on_use_spaces), NULL);
 
-    GtkWidget *an = gtk_radio_button_new_with_label(NULL, "None");
-    GtkWidget *ab = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(an), "Basic");
-    GtkWidget *aa = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(an), "Advanced (detect blocks)");
+    GtkWidget *an = gtk_radio_button_new_with_label(NULL, i18n_translate("None"));
+    GtkWidget *ab = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(an), i18n_translate("Basic"));
+    GtkWidget *aa = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(an), i18n_translate("Advanced (detect blocks)"));
     if      (g_prefs.auto_indent == AUTO_INDENT_NONE)     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(an), TRUE);
     else if (g_prefs.auto_indent == AUTO_INDENT_ADVANCED) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(aa), TRUE);
     else                                                  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ab), TRUE);
@@ -1932,9 +1949,9 @@ static GtkWidget *page_margins(void)
     make_check(g, r++, "Dynamic line number width", g_prefs.line_num_dyn_width, G_CALLBACK(on_ln_dyn));
 
     GtkWidget *em = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(em), "Off");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(em), "Line");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(em), "Background");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(em), i18n_translate("Off"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(em), i18n_translate("Line"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(em), i18n_translate("Background"));
     gtk_combo_box_set_active(GTK_COMBO_BOX(em), g_prefs.edge_mode);
     row(g, r++, "Vertical edge:", em);
     g_signal_connect(em, "changed", G_CALLBACK(on_edge_mode), NULL);
@@ -1945,11 +1962,11 @@ static GtkWidget *page_margins(void)
     g_signal_connect(ec, "value-changed", G_CALLBACK(on_edge_col), NULL);
 
     GtkWidget *fs = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), "Box tree");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), "Circle tree");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), "Arrow");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), "Simple +/-");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), "None");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), i18n_translate("Box tree"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), i18n_translate("Circle tree"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), i18n_translate("Arrow"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), i18n_translate("Simple +/-"));
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(fs), i18n_translate("None"));
     gtk_combo_box_set_active(GTK_COMBO_BOX(fs), g_prefs.fold_style);
     row(g, r++, "Fold style:", fs);
     g_signal_connect(fs, "changed", G_CALLBACK(on_fold), NULL);
@@ -1972,9 +1989,9 @@ static GtkWidget *page_new_document(void)
     GtkWidget *g = make_grid();
     int r = 0;
 
-    GtkWidget *lf = gtk_radio_button_new_with_label(NULL, "Unix (LF)");
-    GtkWidget *cl = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(lf), "Windows (CRLF)");
-    GtkWidget *cr = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(lf), "Old Mac (CR)");
+    GtkWidget *lf = gtk_radio_button_new_with_label(NULL, i18n_translate("Unix (LF)"));
+    GtkWidget *cl = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(lf), i18n_translate("Windows (CRLF)"));
+    GtkWidget *cr = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(lf), i18n_translate("Old Mac (CR)"));
     switch (g_prefs.default_eol) {
     case 0:  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(cl), TRUE); break;
     case 1:  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(cr), TRUE); break;
@@ -2047,7 +2064,7 @@ static GtkWidget *page_delimiter(void)
 
     GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_grid_attach(GTK_GRID(g), sep, 0, r++, 2, 1);
-    GtkWidget *lb = gtk_label_new("Word characters");
+    GtkWidget *lb = gtk_label_new(i18n_translate("Word characters"));
     gtk_widget_set_halign(lb, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), lb, 0, r++, 2, 1);
 
@@ -2119,7 +2136,7 @@ static GtkWidget *page_toolbar(void)
     int r = 0;
 
     GtkWidget *h = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(h), "<b>Icon colorization</b>");
+    prefs_markup_bold(GTK_LABEL(h), "Icon colorization");
     gtk_widget_set_halign(h, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), h, 0, r++, 2, 1);
 
@@ -2137,7 +2154,7 @@ static GtkWidget *page_toolbar(void)
     }
 
     GtkWidget *hc = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(hc), "<b>Color</b>");
+    prefs_markup_bold(GTK_LABEL(hc), "Color");
     gtk_widget_set_halign(hc, GTK_ALIGN_START);
     gtk_widget_set_margin_top(hc, 8);
     gtk_grid_attach(GTK_GRID(g), hc, 0, r++, 2, 1);
@@ -2282,7 +2299,7 @@ static GtkWidget *page_cloud_link(void)
     int r = 0;
 
     GtkWidget *hc = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(hc), "<b>Settings on cloud</b>");
+    prefs_markup_bold(GTK_LABEL(hc), "Settings on cloud");
     gtk_widget_set_halign(hc, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), hc, 0, r++, 2, 1);
 
@@ -2290,7 +2307,7 @@ static GtkWidget *page_cloud_link(void)
     g_file_get_contents(npp_cloud_choice_file(), &saved, NULL, NULL);
     if (saved) g_strstrip(saved);
 
-    GtkWidget *rb_none = npp_radio_new(NULL, "No Cloud");
+    GtkWidget *rb_none = npp_radio_new(NULL, i18n_translate("No Cloud"));
     GtkWidget *rb_path = npp_radio_new(rb_none,
                                        "Set your cloud location path here:");
     GtkWidget *path_entry = gtk_entry_new();
@@ -2305,7 +2322,7 @@ static GtkWidget *page_cloud_link(void)
     gtk_grid_attach(GTK_GRID(g), rb_path, 0, r++, 2, 1);
     {   /* GAP-160 — entry + "…" chooser side by side + status line. */
         GtkWidget *hb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-        GtkWidget *browse = gtk_button_new_with_label("…");
+        GtkWidget *browse = gtk_button_new_with_label(i18n_translate("…"));
         gtk_widget_set_tooltip_text(browse, "Choose folder");
         npp_box_pack(GTK_BOX(hb), path_entry, TRUE, 0);
         npp_box_pack(GTK_BOX(hb), browse, FALSE, 0);
@@ -2338,7 +2355,7 @@ static GtkWidget *page_cloud_link(void)
     g_signal_connect(path_entry, "changed", G_CALLBACK(on_cloud_path_changed), rb_path);
 
     GtkWidget *h = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(h), "<b>Clickable Link Settings</b>");
+    prefs_markup_bold(GTK_LABEL(h), "Clickable Link Settings");
     gtk_widget_set_halign(h, GTK_ALIGN_START);
     gtk_widget_set_margin_top(h, 12);
     gtk_grid_attach(GTK_GRID(g), h, 0, r++, 2, 1);
@@ -2477,7 +2494,7 @@ static GtkWidget *page_backup(void)
                      G_CALLBACK(on_backup_interval), NULL);
 
     /* Custom backup location (macOS 7670433 / GAP-16). */
-    GtkWidget *loc = gtk_label_new("Backup location:");
+    GtkWidget *loc = gtk_label_new(i18n_translate("Backup location:"));
     gtk_widget_set_halign(loc, GTK_ALIGN_START);
     gtk_widget_set_margin_top(loc, 6);
     gtk_grid_attach(GTK_GRID(g), loc, 0, r++, 2, 1);
@@ -2506,8 +2523,8 @@ static GtkWidget *page_backup(void)
     gtk_grid_attach(GTK_GRID(g), s_backup_dir_entry, 0, r++, 2, 1);
 
     GtkWidget *bbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    GtkWidget *bchoose = gtk_button_new_with_label("Choose…");
-    GtkWidget *breset  = gtk_button_new_with_label("Reset to Default");
+    GtkWidget *bchoose = gtk_button_new_with_label(i18n_translate("Choose…"));
+    GtkWidget *breset  = gtk_button_new_with_label(i18n_translate("Reset to Default"));
     gtk_box_append(GTK_BOX(bbox), bchoose);
     gtk_box_append(GTK_BOX(bbox), breset);
     gtk_widget_set_halign(bbox, GTK_ALIGN_START);
@@ -2536,6 +2553,19 @@ static GtkWidget *page_backup(void)
 /* ------------------------------------------------------------------ */
 
 static GtkWidget *s_prefs_dlg = NULL;
+/* GAP-i18n — destroy + rebuild the dialog after a UI-language switch. */
+static gboolean prefs_rebuild_idle(gpointer u)
+{
+    (void)u;
+    if (!s_prefs_dlg) return G_SOURCE_REMOVE;
+    GtkWidget *parent = GTK_WIDGET(
+        gtk_window_get_transient_for(GTK_WINDOW(s_prefs_dlg)));
+    gtk_widget_destroy(s_prefs_dlg);
+    s_prefs_dlg = NULL;
+    extern void prefs_dialog_show(GtkWidget *);
+    prefs_dialog_show(parent);
+    return G_SOURCE_REMOVE;
+}
 
 static void on_prefs_response(GtkDialog *dlg, gint r, gpointer d)
 {
@@ -2600,7 +2630,7 @@ static GtkWidget *page_tahoe(void)
     gtk_container_set_border_width(GTK_CONTAINER(v), 12);
 
     GtkWidget *title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(title), "<b>Toolbar Groups</b>");
+    prefs_markup_bold(GTK_LABEL(title), "Toolbar Groups");
     gtk_label_set_xalign(GTK_LABEL(title), 0.0f);
     gtk_container_add(GTK_CONTAINER(v), title);
 
@@ -2640,10 +2670,10 @@ static GtkWidget *page_tahoe(void)
         gtk_widget_set_margin_start(lbl, 16);
         gtk_widget_set_hexpand(lbl, TRUE);
         GtkWidget *combo = gtk_combo_box_text_new();
-        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), "Toolbar");
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), i18n_translate("Toolbar"));
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo),
                                        "Overflow menu");
-        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), "Hidden");
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), i18n_translate("Hidden"));
         gtk_combo_box_set_active(GTK_COMBO_BOX(combo), place);
         /* The snapshot strings die on the next item_count() — copy. */
         g_object_set_data_full(G_OBJECT(combo), "tb-group",
@@ -2658,7 +2688,7 @@ static GtkWidget *page_tahoe(void)
     }
     gtk_container_add(GTK_CONTAINER(v), grid);
 
-    GtkWidget *reset = gtk_button_new_with_label("Reset to Defaults");
+    GtkWidget *reset = gtk_button_new_with_label(i18n_translate("Reset to Defaults"));
     gtk_widget_set_halign(reset, GTK_ALIGN_START);
     gtk_widget_set_margin_top(reset, 8);
     g_signal_connect(reset, "clicked", G_CALLBACK(on_tahoe_reset), NULL);
@@ -2841,10 +2871,10 @@ static GtkWidget *page_file_association(void)
     gtk_grid_set_column_spacing(GTK_GRID(g), 10);
     gtk_grid_set_row_spacing(GTK_GRID(g), 6);
 
-    GtkWidget *hl = gtk_label_new("Supported extensions:");
+    GtkWidget *hl = gtk_label_new(i18n_translate("Supported extensions:"));
     gtk_widget_set_halign(hl, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), hl, 0, 0, 2, 1);
-    GtkWidget *hr = gtk_label_new("Registered");
+    GtkWidget *hr = gtk_label_new(i18n_translate("Registered"));
     gtk_widget_set_halign(hr, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(g), hr, 3, 0, 1, 1);
 
@@ -2859,8 +2889,8 @@ static GtkWidget *page_file_association(void)
 
     GtkWidget *bb = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_set_valign(bb, GTK_ALIGN_CENTER);
-    GtkWidget *reg = gtk_button_new_with_label(">");
-    GtkWidget *unr = gtk_button_new_with_label("<");
+    GtkWidget *reg = gtk_button_new_with_label(i18n_translate(">"));
+    GtkWidget *unr = gtk_button_new_with_label(i18n_translate("<"));
     g_signal_connect(reg, "clicked", G_CALLBACK(on_fa_register), NULL);
     g_signal_connect(unr, "clicked", G_CALLBACK(on_fa_unregister), NULL);
     gtk_box_append(GTK_BOX(bb), reg);
@@ -2874,7 +2904,7 @@ static GtkWidget *page_file_association(void)
     fa_custom_entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(fa_custom_entry), ".ext");
     gtk_widget_set_hexpand(fa_custom_entry, TRUE);
-    GtkWidget *add = gtk_button_new_with_label("Add");
+    GtkWidget *add = gtk_button_new_with_label(i18n_translate("Add"));
     g_signal_connect(add, "clicked", G_CALLBACK(on_fa_add_custom), NULL);
     gtk_box_append(GTK_BOX(fa_custom_row), fa_custom_entry);
     gtk_box_append(GTK_BOX(fa_custom_row), add);
@@ -2904,7 +2934,7 @@ static GtkWidget *page_file_association(void)
 
 static GtkWidget *prefs_tab_label(const char *text)
 {
-    GtkWidget *lbl = gtk_label_new(text);
+    GtkWidget *lbl = gtk_label_new(i18n_translate(text));
     gtk_label_set_xalign(GTK_LABEL(lbl), 1.0f);
     gtk_widget_set_halign(lbl, GTK_ALIGN_FILL);
     gtk_widget_set_hexpand(lbl, TRUE);
@@ -2920,10 +2950,10 @@ void prefs_dialog_show(GtkWidget *parent)
     }
 
     s_prefs_dlg = gtk_dialog_new_with_buttons(
-        "Preferences",
+        i18n_translate("Preferences"),
         GTK_WINDOW(parent),
         GTK_DIALOG_DESTROY_WITH_PARENT,
-        "_Close", GTK_RESPONSE_CLOSE,
+        i18n_translate("_Close"), GTK_RESPONSE_CLOSE,
         NULL);
     gtk_window_set_default_size(GTK_WINDOW(s_prefs_dlg), 600, 500);
 
@@ -2985,7 +3015,7 @@ void prefs_dialog_show(GtkWidget *parent)
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_backup()),          prefs_tab_label("Backup"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_auto_completion()), prefs_tab_label("Auto-Completion"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_searching()),       prefs_tab_label("Searching"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_cloud_link()),       prefs_tab_label("Cloud and Link"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_cloud_link()),       prefs_tab_label("Cloud & Link"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_delimiter()),       prefs_tab_label("Delimiter"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_performance()),     prefs_tab_label("Performance"));
     gtk_notebook_append_page(GTK_NOTEBOOK(nb), scroll(page_misc()),            prefs_tab_label("MISC."));
