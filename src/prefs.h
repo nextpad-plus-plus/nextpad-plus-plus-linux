@@ -126,6 +126,8 @@ typedef struct {
      * formats; prefs.c only loads/stores the raw strings). */
     char     open_side_panels[256];   /* "doclist funclist:popped" */
     char     side_panel_widths[512];  /* "doclist=320 funclist=280" */
+    char     panel_zoom[256];         /* GAP-162 — "workspace=2 git=-1"
+                                         (macOS PanelZoom_* keys) */
     char     floating_panels[512];    /* "funclist=420x600:pinned" */
     char     panel_dock_sides[512];   /* GAP-123 — "doclist=left …";
                                        * absent = right (macOS

@@ -28,6 +28,7 @@
  * etc. continue to work transparently after wrapping.
  */
 #include "panel_frame.h"
+#include "prefs.h"
 #include "gtk_compat.h"
 #include "floating.h"
 
@@ -429,6 +430,45 @@ static void on_content_hide(GtkWidget *content, gpointer ud) {
 /* labels and tree/list cell text. Ctrl +/-/0 act on the focused panel.    */
 /* ─────────────────────────────────────────────────────────────────────── */
 
+/* GAP-162 — per-panel zoom persistence (macOS PanelZoom_<Name> keys).
+ * Stored as "name=level" tokens in g_prefs.panel_zoom. */
+static int pf_zoom_load(const char *name)
+{
+    char *copy = g_strdup(g_prefs.panel_zoom);
+    int z = 0;
+    for (char *tok = strtok(copy, " "); tok; tok = strtok(NULL, " ")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        if (strcmp(tok, name) == 0) { z = atoi(eq + 1); break; }
+    }
+    g_free(copy);
+    return z;
+}
+
+static void pf_zoom_store(const char *name, int zoom)
+{
+    GString *out = g_string_new(NULL);
+    char *copy = g_strdup(g_prefs.panel_zoom);
+    for (char *tok = strtok(copy, " "); tok; tok = strtok(NULL, " ")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        if (strcmp(tok, name) == 0) continue;    /* replaced below */
+        if (out->len + strlen(tok) + 16 >= sizeof(g_prefs.panel_zoom))
+            continue;                            /* keep within the slot */
+        g_string_append_printf(out, "%s%s=%s", out->len ? " " : "",
+                               tok, eq + 1);
+    }
+    g_free(copy);
+    if (zoom != 0)
+        g_string_append_printf(out, "%s%s=%d", out->len ? " " : "",
+                               name, zoom);
+    g_strlcpy(g_prefs.panel_zoom, out->str, sizeof(g_prefs.panel_zoom));
+    g_string_free(out, TRUE);
+    prefs_save();
+}
+
 static void pf_apply_zoom(PanelFrameState *st)
 {
     if (st->zoom < -4) st->zoom = -4;   /* clamp: 60% … 200% */
@@ -451,11 +491,11 @@ static gboolean pf_on_key(GtkEventControllerKey *ctl, guint keyval,
     if (!st || !st->zoom_css) return FALSE;
     switch (keyval) {
     case GDK_KEY_plus:  case GDK_KEY_equal:  case GDK_KEY_KP_Add:
-        st->zoom++;   pf_apply_zoom(st); return TRUE;
+        st->zoom++;   pf_apply_zoom(st); pf_zoom_store(st->name, st->zoom); return TRUE;
     case GDK_KEY_minus: case GDK_KEY_KP_Subtract:
-        st->zoom--;   pf_apply_zoom(st); return TRUE;
+        st->zoom--;   pf_apply_zoom(st); pf_zoom_store(st->name, st->zoom); return TRUE;
     case GDK_KEY_0:     case GDK_KEY_KP_0:
-        st->zoom = 0; pf_apply_zoom(st); return TRUE;
+        st->zoom = 0; pf_apply_zoom(st); pf_zoom_store(st->name, st->zoom); return TRUE;
     }
     return FALSE;
 }
@@ -476,6 +516,7 @@ gboolean panel_frame_zoom_from_focus(GtkWidget *focus, int step)
         if (step == 0) st->zoom = 0;
         else           st->zoom += step;
         pf_apply_zoom(st);
+        pf_zoom_store(st->name, st->zoom);
         return TRUE;
     }
     return FALSE;
@@ -656,12 +697,13 @@ GtkWidget *panel_frame_new(const char *name,
 
     /* Per-panel content zoom (Ctrl +/-/0): a CSS provider scoped to THIS
      * panel's content, so each panel keeps an independent zoom level. */
-    st->zoom     = 0;
+    st->zoom     = pf_zoom_load(st->name);   /* GAP-162 — persisted */
     st->zoom_css = gtk_css_provider_new();
     gtk_widget_add_css_class(content, "npp-panel-content");
     gtk_style_context_add_provider(gtk_widget_get_style_context(content),
                                    GTK_STYLE_PROVIDER(st->zoom_css),
                                    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    if (st->zoom) pf_apply_zoom(st);
     {
         GtkEventController *kc = gtk_event_controller_key_new();
         g_signal_connect(kc, "key-pressed", G_CALLBACK(pf_on_key), NULL);

@@ -594,6 +594,10 @@ static void apply_text(const char *group, const char *text) {
         g_strlcpy(g_prefs.open_side_panels, t,
                   sizeof(g_prefs.open_side_panels));
     }
+    else if (!strcmp(group, "PanelZoom")) {
+        /* GAP-162 — macOS persists PanelZoom_<Name> per panel. */
+        g_strlcpy(g_prefs.panel_zoom, t, sizeof(g_prefs.panel_zoom));
+    }
     else if (!strcmp(group, "SidePanelWidths")) {
         g_strlcpy(g_prefs.side_panel_widths, t,
                   sizeof(g_prefs.side_panel_widths));
@@ -952,6 +956,9 @@ g_prefs.tab_max_label_width,
     g_string_append_printf(b,
         "        <GUIConfig name=\"OpenSidePanels\">%s</GUIConfig>\n",
         g_prefs.open_side_panels);
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"PanelZoom\">%s</GUIConfig>\n",
+        g_prefs.panel_zoom);
     g_string_append_printf(b,
         "        <GUIConfig name=\"SidePanelWidths\">%s</GUIConfig>\n",
         g_prefs.side_panel_widths);
