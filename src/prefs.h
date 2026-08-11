@@ -108,6 +108,8 @@ typedef struct {
     gboolean show_full_path_in_title; /* default FALSE */
     gboolean show_status_bar;         /* default TRUE */
     gboolean copy_line_no_selection;  /* copy/cut whole line, default TRUE */
+    int      scroll_wheel_gain;       /* GAP-159 — lines per wheel notch:
+                                         1 (off) / 2 / 3 / 5 / 8 / 10 */
     int      toolbar_icon_scale;      /* index 0..5 into pickScales[]
                                        * = {0.50, 0.75, 0.90, 1.00, 1.25, 1.50}.
                                        * Matches macOS kPrefToolbarIconScale

@@ -207,6 +207,7 @@ NppPrefs g_prefs = {
     .tab_max_label_width     = 200,
     .hide_tab_bar            = FALSE,
     .line_spacing10          = 10,
+    .scroll_wheel_gain       = 1,
     .doclist_show_ext        = TRUE,
     .doclist_show_path       = TRUE,
     /* Backup */
@@ -446,6 +447,14 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "funcListUseXML"))     g_prefs.funclist_use_xml       = is_yes(val);
         else if (!strcmp(attr, "fileStatusAutoDetection"))  g_prefs.file_auto_detect     = is_yes(val);
         else if (!strcmp(attr, "fileStatusUpdateSilently")) g_prefs.file_update_silently = is_yes(val);
+        else if (!strcmp(attr, "scrollSpeedGain")) {
+            /* GAP-159 — macOS kPrefScrollSpeedGain ("3" for 3x). Only
+             * the six offered gains are accepted. */
+            int gv = atoi(val);
+            g_prefs.scroll_wheel_gain =
+                (gv == 2 || gv == 3 || gv == 5 || gv == 8 || gv == 10)
+                    ? gv : 1;
+        }
     }
     else if (!strcmp(group, "NewDocDefaultSettings")) {
         if      (!strcmp(attr, "format"))             g_prefs.default_eol            = mac_eol_to_sc(atoi(val));
@@ -927,11 +936,13 @@ g_prefs.tab_max_label_width,
     g_string_append_printf(b,
         "        <GUIConfig name=\"MISC\" muteSounds=\"%s\" disableTextDragDrop=\"%s\" "
         "spellCheck=\"%s\" panelKeepState=\"%s\" funcListUseXML=\"%s\" "
-        "fileStatusAutoDetection=\"%s\" fileStatusUpdateSilently=\"%s\" />\n",
+        "fileStatusAutoDetection=\"%s\" fileStatusUpdateSilently=\"%s\" "
+        "scrollSpeedGain=\"%d\" />\n",
         b2yn(g_prefs.mute_sounds), b2yn(g_prefs.disable_text_drag_drop),
         b2yn(g_prefs.spell_check), b2yn(g_prefs.panel_keep_state),
         b2yn(g_prefs.funclist_use_xml),
-        b2yn(g_prefs.file_auto_detect), b2yn(g_prefs.file_update_silently));
+        b2yn(g_prefs.file_auto_detect), b2yn(g_prefs.file_update_silently),
+        g_prefs.scroll_wheel_gain);
 
     /* GAP-82/83 — panel persistence (panelstate.c formats; plain
      * [a-z0-9=x: ] tokens, no XML escaping needed). */
@@ -1333,6 +1344,16 @@ static void on_enc_combo(GtkComboBox *c, gpointer d)
 
 static void on_appear(GtkComboBox *c, gpointer d)
     { (void)d; g_prefs.appearance = gtk_combo_box_get_active(c); prefs_save(); }
+/* GAP-159 — six gains, same list as macOS (PrefWC:3139). */
+static const int k_wheel_gains[] = { 1, 2, 3, 5, 8, 10 };
+static void on_wheel_gain(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    int i = gtk_combo_box_get_active(c);
+    if (i >= 0 && i < 6) g_prefs.scroll_wheel_gain = k_wheel_gains[i];
+    prefs_save();
+}
+
 static void on_toolbar_scale(GtkComboBox *c, gpointer d)
     { (void)d; g_prefs.toolbar_icon_scale = gtk_combo_box_get_active(c); toolbar_apply_icon_scale(g_prefs.toolbar_icon_scale); prefs_save(); }
 
@@ -1632,6 +1653,21 @@ static GtkWidget *page_misc(void)
     gtk_combo_box_set_active(GTK_COMBO_BOX(tb), idx);
     row(g, r++, "Toolbar icon size:", tb);
     g_signal_connect(tb, "changed", G_CALLBACK(on_toolbar_scale), NULL);
+
+    /* GAP-159 — macOS MISC "Mouse wheel scroll speed" (PrefWC:3129). */
+    GtkWidget *wg = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "1Ã (off)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "2Ã");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "3Ã");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "5Ã");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "8Ã");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wg), "10Ã");
+    int wi = 0;
+    for (int k = 0; k < 6; k++)
+        if (k_wheel_gains[k] == g_prefs.scroll_wheel_gain) { wi = k; break; }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(wg), wi);
+    row(g, r++, "Mouse wheel scroll speed:", wg);
+    g_signal_connect(wg, "changed", G_CALLBACK(on_wheel_gain), NULL);
     return g;
 }
 

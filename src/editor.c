@@ -3128,6 +3128,51 @@ static gboolean on_tabscroll(GtkEventControllerScroll *sc,
     return GDK_EVENT_STOP;
 }
 
+/* GAP-159 — mouse-wheel scroll-speed gain (macOS scrollSpeedGain).
+ * The vendored Scintilla scrolls exactly one line per wheel notch
+ * (patch 0004); at gain 1 this controller declines everything and that
+ * path runs untouched. At higher gains a CAPTURE-phase controller on
+ * the wrapper claims the wheel event first and scrolls gain*notches
+ * lines via SCI_LINESCROLL. Fractional (touchpad) deltas accumulate
+ * until they amount to a whole line. */
+static gboolean on_wheel_gain_scroll(GtkEventControllerScroll *c,
+                                     double dx, double dy, gpointer ud)
+{
+    (void)dx;
+    if (g_prefs.scroll_wheel_gain <= 1) return FALSE;
+    if (!isfinite(dy) || dy == 0.0) return FALSE;
+    /* Modified wheel is not a scroll: Ctrl+wheel = zoom (Scintilla),
+     * Shift+wheel = horizontal — let them through untouched. */
+    GdkModifierType st = gtk_event_controller_get_current_event_state(
+        GTK_EVENT_CONTROLLER(c));
+    if (st & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK))
+        return FALSE;
+    GtkWidget *sci = ud;
+    double *accum = g_object_get_data(G_OBJECT(sci), "npp-wheel-accum");
+    if (!accum) {
+        accum = g_new0(double, 1);
+        g_object_set_data_full(G_OBJECT(sci), "npp-wheel-accum",
+                               accum, g_free);
+    }
+    *accum += dy * g_prefs.scroll_wheel_gain;
+    int lines = (int)*accum;
+    if (lines) {
+        *accum -= lines;
+        sci_msg(sci, SCI_LINESCROLL, 0, lines);
+    }
+    return TRUE;
+    (void)c;
+}
+
+static void attach_wheel_gain(GtkWidget *sw, GtkWidget *sci)
+{
+    GtkEventController *c = gtk_event_controller_scroll_new(
+        GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+    gtk_event_controller_set_propagation_phase(c, GTK_PHASE_CAPTURE);
+    g_signal_connect(c, "scroll", G_CALLBACK(on_wheel_gain_scroll), sci);
+    gtk_widget_add_controller(sw, c);
+}
+
 static void tabscroll_attach(GtkWidget *nb)
 {
     /* The controller goes on the notebook's HEADER, not the notebook:
@@ -3350,6 +3395,7 @@ void editor_new_doc(void)
     GtkWidget *label = make_tab_label(doc, sci);
     GtkWidget *sw = gtk_scrolled_window_new();
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), sci);
+    attach_wheel_gain(sw, sci);
     int page = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
     gtk_notebook_append_page(GTK_NOTEBOOK(s_notebook), sw, label);
     gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(s_notebook), sw, TRUE);
@@ -3434,6 +3480,7 @@ gboolean editor_open_path(const char *path)
         GtkWidget *label = make_tab_label(doc, sci);
         GtkWidget *sw = gtk_scrolled_window_new();
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), sci);
+    attach_wheel_gain(sw, sci);
         page = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
         gtk_notebook_append_page(GTK_NOTEBOOK(s_notebook), sw, label);
         gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(s_notebook), sw, TRUE);
@@ -4067,6 +4114,7 @@ void editor_clone_to_view(gboolean vertical)
     GtkWidget *label = make_tab_label(doc, sci);
     GtkWidget *sw = gtk_scrolled_window_new();
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), sci);
+    attach_wheel_gain(sw, sci);
     int page = gtk_notebook_append_page(GTK_NOTEBOOK(dst), sw, label);
     gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(dst), sw, TRUE);
     editor_apply_tab_color(sci);
