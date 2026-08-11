@@ -1094,9 +1094,11 @@ static void action_always_on_top(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     if (!g_window) return;
     GtkWindow *w = GTK_WINDOW(g_window);
-    static gboolean s_above = FALSE;
-    s_above = !s_above;
-    gtk_window_set_keep_above(w, s_above);
+    gboolean above = !GPOINTER_TO_INT(
+        g_object_get_data(G_OBJECT(g_window), "npp-ontop"));
+    g_object_set_data(G_OBJECT(g_window), "npp-ontop",
+                      GINT_TO_POINTER(above));
+    gtk_window_set_keep_above(w, above);
 }
 static void action_fullscreen(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
@@ -2757,6 +2759,160 @@ static void action_run_saved(GSimpleAction *a, GVariant *p, gpointer u) {
     run_execute(g_window ? GTK_WINDOW(g_window) : NULL, cmd,
                 d ? d->filepath : NULL);
 }
+/* ── GAP-150 — menu checkmarks + context enable/disable ──────────────
+ * GTK renders a check for stateful boolean actions and dims disabled
+ * ones; macOS gets both lazily via validateUserInterfaceItem. Here the
+ * single source of truth is main_menu_state_sync(), invoked from: app
+ * startup, an after-activate hook on every toggle action, tab switch
+ * (editor.c on_switch_page), editor_apply_prefs, and the toolbar's
+ * macro record buttons. */
+
+static void menu_sync_state(GActionMap *am, const char *name, gboolean on)
+{
+    GAction *a = g_action_map_lookup_action(am, name);
+    if (a) g_simple_action_set_state(G_SIMPLE_ACTION(a),
+                                     g_variant_new_boolean(on));
+}
+static void menu_sync_enabled(GActionMap *am, const char *name, gboolean en)
+{
+    GAction *a = g_action_map_lookup_action(am, name);
+    if (a) g_simple_action_set_enabled(G_SIMPLE_ACTION(a), en);
+}
+
+void main_menu_state_sync(void)
+{
+    GApplication *app = g_application_get_default();
+    if (!app) return;
+    GActionMap *am = G_ACTION_MAP(app);
+
+    NppDoc *d = editor_current_doc();
+    GtkWidget *sci = (d && d->sci) ? d->sci : NULL;
+    gboolean have  = sci != NULL;
+    gboolean rec   = macro_is_recording();
+    gboolean split = editor_split_active();
+
+    /* ── checkmarks ── */
+    /* Word wrap + line numbers are LIVE per-view toggles (their actions
+     * flip the widget, not the pref) — read the view (macOS reads
+     * ed.wordWrapEnabled the same way). */
+    menu_sync_state(am, "word-wrap",
+        sci && scintilla_send_message(SCINTILLA(sci),
+                                      SCI_GETWRAPMODE, 0, 0) != 0);
+    menu_sync_state(am, "show-ws",          g_prefs.show_whitespace);
+    menu_sync_state(am, "show-eol",         g_prefs.show_eol);
+    menu_sync_state(am, "show-all-chars",
+                    g_prefs.show_whitespace && g_prefs.show_eol);
+    menu_sync_state(am, "show-line-numbers",
+        sci && scintilla_send_message(SCINTILLA(sci),
+                                      SCI_GETMARGINWIDTHN, 0, 0) > 0);
+    menu_sync_state(am, "toggle-tab-bar-wrap", g_prefs.tab_bar_wrap);
+    menu_sync_state(am, "spell-toggle",     spell_is_enabled());
+
+    if (g_window) {
+        GObject *w = G_OBJECT(g_window);
+        menu_sync_state(am, "always-on-top",
+            GPOINTER_TO_INT(g_object_get_data(w, "npp-ontop")) != 0);
+        menu_sync_state(am, "post-it",
+            GPOINTER_TO_INT(g_object_get_data(w, "npp-postit")) != 0);
+        menu_sync_state(am, "distraction-free",
+            GPOINTER_TO_INT(g_object_get_data(w, "npp-dfree")) != 0);
+        menu_sync_state(am, "sync-scroll-v",
+            GPOINTER_TO_INT(g_object_get_data(w, "npp-sync-v")) != 0);
+        menu_sync_state(am, "sync-scroll-h",
+            GPOINTER_TO_INT(g_object_get_data(w, "npp-sync-h")) != 0);
+    }
+
+    sptr_t eol = -1;
+    gboolean ro = FALSE, indent_g = FALSE, wrapsym = FALSE,
+             marks_hidden = FALSE, be_armed = FALSE, rtl = FALSE;
+    if (sci) {
+        ScintillaObject *so = SCINTILLA(sci);
+        eol      = scintilla_send_message(so, SCI_GETEOLMODE, 0, 0);
+        ro       = scintilla_send_message(so, SCI_GETREADONLY, 0, 0) != 0;
+        indent_g = scintilla_send_message(so, SCI_GETINDENTATIONGUIDES, 0, 0) != 0;
+        wrapsym  = scintilla_send_message(so, SCI_GETWRAPVISUALFLAGS, 0, 0) != 0;
+        marks_hidden =
+            scintilla_send_message(so, SCI_GETMARGINWIDTHN, 1, 0) == 0;
+        be_armed = g_object_get_data(G_OBJECT(sci), "npp-be-armed") != NULL;
+        rtl      = scintilla_send_message(so, SCI_GETBIDIRECTIONAL, 0, 0)
+                   == SC_BIDIRECTIONAL_R2L;
+    }
+    menu_sync_state(am, "show-indent-guide", indent_g);
+    menu_sync_state(am, "show-wrap-symbol",  wrapsym);
+    menu_sync_state(am, "hide-line-marks",   marks_hidden);
+    menu_sync_state(am, "toggle-readonly",   ro);
+    menu_sync_state(am, "begin-end-select",        be_armed);
+    menu_sync_state(am, "begin-end-select-column", be_armed);
+    menu_sync_state(am, "text-dir-rtl",  have && rtl);
+    menu_sync_state(am, "text-dir-ltr",  have && !rtl);
+    menu_sync_state(am, "eol-crlf", eol == SC_EOL_CRLF);
+    menu_sync_state(am, "eol-lf",   eol == SC_EOL_LF);
+    menu_sync_state(am, "eol-cr",   eol == SC_EOL_CR);
+    menu_sync_state(am, "toggle-monitoring",
+                    d && d->filepath && d->monitoring);
+    menu_sync_state(am, "tab-pin-toggle", sci && editor_tab_pinned(sci));
+
+    /* ── enable/disable rules (macOS validateUserInterfaceItem) ── */
+    menu_sync_enabled(am, "macro-start",   have && !rec);
+    menu_sync_enabled(am, "macro-stop",    have && rec);
+    menu_sync_enabled(am, "macro-play",    have && !rec && macro_has_macro());
+    menu_sync_enabled(am, "macro-save-as", have && !rec && macro_has_macro());
+    menu_sync_enabled(am, "macro-play-n",  have && !rec);
+    menu_sync_enabled(am, "macro-batch",   !rec);
+    menu_sync_enabled(am, "sync-scroll-v", split);
+    menu_sync_enabled(am, "sync-scroll-h", split);
+    menu_sync_enabled(am, "split-focus-other", split);
+    menu_sync_enabled(am, "focus-other-view",  split);
+    menu_sync_enabled(am, "split-close",       split);
+    /* EOL radio: macOS also dims the active mode, but a GTK popover
+     * renders NO checkmark on an insensitive item — the check is the
+     * more useful signal, so the active mode stays enabled (converting
+     * to itself is a harmless no-op). */
+    menu_sync_enabled(am, "eol-crlf", have);
+    menu_sync_enabled(am, "eol-lf",   have);
+    menu_sync_enabled(am, "eol-cr",   have);
+    /* Monitoring needs a real file on disk. */
+    menu_sync_enabled(am, "toggle-monitoring", d && d->filepath != NULL);
+}
+
+/* Idle trampoline — editor.c defers the tab-switch sync here because
+ * the notebook still reports the OLD page during switch-page emission. */
+gboolean main_menu_state_sync_idle(gpointer u)
+{
+    (void)u;
+    main_menu_state_sync();
+    return G_SOURCE_REMOVE;
+}
+
+/* After-activate trampoline: re-derive all states once the toggle's own
+ * handler has flipped the underlying truth. */
+static void menu_state_after_activate(GSimpleAction *a, GVariant *p,
+                                      gpointer u)
+{
+    (void)a; (void)p; (void)u;
+    main_menu_state_sync();
+}
+
+static void menu_state_hook_actions(GActionMap *am)
+{
+    static const char *names[] = {
+        "word-wrap","show-ws","show-eol","show-all-chars",
+        "show-indent-guide","show-line-numbers","show-wrap-symbol",
+        "always-on-top","post-it","distraction-free","hide-line-marks",
+        "sync-scroll-v","sync-scroll-h","begin-end-select",
+        "begin-end-select-column","eol-crlf","eol-lf","eol-cr",
+        "toggle-readonly","toggle-monitoring","toggle-tab-bar-wrap",
+        "tab-pin-toggle","text-dir-ltr","text-dir-rtl","spell-toggle",
+        "macro-start","macro-stop","macro-play","macro-save-as",
+        "split-toggle","split-clone","split-close",
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(names); i++) {
+        GAction *a = g_action_map_lookup_action(am, names[i]);
+        if (a) g_signal_connect_after(a, "activate",
+                   G_CALLBACK(menu_state_after_activate), NULL);
+    }
+}
+
 static void action_modify_shortcut_run(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     GApplication *app = g_application_get_default();
@@ -6332,12 +6488,12 @@ static const GActionEntry kAppActions[] = {
     { "open-plugins-folder",  action_open_plugins_folder, NULL, NULL, NULL },
     { "plugin-cmd",           action_plugin_cmd,          "i",  NULL, NULL },
     /* G11.3 View → Show Symbol / Zoom */
-    { "show-ws",            action_show_ws,            NULL, NULL, NULL },
-    { "show-eol",           action_show_eol,           NULL, NULL, NULL },
-    { "show-all-chars",     action_show_all_chars,     NULL, NULL, NULL },
-    { "show-indent-guide",  action_show_indent_guide,  NULL, NULL, NULL },
-    { "show-line-numbers",  action_show_line_numbers,  NULL, NULL, NULL },
-    { "show-wrap-symbol",   action_show_wrap_symbol,   NULL, NULL, NULL },
+    { "show-ws",            action_show_ws,            NULL, "false", NULL },
+    { "show-eol",           action_show_eol,           NULL, "false", NULL },
+    { "show-all-chars",     action_show_all_chars,     NULL, "false", NULL },
+    { "show-indent-guide",  action_show_indent_guide,  NULL, "false", NULL },
+    { "show-line-numbers",  action_show_line_numbers,  NULL, "false", NULL },
+    { "show-wrap-symbol",   action_show_wrap_symbol,   NULL, "false", NULL },
     { "zoom-in",            action_zoom_in,            NULL, NULL, NULL },
     { "zoom-out",           action_zoom_out,           NULL, NULL, NULL },
     { "zoom-reset",         action_zoom_reset,         NULL, NULL, NULL },
@@ -6378,8 +6534,8 @@ static const GActionEntry kAppActions[] = {
     { "ms-undo",       action_ms_undo,       NULL, NULL, NULL },
     { "ms-skip",       action_ms_skip,       NULL, NULL, NULL },
     /* G11.6 View toggles */
-    { "word-wrap",          action_word_wrap,          NULL, NULL, NULL },
-    { "always-on-top",      action_always_on_top,      NULL, NULL, NULL },
+    { "word-wrap",          action_word_wrap,          NULL, "false", NULL },
+    { "always-on-top",      action_always_on_top,      NULL, "false", NULL },
     { "fullscreen",         action_fullscreen,         NULL, NULL, NULL },
     /* G11.4 Tab nav */
     { "tab-next",           action_tab_next,           NULL, NULL, NULL },
@@ -6471,17 +6627,17 @@ static const GActionEntry kAppActions[] = {
     { "open-in-new-instance",action_open_in_new_instance,NULL, NULL, NULL },
     { "modify-shortcut-macro",action_modify_shortcut_macro,NULL,NULL, NULL },
     { "modify-shortcut-run", action_modify_shortcut_run, NULL, NULL, NULL },
-    { "begin-end-select",    action_begin_end_select,    NULL, NULL, NULL },
-    { "begin-end-select-column", action_begin_end_select_column, NULL, NULL, NULL },
+    { "begin-end-select",    action_begin_end_select,    NULL, "false", NULL },
+    { "begin-end-select-column", action_begin_end_select_column, NULL, "false", NULL },
     { "select-find-next",    action_select_find_next,    NULL, NULL, NULL },
     { "select-find-prev",    action_select_find_prev,    NULL, NULL, NULL },
     { "toggle-spell-check",  action_toggle_spell_check,  NULL, NULL, NULL },
     /* Q-fix View misc + File misc (8 items). */
-    { "distraction-free",    action_distraction_free,    NULL, NULL, NULL },
-    { "post-it",             action_post_it,             NULL, NULL, NULL },
-    { "hide-line-marks",     action_hide_line_marks,     NULL, NULL, NULL },
-    { "sync-scroll-v",       action_sync_scroll_v,       NULL, NULL, NULL },
-    { "sync-scroll-h",       action_sync_scroll_h,       NULL, NULL, NULL },
+    { "distraction-free",    action_distraction_free,    NULL, "false", NULL },
+    { "post-it",             action_post_it,             NULL, "false", NULL },
+    { "hide-line-marks",     action_hide_line_marks,     NULL, "false", NULL },
+    { "sync-scroll-v",       action_sync_scroll_v,       NULL, "false", NULL },
+    { "sync-scroll-h",       action_sync_scroll_h,       NULL, "false", NULL },
     { "focus-other-view",    action_focus_other_view,    NULL, NULL, NULL },
     { "print-now",           action_print_now,           NULL, NULL, NULL },
     { "open-containing-files",    action_open_containing_files,    NULL, NULL, NULL },
@@ -6537,7 +6693,7 @@ static const GActionEntry kAppActions[] = {
     { "fold-current-level",  action_fold_current_level,  NULL, NULL, NULL },
     { "unfold-current-level",action_unfold_current_level,NULL, NULL, NULL },
     { "trim-and-save",       action_trim_and_save,       NULL, NULL, NULL },
-    { "toggle-tab-bar-wrap", action_toggle_tab_bar_wrap, NULL, NULL, NULL },
+    { "toggle-tab-bar-wrap", action_toggle_tab_bar_wrap, NULL, "false", NULL },
     { "sort-tabs-name-asc",  action_sort_tabs_name_asc,  NULL, NULL, NULL },
     { "sort-tabs-name-desc", action_sort_tabs_name_desc, NULL, NULL, NULL },
     { "sort-tabs-ext-asc",   action_sort_tabs_ext_asc,   NULL, NULL, NULL },
@@ -6545,9 +6701,9 @@ static const GActionEntry kAppActions[] = {
     { "sort-tabs-path-asc",  action_sort_tabs_path_asc,  NULL, NULL, NULL },
     { "sort-tabs-path-desc", action_sort_tabs_path_desc, NULL, NULL, NULL },
     /* G12.8 EOL */
-    { "eol-crlf",            action_eol_crlf,            NULL, NULL, NULL },
-    { "eol-lf",              action_eol_lf,              NULL, NULL, NULL },
-    { "eol-cr",              action_eol_cr,              NULL, NULL, NULL },
+    { "eol-crlf",            action_eol_crlf,            NULL, "false", NULL },
+    { "eol-lf",              action_eol_lf,              NULL, "false", NULL },
+    { "eol-cr",              action_eol_cr,              NULL, "false", NULL },
     /* G12.9 Blank ops */
     { "trim-trailing",           action_trim_trailing,           NULL, NULL, NULL },
     { "trim-leading",            action_trim_leading,            NULL, NULL, NULL },
@@ -6562,7 +6718,7 @@ static const GActionEntry kAppActions[] = {
     { "remove-blank-lines",  action_remove_blank_lines,  NULL, NULL, NULL },
     /* G12.13/14 Modes */
     { "column-mode",         action_column_mode,         NULL, NULL, NULL },
-    { "toggle-readonly",     action_toggle_readonly,     NULL, NULL, NULL },
+    { "toggle-readonly",     action_toggle_readonly,     NULL, "false", NULL },
     /* G13 Bookmarks */
     { "bookmark-toggle",        action_bookmark_toggle,        NULL, NULL, NULL },
     { "bookmark-next",          action_bookmark_next,          NULL, NULL, NULL },
@@ -6606,7 +6762,7 @@ static const GActionEntry kAppActions[] = {
     /* G15 Command Palette */
     { "command-palette",     action_command_palette,     NULL, NULL, NULL },
     /* G20 Tab polish */
-    { "tab-pin-toggle",      action_tab_pin_toggle,      NULL, NULL, NULL },
+    { "tab-pin-toggle",      action_tab_pin_toggle,      NULL, "false", NULL },
     { "tab-set-color",       action_tab_set_color,       "i",  NULL, NULL },
     { "move-to-vview",       action_move_vview,          NULL, NULL, NULL },
     { "clone-to-vview",      action_clone_vview,         NULL, NULL, NULL },
@@ -6624,9 +6780,9 @@ static const GActionEntry kAppActions[] = {
     /* View extras */
     { "hide-lines",          action_hide_lines,          NULL, NULL, NULL },
     { "show-lines",          action_show_lines,          NULL, NULL, NULL },
-    { "text-dir-ltr",        action_text_dir_ltr,        NULL, NULL, NULL },
-    { "text-dir-rtl",        action_text_dir_rtl,        NULL, NULL, NULL },
-    { "toggle-monitoring",   action_toggle_monitoring,   NULL, NULL, NULL },
+    { "text-dir-ltr",        action_text_dir_ltr,        NULL, "false", NULL },
+    { "text-dir-rtl",        action_text_dir_rtl,        NULL, "false", NULL },
+    { "toggle-monitoring",   action_toggle_monitoring,   NULL, "false", NULL },
     /* File */
     { "move-to-trash",       action_move_to_trash,       NULL, NULL, NULL },
     /* Reload-with-<encoding> — parametric, takes encoding display name. */
@@ -6644,7 +6800,7 @@ static const GActionEntry kAppActions[] = {
     { "ac-function-hint-stop", action_function_param_hint_cancel,NULL, NULL, NULL },
     { "ac-select",             action_autocomplete_select,      NULL, NULL, NULL },
     /* G39 Spell check */
-    { "spell-toggle",          action_spell_toggle,             NULL, NULL, NULL },
+    { "spell-toggle",          action_spell_toggle,             NULL, "false", NULL },
     { "spell-check-doc",       action_spell_check_doc,          NULL, NULL, NULL },
     /* G34 Find extras */
     { "find-all-current",      action_find_all_current,         NULL, NULL, NULL },
@@ -8921,6 +9077,7 @@ static void on_startup(GtkApplication *app, gpointer ud)
     g_action_map_add_action_entries(G_ACTION_MAP(app),
                                     wrap_recordable_entries(),
                                     G_N_ELEMENTS(kAppActions), NULL);
+    menu_state_hook_actions(G_ACTION_MAP(app));   /* GAP-150 */
     macro_set_changed_hook(rebuild_macro_menu);
     macro_push_accels();
 
@@ -9110,6 +9267,7 @@ static void on_activate(GtkApplication *app, gpointer ud)
         cli_apply_window_flags();                    /* GAP-109 */
     }
     gtk_window_present(GTK_WINDOW(g_window));
+    main_menu_state_sync();   /* GAP-150 — initial checkmarks/enables */
     g_idle_add(focus_editor_idle, NULL);
     g_idle_add(cli_post_open_idle, NULL);            /* GAP-109 */
     g_timeout_add(2500, startup_update_check, NULL);

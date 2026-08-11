@@ -2663,6 +2663,15 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
     extern void main_sync_language_menu(const char *key);
     main_sync_language_menu(
         (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang"));
+    /* GAP-150 — per-doc menu checks (read-only, EOL, monitoring, pin,
+     * RTL, …) follow the incoming tab. DEFERRED to idle: during a
+     * switch-page emission the notebook still reports the OLD page
+     * (same trap as the language-menu sync above), so a synchronous
+     * sync would publish the outgoing tab's state. */
+    {
+        extern gboolean main_menu_state_sync_idle(gpointer);
+        g_idle_add(main_menu_state_sync_idle, NULL);
+    }
     update_window_title();
     findreplace_set_sci(sci);
     toolbar_sync_toggles(sci);
@@ -4386,6 +4395,8 @@ void editor_apply_prefs(void)
     g_ptr_array_free(docs, TRUE);
     statusbar_update_from_sci(
         sci_of_page(gtk_notebook_get_current_page(GTK_NOTEBOOK(s_notebook))));
+    /* GAP-150 — pref toggles (word wrap, show-WS, …) drive menu checks. */
+    { extern void main_menu_state_sync(void); main_menu_state_sync(); }
 }
 
 /* Called from prefs.c to refresh all window titles */

@@ -581,6 +581,7 @@ static void on_macro_start(GtkButton *i, gpointer d)
     NppDoc *doc = editor_current_doc();
     if (!doc) return;
     macro_start_recording(doc->sci);
+    { extern void main_menu_state_sync(void); main_menu_state_sync(); }
     toolbar_update_macro_buttons();
 }
 
@@ -590,6 +591,7 @@ static void on_macro_stop(GtkButton *i, gpointer d)
     NppDoc *doc = editor_current_doc();
     if (!doc) return;
     macro_stop_recording(doc->sci);
+    { extern void main_menu_state_sync(void); main_menu_state_sync(); }
     toolbar_update_macro_buttons();
 }
 
