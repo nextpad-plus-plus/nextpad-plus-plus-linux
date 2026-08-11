@@ -36,6 +36,7 @@ typedef void        (*SetInfo_t)(NppData);
 typedef struct {
     void          *dl_handle;
     char           name[128];
+    char           dir[512];     /* GAP-157g — .so's directory (icons)  */
     FuncItem      *funcs;
     int            n_funcs;
     BeNotified_t   be_notified;
@@ -96,6 +97,16 @@ static void load_plugin(const char *sopath)
     IsUnicode_t     is_unicode   = (IsUnicode_t)    dlsym(h, "isUnicode");
 
     if (!get_name || !get_funcs || !be_notified || !msg_proc || !is_unicode) {
+        /* GAP-157f — the ABI strictness (all five exports, GAP-88) is
+         * deliberate, but rejecting SILENTLY cost a debugging session
+         * (CSVLint). Name the missing ones. */
+        g_warning("plugin: rejected %s — missing export(s):%s%s%s%s%s",
+                  sopath,
+                  get_name    ? "" : " getName",
+                  get_funcs   ? "" : " getFuncsArray",
+                  be_notified ? "" : " beNotified",
+                  msg_proc    ? "" : " messageProc",
+                  is_unicode  ? "" : " isUnicode");
         dlclose(h);
         return;
     }
@@ -119,8 +130,20 @@ static void load_plugin(const char *sopath)
     p->funcs   = (n > 0 && funcs) ? funcs : NULL;
     p->n_funcs = (n > 0 && funcs) ? n     : 0;
 
+    /* GAP-157c — separators (pFunc == NULL) get NO cmdID, like macOS
+     * (NppPluginManager.mm:486-489). Saved shortcuts are unaffected:
+     * shortcuts.xml stores the FuncItem INDEX (internalID), not the
+     * runtime cmdID. */
     for (int i = 0; i < p->n_funcs; i++)
-        p->funcs[i].cmdID = s_next_cmd_id++;
+        p->funcs[i].cmdID = p->funcs[i].pFunc ? s_next_cmd_id++ : 0;
+
+    /* GAP-157g — remember where the .so lives: toolbar-icon fallbacks
+     * (toolbar.png / toolbar_dark.png) resolve against this. */
+    {
+        gchar *d = g_path_get_dirname(sopath);
+        g_strlcpy(p->dir, d, sizeof(p->dir));
+        g_free(d);
+    }
 
     s_n_plugins++;
     g_message("plugin: loaded '%s' (%d items) from %s", p->name, p->n_funcs, sopath);
@@ -245,7 +268,8 @@ void plugin_notify_tbmodification(void)
      * TBMODIFICATION back-to-back; plugins register toolbar icons here. */
     SCNotification n2;
     memset(&n2, 0, sizeof(n2));
-    n2.nmhdr.code = NPPN_TBMODIFICATION;
+    n2.nmhdr.code     = NPPN_TBMODIFICATION;
+    n2.nmhdr.hwndFrom = (void *)s_npp_data.nppHandle;   /* GAP-157b */
     plugin_notify_all(&n2);
 }
 
@@ -341,7 +365,18 @@ static long host_msg_cb(unsigned int msg, unsigned long wParam, long lParam)
 static void fire_notification(unsigned int code, void *buffer_id) {
     SCNotification n;
     memset(&n, 0, sizeof(n));
-    n.nmhdr.hwndFrom = NULL;
+    /* GAP-157b — stamp hwndFrom with the host handle plugins were given
+     * in NppData (macOS stamps kHandleNpp the same way,
+     * NppPluginManager.mm:541-543): a Windows-idiom
+     * `hwndFrom == nppData._nppHandle` source filter now matches.
+     * EXCEPTION: NPPN_DOCORDERCHANGED — Windows overloads hwndFrom with
+     * the new tab index there, and the LuaScript port reads it as an
+     * int; keep it NULL (= index unknown) rather than a fake pointer.
+     * SCN_* forwards are untouched: ScintillaGTK stamps the real
+     * emitting widget, which equals scintillaMain/SecondHandle — ports
+     * (ColumnsPlusPlus elastic tabstops) rely on that identity. */
+    n.nmhdr.hwndFrom = (code == NPPN_DOCORDERCHANGED)
+                           ? NULL : (void *)s_npp_data.nppHandle;
     n.nmhdr.idFrom   = (uptr_t)buffer_id;
     n.nmhdr.code     = code;
     /* Use the generic plugin_notify_all dispatcher already wired. */
@@ -359,6 +394,23 @@ void plugin_notify_doc_order_changed(void)       { fire_notification(NPPN_DOCORD
 void plugin_notify_ready(void)                   { fire_notification(NPPN_READY,           NULL); }
 void plugin_notify_before_shutdown(void)         { fire_notification(NPPN_BEFORESHUTDOWN,  NULL); }
 void plugin_notify_shutdown(void)                { fire_notification(NPPN_SHUTDOWN,        NULL); }
+
+/* GAP-157d — macOS unloads every plugin right after NPPN_SHUTDOWN
+ * (PluginInfo dtor dlclose, NppPluginManager.mm:88-90/525-527); Linux
+ * never dlclose'd, so plugin destructors/atexit never ran. The table is
+ * emptied FIRST so a stray late dispatch cannot reach a dying .so. */
+void plugin_unload_all(void)
+{
+    int n = s_n_plugins;
+    s_n_plugins = 0;
+    for (int i = 0; i < n; i++) {
+        if (s_plugins[i].dl_handle)
+            dlclose(s_plugins[i].dl_handle);
+        s_plugins[i].dl_handle = NULL;
+        s_plugins[i].funcs     = NULL;
+        s_plugins[i].n_funcs   = 0;
+    }
+}
 
 /* Track plugin panel registrations — stub list for now; G21 hooks them in. */
 typedef struct {
@@ -830,30 +882,26 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
          * = const char * path to a PNG icon (both light+dark sets are
          * the plugin's concern on this platform). */
         {
-            /* GAP-88g — when dark mode is active, prefer a sibling
-             * "<stem>_dark.png" if the plugin shipped one (macOS
-             * resolves toolbar_dark.png itself). Resolved at add time;
-             * theme switches don't live-swap plugin icons (documented
-             * host limitation). */
+            /* GAP-157g (supersedes the GAP-88g add-time resolve) — hand
+             * the RAW hint plus the owning plugin's directory to the
+             * toolbar; it resolves macOS's lookup order (hint_dark →
+             * hint → toolbar_dark.png → toolbar.png, probed in the
+             * plugin root then resources/, MWC:2808-2853) and can
+             * re-resolve live on a theme flip. */
             const char *icon = (const char *)(intptr_t)lParam;
-            extern void toolbar_add_plugin_button(const char *, int,
-                                                  const char *);
-            extern ThemeMode theme_mode_from_prefs(void);
-            gchar *dark = NULL;
-            if (icon && theme_mode_from_prefs() == THEME_DARK) {
-                const char *dot = strrchr(icon, '.');
-                if (dot && dot > icon) {
-                    dark = g_strdup_printf("%.*s_dark%s",
-                                           (int)(dot - icon), icon, dot);
-                    if (!g_file_test(dark, G_FILE_TEST_IS_REGULAR)) {
-                        g_free(dark);
-                        dark = NULL;
+            const char *dir  = NULL;
+            for (int i = 0; i < s_n_plugins && !dir; i++)
+                for (int f = 0; f < s_plugins[i].n_funcs; f++)
+                    if (s_plugins[i].funcs[f].pFunc &&
+                        s_plugins[i].funcs[f].cmdID == (int)wParam) {
+                        dir = s_plugins[i].dir;
+                        break;
                     }
-                }
-            }
-            toolbar_add_plugin_button(dark ? dark : icon, (int)wParam,
+            extern void toolbar_add_plugin_button(const char *,
+                                                  const char *, int,
+                                                  const char *);
+            toolbar_add_plugin_button(dir, icon, (int)wParam,
                                       plugin_cmd_name_by_id((int)wParam));
-            g_free(dark);
             return 1;
         }
     case NPPM_DARKMODESUBCLASSANDTHEME:
@@ -993,8 +1041,22 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         /* Synonym for MENUCOMMAND. */
         return plugin_host_message(NPPM_MENUCOMMAND, wParam, lParam);
 
-    case NPPM_GETBUFFERLANGTYPE:
-        return plugin_host_message(NPPM_GETCURRENTLANGTYPE, wParam, lParam);
+    case NPPM_GETBUFFERLANGTYPE: {
+        /* GAP-157a — Windows contract: int(UINT_PTR bufferID); -1 for
+         * an invalid id (macOS NppPluginManager.mm:1382-1398). Was an
+         * alias of GETCURRENTLANGTYPE that ignored the bufferID, so
+         * plugins asking about a BACKGROUND buffer (LuaScript, NppMCP)
+         * got the active buffer's language. Resolution mirrors macOS:
+         * built-in table, then loaded-UDL name → L_USER, else L_TEXT. */
+        NppDoc *d = validate_buffer_id((void *)(intptr_t)wParam);
+        if (!d || !d->sci) return -1;
+        const char *lang = g_object_get_data(G_OBJECT(d->sci), "npp-lang");
+        if (!lang) lang = "";
+        int found = langtype_from_key(lang);
+        if (found == 0 && lang[0] && udl_find_by_name(lang) >= 0)
+            return 15;   /* L_USER */
+        return found;
+    }
     case NPPM_SETBUFFERLANGTYPE: {
         /* GAP-88f (Windows: BOOL(bufferID, langType); macOS parity):
          * 0 = plain text; unmapped ids / L_USER refused like Windows

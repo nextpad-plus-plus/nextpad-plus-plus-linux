@@ -9536,5 +9536,11 @@ int main(int argc, char **argv)
     g_signal_connect(g_app, "open",     G_CALLBACK(on_open),     NULL);
     int status = g_application_run(G_APPLICATION(g_app), argc, argv);
     g_object_unref(g_app);
+    /* GAP-157d — dlclose every plugin so their destructors finally run
+     * (macOS unloads right after NPPN_SHUTDOWN; here it must wait until
+     * GTK teardown is over — plugin panel widgets carry signal closures
+     * pointing into the .so, and unloading before the windows died
+     * would leave GTK calling into unmapped code). */
+    plugin_unload_all();
     return status;
 }

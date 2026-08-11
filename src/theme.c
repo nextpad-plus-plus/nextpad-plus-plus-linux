@@ -287,6 +287,11 @@ void theme_apply(ThemeMode mode)
     panel_frame_retheme();
     extern void searchresults_apply_theme(void);
     searchresults_apply_theme();
+
+    /* GAP-157g — plugin toolbar icons re-resolve their light/dark
+     * variant against the new theme (no-op before any were added). */
+    extern void toolbar_retheme_plugin_icons(void);
+    toolbar_retheme_plugin_icons();
 }
 
 /* ================================================================== */

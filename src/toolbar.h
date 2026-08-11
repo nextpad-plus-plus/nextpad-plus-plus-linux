@@ -12,7 +12,12 @@ void toolbar_sync_toggles(GtkWidget *sci);
 /* Sync panel toggle buttons to actual panel visibility (call after any show/hide). */
 void toolbar_sync_panels(void);
 /* GAP-74 — plugin-registered toolbar button (grouped after a divider). */
-void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
+/* GAP-157g — plugin_dir + raw icon hint; the toolbar resolves the
+ * macOS lookup order (hint_dark/hint/toolbar_dark.png/toolbar.png) and
+ * re-resolves on theme flips. */
+void toolbar_retheme_plugin_icons(void);
+void toolbar_add_plugin_button(const char *plugin_dir,
+                               const char *icon_hint, int cmd_id,
                                const char *tooltip);
 
 /* Enable/disable macro toolbar buttons based on current recording state. */

@@ -7,6 +7,7 @@
  * dividers — the standard GTK4 idiom for a button strip.
  */
 #include "toolbar.h"
+#include "theme.h"
 #include "gtk_compat.h"
 #include "editor.h"
 #include "findreplace.h"
@@ -1220,25 +1221,86 @@ static void on_plugin_toolbar_clicked(GtkButton *b, gpointer u)
 static GtkWidget *s_plugin_group;   /* box appended on first button */
 
 /* One plugin icon button (shared by Classic group + Tahoe capsule). */
+/* GAP-157g — macOS plugin-toolbar-icon lookup order
+ * (MainWindowController.mm:2808-2853), first hit wins:
+ *   dark:  <hint stem>_dark.<ext>  →  <hint>  →  toolbar_dark.png  →
+ *          toolbar.png
+ *   light: <hint>  →  toolbar.png
+ * Relative candidates are probed in <dir>/ then <dir>/resources/; an
+ * ABSOLUTE hint (the pre-existing Linux ABI — plugins pass full paths)
+ * is probed as-is, with the _dark sibling looked up beside it. */
+static gchar *plugin_icon_probe(const char *dir, const char *cand)
+{
+    if (!cand || !*cand) return NULL;
+    if (g_path_is_absolute(cand))
+        return g_file_test(cand, G_FILE_TEST_IS_REGULAR)
+                   ? g_strdup(cand) : NULL;
+    if (!dir || !*dir) return NULL;
+    gchar *pth = g_build_filename(dir, cand, NULL);
+    if (g_file_test(pth, G_FILE_TEST_IS_REGULAR)) return pth;
+    g_free(pth);
+    pth = g_build_filename(dir, "resources", cand, NULL);
+    if (g_file_test(pth, G_FILE_TEST_IS_REGULAR)) return pth;
+    g_free(pth);
+    return NULL;
+}
+
+static gchar *plugin_icon_dark_sibling(const char *hint)
+{
+    const char *dot = strrchr(hint, '.');
+    const char *slash = strrchr(hint, '/');
+    if (dot && (!slash || dot > slash))
+        return g_strdup_printf("%.*s_dark%s", (int)(dot - hint), hint, dot);
+    return g_strdup_printf("%s_dark", hint);
+}
+
+static gchar *resolve_plugin_icon(const char *dir, const char *hint)
+{
+    extern ThemeMode theme_mode_from_prefs(void);
+    extern gboolean  theme_resolve_is_dark(ThemeMode);
+    gboolean dark = theme_resolve_is_dark(theme_mode_from_prefs());
+    gchar *found = NULL;
+    if (hint && *hint) {
+        if (dark) {
+            gchar *dh = plugin_icon_dark_sibling(hint);
+            found = plugin_icon_probe(dir, dh);
+            g_free(dh);
+        }
+        if (!found) found = plugin_icon_probe(dir, hint);
+    }
+    if (!found && dark) found = plugin_icon_probe(dir, "toolbar_dark.png");
+    if (!found)         found = plugin_icon_probe(dir, "toolbar.png");
+    return found;
+}
+
+/* GAP-157g — image widget for a plugin icon path; NULL when the file
+ * can't be loaded (caller falls back to the generic add-on icon). */
+static GtkWidget *make_plugin_icon_image(const char *icon_path)
+{
+    GdkPixbuf *pb = icon_path ? gdk_pixbuf_new_from_file(icon_path, NULL)
+                              : NULL;
+    if (!pb) return NULL;
+    if (!gdk_pixbuf_get_has_alpha(pb)) {
+        GdkPixbuf *a = gdk_pixbuf_add_alpha(pb, FALSE, 0, 0, 0);
+        g_object_unref(pb);
+        pb = a;
+    }
+    if (g_prefs.toolbar_color_plugins)
+        toolbar_colorize_pixbuf(pb);
+    GdkTexture *tex = gdk_texture_new_for_pixbuf(pb);
+    g_object_unref(pb);
+    GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
+    g_object_unref(tex);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), icon_px());
+    return img;
+}
+
 static GtkWidget *make_plugin_icon_button(const char *icon_path, int cmd_id,
                                           const char *tooltip)
 {
     GtkWidget *btn = gtk_button_new();
-    GdkPixbuf *pb = icon_path ? gdk_pixbuf_new_from_file(icon_path, NULL)
-                              : NULL;
-    if (pb) {
-        if (!gdk_pixbuf_get_has_alpha(pb)) {
-            GdkPixbuf *a = gdk_pixbuf_add_alpha(pb, FALSE, 0, 0, 0);
-            g_object_unref(pb);
-            pb = a;
-        }
-        if (g_prefs.toolbar_color_plugins)
-            toolbar_colorize_pixbuf(pb);
-        GdkTexture *tex = gdk_texture_new_for_pixbuf(pb);
-        g_object_unref(pb);
-        GtkWidget *img = gtk_image_new_from_paintable(GDK_PAINTABLE(tex));
-        g_object_unref(tex);
-        gtk_image_set_pixel_size(GTK_IMAGE(img), icon_px());
+    GtkWidget *img = make_plugin_icon_image(icon_path);
+    if (img) {
         gtk_button_set_child(GTK_BUTTON(btn), img);
     } else {
         gtk_button_set_icon_name(GTK_BUTTON(btn),
@@ -1265,7 +1327,12 @@ static GtkWidget *make_plugin_icon_button(const char *icon_path, int cmd_id,
  * overflow. Overflow items ride the ▾ label menu through
  * app.plugin-cmd(i) — same dispatch (and macro recording) as the menu. */
 
-typedef struct { char *name; char *icon_path; int cmd_id; } PluginTbItem;
+/* GAP-157g — icon_path is the RESOLVED path for the current theme;
+ * dir/hint are kept so a theme flip can re-resolve (macOS
+ * _resolvePluginToolbarIconForDir). btn is the live classic-mode
+ * button, NULL in Tahoe mode (the capsule rebuild recreates those). */
+typedef struct { char *name; char *icon_path; char *dir; char *hint;
+                 int cmd_id; GtkWidget *btn; } PluginTbItem;
 static GPtrArray *s_plugin_items;      /* PluginTbItem*, registration order */
 static GtkWidget *s_plugins_slot;      /* Modern: capsule anchor in tb */
 static GtkWidget *s_plugins_capsule;   /* current capsule card, or NULL */
@@ -1596,7 +1663,8 @@ static void rebuild_plugins_capsule(void)
     g_strfreev(hidden);
 }
 
-void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
+void toolbar_add_plugin_button(const char *plugin_dir,
+                               const char *icon_hint, int cmd_id,
                                const char *tooltip)
 {
     if (!s_toolbar) return;
@@ -1624,7 +1692,10 @@ void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
         }
         PluginTbItem *it = g_new0(PluginTbItem, 1);
         it->name      = g_strdup(tooltip);
-        it->icon_path = g_strdup(icon_path ? icon_path : "");
+        it->dir       = g_strdup(plugin_dir ? plugin_dir : "");
+        it->hint      = g_strdup(icon_hint ? icon_hint : "");
+        gchar *res    = resolve_plugin_icon(it->dir, it->hint);
+        it->icon_path = res ? res : g_strdup("");
         it->cmd_id    = cmd_id;
         g_ptr_array_add(s_plugin_items, it);
         rebuild_plugins_capsule();
@@ -1642,8 +1713,51 @@ void toolbar_add_plugin_button(const char *icon_path, int cmd_id,
                                  "npp-plugin-toolbar-group");
         gtk_box_append(GTK_BOX(s_toolbar), s_plugin_group);
     }
-    gtk_box_append(GTK_BOX(s_plugin_group),
-                   make_plugin_icon_button(icon_path, cmd_id, tooltip));
+    if (!s_plugin_items)
+        s_plugin_items = g_ptr_array_new();
+    PluginTbItem *it = g_new0(PluginTbItem, 1);
+    it->name      = g_strdup(tooltip ? tooltip : "");
+    it->dir       = g_strdup(plugin_dir ? plugin_dir : "");
+    it->hint      = g_strdup(icon_hint ? icon_hint : "");
+    gchar *res    = resolve_plugin_icon(it->dir, it->hint);
+    it->icon_path = res ? res : g_strdup("");
+    it->cmd_id    = cmd_id;
+    it->btn       = make_plugin_icon_button(
+                        it->icon_path[0] ? it->icon_path : NULL,
+                        cmd_id, tooltip);
+    g_ptr_array_add(s_plugin_items, it);
+    gtk_box_append(GTK_BOX(s_plugin_group), it->btn);
+}
+
+/* GAP-157g — re-resolve every plugin toolbar icon for the current
+ * theme and refresh the live buttons (macOS
+ * refreshPluginToolbarIconsForAppearance). Called from theme_apply. */
+void toolbar_retheme_plugin_icons(void)
+{
+    if (!s_plugin_items) return;
+    gboolean changed = FALSE;
+    for (guint i = 0; i < s_plugin_items->len; i++) {
+        PluginTbItem *it = g_ptr_array_index(s_plugin_items, i);
+        gchar *res = resolve_plugin_icon(it->dir, it->hint);
+        if (g_strcmp0(res ? res : "", it->icon_path) != 0) {
+            g_free(it->icon_path);
+            it->icon_path = res ? res : g_strdup("");
+            changed = TRUE;
+            if (it->btn) {   /* classic: swap the image in place */
+                GtkWidget *img = make_plugin_icon_image(
+                    it->icon_path[0] ? it->icon_path : NULL);
+                if (img)
+                    gtk_button_set_child(GTK_BUTTON(it->btn), img);
+                else
+                    gtk_button_set_icon_name(GTK_BUTTON(it->btn),
+                                             "application-x-addon-symbolic");
+            }
+        } else {
+            g_free(res);
+        }
+    }
+    if (changed && g_prefs.appearance_style == 1 && s_plugins_slot)
+        rebuild_plugins_capsule();
 }
 
 void toolbar_sync_panels(void)

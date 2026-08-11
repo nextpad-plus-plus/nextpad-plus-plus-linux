@@ -262,6 +262,14 @@ struct CommunicationInfo {
 #define NPPN_FILEDELETEFAILED            (NPPN_FIRST + 25)
 #define NPPN_FILEDELETED                 (NPPN_FIRST + 26)
 #define NPPN_DARKMODECHANGED             (NPPN_FIRST + 27)
+/* GAP-157e — present in the macOS SDK header (NppPluginInterfaceMac.h);
+ * neither host emits them yet, but ported plugin sources reference the
+ * names and must compile against this header unchanged. */
+#define NPPN_CMDLINEPLUGINMSG            (NPPN_FIRST + 28)
+#define NPPN_EXTERNALLEXERBUFFER         (NPPN_FIRST + 29)
+#define NPPN_GLOBALMODIFIED              (NPPN_FIRST + 30)
+#define NPPN_NATIVELANGCHANGED           (NPPN_FIRST + 31)
+#define NPPN_TOOLBARICONSETCHANGED       (NPPN_FIRST + 32)
 
 /* ------------------------------------------------------------------
  * Public hooks for editor.c / main.c to fire notifications.
@@ -277,6 +285,10 @@ void plugin_notify_doc_order_changed(void);
 void plugin_notify_ready(void);
 void plugin_notify_before_shutdown(void);
 void plugin_notify_shutdown(void);
+/* GAP-157d — dlclose every loaded plugin (destructors finally run).
+ * Call ONLY after plugin_notify_shutdown(): nothing may be dispatched
+ * to a plugin afterwards. */
+void plugin_unload_all(void);
 
 /* Field IDs for NPPM_SETSTATUSBAR */
 #define STATUSBAR_DOC_TYPE      0
