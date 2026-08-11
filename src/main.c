@@ -2835,8 +2835,9 @@ void main_menu_state_sync(void)
         marks_hidden =
             scintilla_send_message(so, SCI_GETMARGINWIDTHN, 1, 0) == 0;
         be_armed = g_object_get_data(G_OBJECT(sci), "npp-be-armed") != NULL;
-        /* GAP-153 — the backend ignores SETBIDIRECTIONAL, so read the
-         * per-widget flag (GETBIDIRECTIONAL always returns 0 here). */
+        /* GAP-153 — read the app-side per-widget flag (kept as the
+         * source of truth; patch 0016 also makes GETBIDIRECTIONAL
+         * real on this backend). */
         rtl      = editor_text_direction_rtl(sci);
     }
     menu_sync_state(am, "show-indent-guide", indent_g);

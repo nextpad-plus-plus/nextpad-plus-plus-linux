@@ -1106,10 +1106,12 @@ static void setup_sci(GtkWidget *sci)
     /* P17 — match macOS Scintilla setup.
      *  SCI_SETACCESSIBILITY=1     — expose Scintilla to assistive tech.
      *  SCI_AUTOCSETMAXWIDTH=80    — cap autocomplete popup width.
-     *  SCI_SETBIDIRECTIONAL       — try R2L (LTR fallback if unsupported). */
+     * (An old line here sent SETBIDIRECTIONAL R2L "as a probe" — inert
+     * while the backend ignored the message, but patch 0016 made it
+     * real and every view started right-aligned. Direction is owned by
+     * editor_set_text_direction, GAP-153.) */
     sci_msg(sci, SCI_SETACCESSIBILITY, SC_ACCESSIBILITY_ENABLED, 0);
     sci_msg(sci, SCI_AUTOCSETMAXWIDTH, 80, 0);
-    sci_msg(sci, SCI_SETBIDIRECTIONAL, SC_BIDIRECTIONAL_R2L, 0);
     sci_msg(sci, SCI_SETTABWIDTH,        (uptr_t)g_prefs.tab_width,  0);
     sci_msg(sci, SCI_SETUSETABS,         (uptr_t)g_prefs.use_tabs,   0);
     sci_msg(sci, SCI_SETCARETLINEVISIBLE,(uptr_t)g_prefs.highlight_current_line, 0);
@@ -1950,16 +1952,17 @@ void editor_refresh_tab_chrome(void)
 }
 
 /* ── GAP-153 — text direction (macOS EditorView setTextDirectionRTL/LTR).
- * The GTK4 Scintilla backend does not implement SetBidirectional (base
- * Editor.cxx ignores the set and GETBIDIRECTIONAL always reads 0), so
- * the flag is tracked per widget; the message is still sent for future
- * backend support and plugin visibility. The PORTABLE macOS halves are
- * ported: 10 mirrored arrow/word key bindings and forced word wrap
- * while RTL (with restore). NOTE the macOS key table uses 300/301,
- * which are SCK_DOWN/SCK_UP — an upstream bug; the real left/right
- * codes 302/303 are used here. The Cocoa margin-side flip has no GTK
- * equivalent (margins live inside the Scintilla widget) — residual
- * along with the backend bidi rendering itself. */
+ * Scintilla patch 0016 gives the GTK backend the macOS port's R2L
+ * model: SETBIDIRECTIONAL is stored and EditView right-aligns every
+ * line (short lines offset right, long overflow left) with matching
+ * caret drawing and click mapping — the same partial RTL macOS ships
+ * (its own core hack; full per-glyph bidi is Win32-only upstream).
+ * The per-widget flag remains the app-side source of truth. The
+ * PORTABLE halves live here: 10 mirrored arrow/word key bindings and
+ * forced word wrap while RTL (with restore). NOTE the macOS key table
+ * uses 300/301, which are SCK_DOWN/SCK_UP — an upstream bug; the real
+ * left/right codes 302/303 are used. Cocoa's margin-side flip has no
+ * GTK equivalent (margins live inside the widget) — residual. */
 
 static void apply_rtl_keys(GtkWidget *sci, gboolean rtl)
 {
