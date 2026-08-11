@@ -4555,7 +4555,9 @@ void editor_apply_prefs(void)
 
         /* Indentation + caret. P14: per-language override takes precedence. */
         const char *lang = (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
-        const TabOverride *ovr = lang ? prefs_tab_override_for(lang) : NULL;
+        /* GAP-158 — macOS keys the Normal-text override as ""; docs with
+         * no language set must pick it up too. */
+        const TabOverride *ovr = prefs_tab_override_for(lang ? lang : "");
         int  tab_w  = ovr ? ovr->tab_size : g_prefs.tab_width;
         int  use_t  = ovr ? ovr->use_tabs : g_prefs.use_tabs;
         sci_msg(sci, SCI_SETTABWIDTH,         (uptr_t)tab_w, 0);

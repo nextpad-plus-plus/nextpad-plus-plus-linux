@@ -1296,12 +1296,102 @@ CHK(hide_tab_bar,      hide_tab_bar,               editor_apply_prefs())
 CHK(status_visible,    show_status_bar,            statusbar_set_visible(g_prefs.show_status_bar))
 CHK(auto_check_upd,    auto_check_updates,         (void)0)   /* GAP-107 */
 
+/* GAP-158 — Indentation pane per-language override state (macOS
+ * _indentLangPopupChanged / _useDefaultValueChanged,
+ * PrefWC:1814-1939). Row 0 = [Default] (edits the globals), row 1 =
+ * Normal text (override key ""), rows 2+ = languages from main.c's
+ * kLangs table (override key = lexer key). */
+extern const char *main_lang_entry(int i, const char **key);
+static GtkWidget *s_ind_tw, *s_ind_rtabs, *s_ind_rsp, *s_ind_defchk;
+static int        s_ind_row     = 0;      /* selected dropdown row     */
+static gboolean   s_ind_loading = FALSE;  /* programmatic control fill */
+
+static const char *ind_selected_key(void)
+{
+    if (s_ind_row <= 0) return NULL;          /* [Default] */
+    if (s_ind_row == 1) return "";            /* Normal text */
+    const char *key = NULL;
+    main_lang_entry(s_ind_row - 2, &key);
+    return key;
+}
+
+static void ind_set_controls_enabled(gboolean on)
+{
+    if (s_ind_tw)    gtk_widget_set_sensitive(s_ind_tw,    on);
+    if (s_ind_rtabs) gtk_widget_set_sensitive(s_ind_rtabs, on);
+    if (s_ind_rsp)   gtk_widget_set_sensitive(s_ind_rsp,   on);
+}
+
+static void ind_load_controls(int tab_size, gboolean use_tabs)
+{
+    s_ind_loading = TRUE;
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(s_ind_tw), tab_size);
+    gtk_toggle_button_set_active(
+        GTK_TOGGLE_BUTTON(use_tabs ? s_ind_rtabs : s_ind_rsp), TRUE);
+    s_ind_loading = FALSE;
+}
+
+/* Write the CURRENT control values wherever the selection points. */
+static void ind_store_from_controls(void)
+{
+    int      tw = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(s_ind_tw));
+    gboolean ut = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s_ind_rtabs));
+    const char *key = ind_selected_key();
+    if (!key) {                                /* [Default] → globals */
+        g_prefs.tab_width = tw;
+        g_prefs.use_tabs  = ut;
+    } else {
+        prefs_tab_override_set(key, tw, ut);
+    }
+    editor_apply_prefs();
+    prefs_save();
+}
+
 static void on_tab_width(GtkSpinButton *s, gpointer d)
-    { (void)d; g_prefs.tab_width = (int)gtk_spin_button_get_value(s); editor_apply_prefs(); prefs_save(); }
+    { (void)s; (void)d; if (!s_ind_loading) ind_store_from_controls(); }
 static void on_use_tabs(GtkToggleButton *b, gpointer d)
-    { (void)d; g_prefs.use_tabs = gtk_toggle_button_get_active(b); editor_apply_prefs(); prefs_save(); }
+    { (void)d; if (!s_ind_loading && gtk_toggle_button_get_active(b)) ind_store_from_controls(); }
 static void on_use_spaces(GtkToggleButton *b, gpointer d)
-    { (void)d; if (gtk_toggle_button_get_active(b)) { g_prefs.use_tabs = FALSE; editor_apply_prefs(); prefs_save(); } }
+    { (void)d; if (!s_ind_loading && gtk_toggle_button_get_active(b)) ind_store_from_controls(); }
+
+static void on_ind_lang_changed(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    s_ind_row = gtk_combo_box_get_active(c);
+    const char *key = ind_selected_key();
+    if (!key) {                                /* [Default] */
+        gtk_widget_set_visible(s_ind_defchk, FALSE);
+        ind_load_controls(g_prefs.tab_width, g_prefs.use_tabs);
+        ind_set_controls_enabled(TRUE);
+        return;
+    }
+    const TabOverride *o = prefs_tab_override_for(key);
+    gtk_widget_set_visible(s_ind_defchk, TRUE);
+    s_ind_loading = TRUE;
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(s_ind_defchk), o == NULL);
+    s_ind_loading = FALSE;
+    ind_load_controls(o ? o->tab_size : g_prefs.tab_width,
+                      o ? o->use_tabs : g_prefs.use_tabs);
+    ind_set_controls_enabled(o != NULL);
+}
+
+static void on_ind_use_default(GtkCheckButton *b, gpointer d)
+{
+    (void)d;
+    if (s_ind_loading) return;
+    const char *key = ind_selected_key();
+    if (!key) return;
+    if (gtk_check_button_get_active(b)) {      /* checked → clear override */
+        prefs_tab_override_clear(key);
+        ind_load_controls(g_prefs.tab_width, g_prefs.use_tabs);
+        ind_set_controls_enabled(FALSE);
+        editor_apply_prefs();
+        prefs_save();
+    } else {                                   /* unchecked → create it */
+        ind_set_controls_enabled(TRUE);
+        ind_store_from_controls();
+    }
+}
 
 static void on_ai_set(int v)                                      { g_prefs.auto_indent = v; prefs_save(); }
 static void on_ai_none(GtkToggleButton *b, gpointer d)            { (void)d; if (gtk_toggle_button_get_active(b)) on_ai_set(AUTO_INDENT_NONE); }
@@ -1772,6 +1862,24 @@ static GtkWidget *page_indentation(void)
     GtkWidget *g = make_grid();
     int r = 0;
 
+    /* GAP-158 — per-language Indent Settings (macOS PrefWC:1624-1652).
+     * [Default] edits the global pair; a language row edits its
+     * TabCustom override, guarded by "Use default value". */
+    GtkWidget *lc = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lc), "[Default]");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lc), "Normal text");
+    for (int i = 0; ; i++) {
+        const char *disp = main_lang_entry(i, NULL);
+        if (!disp) break;
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(lc), disp);
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(lc), 0);
+    row(g, r++, "Indent Settings:", lc);
+
+    s_ind_defchk = make_check(g, r++, "Use default value", TRUE,
+                              G_CALLBACK(on_ind_use_default));
+    gtk_widget_set_visible(s_ind_defchk, FALSE);   /* hidden on [Default] */
+
     GtkWidget *tw = gtk_spin_button_new_with_range(1, 16, 1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(tw), g_prefs.tab_width);
     row(g, r++, "Tab / indent size:", tw);
@@ -1781,6 +1889,9 @@ static GtkWidget *page_indentation(void)
     GtkWidget *rsp   = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(rtabs), "Space characters");
     if (g_prefs.use_tabs) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rtabs), TRUE);
     else                  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rsp),   TRUE);
+    s_ind_tw = tw; s_ind_rtabs = rtabs; s_ind_rsp = rsp;
+    s_ind_row = 0;
+    g_signal_connect(lc, "changed", G_CALLBACK(on_ind_lang_changed), NULL);
     GtkWidget *ibx = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_container_add(GTK_CONTAINER(ibx), rtabs);
     gtk_container_add(GTK_CONTAINER(ibx), rsp);

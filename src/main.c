@@ -1511,6 +1511,9 @@ static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
  * ────────────────────────────────────────────────────────────────────── */
 
 typedef struct { const char *display; const char *key; } LangEntry;
+/* GAP-158 — the Indentation pane's per-language dropdown re-uses this
+ * table; prefs.c walks it via main_lang_entry(). */
+const char *main_lang_entry(int i, const char **key);
 static const LangEntry kLangs[] = {
     /* A */
     { "Ada",          "ada"        },
@@ -1635,6 +1638,13 @@ static const LangEntry kLangs[] = {
     /* Z */
     { "Zig",          "zig"        },
 };
+const char *main_lang_entry(int i, const char **key)
+{
+    if (i < 0 || i >= (int)G_N_ELEMENTS(kLangs)) return NULL;
+    if (key) *key = kLangs[i].key;
+    return kLangs[i].display;
+}
+
 static const int kLangsCount = (int)(sizeof(kLangs) / sizeof(kLangs[0]));
 
 /* GAP-112 — uppercased first letter of the display name whose key matches,

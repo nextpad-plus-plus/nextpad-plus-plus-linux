@@ -7,6 +7,7 @@
 #include "stylestore.h"
 #include "udl.h"
 #include "langsmgr.h"
+#include "prefs.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -481,6 +482,21 @@ void lexer_apply(GtkWidget *sci, const char *lang_name)
     g_object_set_data_full(G_OBJECT(sci), "npp-lang",
                            lang_name ? g_strdup(lang_name) : g_strdup(""),
                            g_free);
+
+    /* GAP-158 — tab settings follow the language: every language
+     * decision (open, Language menu, session restore, plugin
+     * SETBUFFERLANGTYPE) funnels through here, so this is the one spot
+     * where a TabCustom override (or the globals) can be applied the
+     * moment the language is known. editor_apply_prefs() re-applies
+     * the same values on pref changes. */
+    {
+        const TabOverride *o =
+            prefs_tab_override_for(lang_name ? lang_name : "");
+        sci_msg(sci, SCI_SETTABWIDTH,
+                (uptr_t)(o ? o->tab_size : g_prefs.tab_width), 0);
+        sci_msg(sci, SCI_SETUSETABS,
+                (uptr_t)(o ? o->use_tabs : g_prefs.use_tabs), 0);
+    }
 
     /* UDL: delegate entirely to udl_apply (handles full style pipeline) */
     if (lang_name && strncmp(lang_name, "udl:", 4) == 0) {
