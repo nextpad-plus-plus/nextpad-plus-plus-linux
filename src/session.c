@@ -285,7 +285,7 @@ void session_save(void)
             " language=\"%s\""
             " userReadOnly=\"%s\""
             " customTabName=\"%s\""
-            " tabColorId=\"%d\" pinned=\"%s\""
+            " tabColorId=\"%d\" pinned=\"%s\" RTL=\"%s\""
             " backupFilePath=\"%s\""
             " bookmarks=\"%s\""
             " folds=\"%s\" />\n",
@@ -299,6 +299,7 @@ void session_save(void)
             doc->user_readonly ? "yes" : "no",
             esc_custom,
             doc->color_tag, doc->pinned ? "yes" : "no",
+            editor_text_direction_rtl(doc->sci) ? "yes" : "no",
             esc_backup,
             bookmarks, folds);
 
@@ -358,6 +359,7 @@ typedef struct {
     int   user_readonly;
     int   tab_color;      /* 0 = none, 1..5 */
     int   pinned;
+    int   rtl;      /* GAP-153 — macOS session RTL field */
     char  backup_filepath[1024];
     gchar *bookmarks;     /* heap-allocated CSV */
     gchar *folds;         /* heap-allocated CSV */
@@ -438,6 +440,7 @@ static void xml_start(GMarkupParseContext *ctx, const gchar *el,
         else if (!strcmp(k, "untitledIndex"))    e->untitled_index = atoi(v);
         else if (!strcmp(k, "tabColorId"))       e->tab_color = atoi(v);
         else if (!strcmp(k, "pinned"))           e->pinned = !strcmp(v, "yes");
+        else if (!strcmp(k, "RTL"))              e->rtl = !strcmp(v, "yes");
         else if (!strcmp(k, "backupFilePath"))   g_strlcpy(e->backup_filepath, v, sizeof(e->backup_filepath));
         else if (!strcmp(k, "bookmarks"))        e->bookmarks = g_strdup(v);
         else if (!strcmp(k, "folds"))            e->folds = g_strdup(v);
@@ -674,6 +677,8 @@ void session_restore_from(const char *path)
                 editor_set_tab_color(doc->sci, e->tab_color);
             if (e->pinned)
                 editor_set_tab_pinned(doc->sci, TRUE);
+            if (e->rtl)   /* GAP-153 — full setup: bidi + keys + wrap */
+                editor_set_text_direction(doc->sci, TRUE);
             if (e->bookmarks && *e->bookmarks)
                 apply_csv_lines(doc->sci, e->bookmarks, apply_bookmark_line);
             if (e->folds && *e->folds)

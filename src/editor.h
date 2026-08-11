@@ -74,6 +74,11 @@ void       editor_new_doc(void);
 gboolean   editor_open_dialog(void);               /* shows GTK open dialog */
 gboolean   editor_open_path(const char *path);     /* open a specific file   */
 void       editor_update_window_title(void);       /* GAP-152 — title live-apply */
+/* GAP-153 — RTL text direction (portable macOS halves: key mirrors +
+ * forced wrap; flag tracked per widget — the GTK backend ignores
+ * SETBIDIRECTIONAL and GETBIDIRECTIONAL always reads 0). */
+void       editor_set_text_direction(GtkWidget *sci, gboolean rtl);
+gboolean   editor_text_direction_rtl(GtkWidget *sci);
 
 /* GAP-37 — clickable links: re-mark the visible range of one editor /
  * full-clear + re-mark every editor after a pref change. */

@@ -1949,6 +1949,72 @@ void editor_refresh_tab_chrome(void)
     main_doclist_refresh();
 }
 
+/* ── GAP-153 — text direction (macOS EditorView setTextDirectionRTL/LTR).
+ * The GTK4 Scintilla backend does not implement SetBidirectional (base
+ * Editor.cxx ignores the set and GETBIDIRECTIONAL always reads 0), so
+ * the flag is tracked per widget; the message is still sent for future
+ * backend support and plugin visibility. The PORTABLE macOS halves are
+ * ported: 10 mirrored arrow/word key bindings and forced word wrap
+ * while RTL (with restore). NOTE the macOS key table uses 300/301,
+ * which are SCK_DOWN/SCK_UP — an upstream bug; the real left/right
+ * codes 302/303 are used here. The Cocoa margin-side flip has no GTK
+ * equivalent (margins live inside the Scintilla widget) — residual
+ * along with the backend bidi rendering itself. */
+
+static void apply_rtl_keys(GtkWidget *sci, gboolean rtl)
+{
+    static const struct { int key, mod, cmd_l, cmd_r; } b[] = {
+        { SCK_LEFT,  0,                        SCI_CHARLEFT,        SCI_CHARRIGHT },
+        { SCK_RIGHT, 0,                        SCI_CHARRIGHT,       SCI_CHARLEFT },
+        { SCK_LEFT,  SCMOD_SHIFT,              SCI_CHARLEFTEXTEND,  SCI_CHARRIGHTEXTEND },
+        { SCK_RIGHT, SCMOD_SHIFT,              SCI_CHARRIGHTEXTEND, SCI_CHARLEFTEXTEND },
+        { SCK_LEFT,  SCMOD_CTRL,               SCI_WORDLEFT,        SCI_WORDRIGHT },
+        { SCK_RIGHT, SCMOD_CTRL,               SCI_WORDRIGHT,       SCI_WORDLEFT },
+        { SCK_LEFT,  SCMOD_CTRL | SCMOD_SHIFT, SCI_WORDLEFTEXTEND,  SCI_WORDRIGHTEXTEND },
+        { SCK_RIGHT, SCMOD_CTRL | SCMOD_SHIFT, SCI_WORDRIGHTEXTEND, SCI_WORDLEFTEXTEND },
+        { SCK_LEFT,  SCMOD_SHIFT | SCMOD_ALT,  SCI_WORDLEFTEND,     SCI_WORDRIGHTEND },
+        { SCK_RIGHT, SCMOD_SHIFT | SCMOD_ALT,  SCI_WORDRIGHTEND,    SCI_WORDLEFTEND },
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS(b); i++) {
+        int keydef = b[i].key + (b[i].mod << 16);
+        sci_msg(sci, SCI_ASSIGNCMDKEY, (uptr_t)keydef,
+                rtl ? b[i].cmd_r : b[i].cmd_l);
+    }
+}
+
+gboolean editor_text_direction_rtl(GtkWidget *sci)
+{
+    return sci && g_object_get_data(G_OBJECT(sci), "npp-rtl") != NULL;
+}
+
+void editor_set_text_direction(GtkWidget *sci, gboolean rtl)
+{
+    if (!sci) return;
+    gboolean was_rtl = editor_text_direction_rtl(sci);
+    sci_msg(sci, SCI_SETBIDIRECTIONAL,
+            rtl ? SC_BIDIRECTIONAL_R2L : SC_BIDIRECTIONAL_DISABLED, 0);
+    apply_rtl_keys(sci, rtl);
+
+    if (rtl && !was_rtl) {
+        /* Force word wrap in RTL (horizontal scroll is unusable there);
+         * remember the prior mode for the LTR restore. Stored +1 so
+         * "unset" is distinguishable from SC_WRAP_NONE. */
+        int wrap = (int)sci_msg(sci, SCI_GETWRAPMODE, 0, 0);
+        g_object_set_data(G_OBJECT(sci), "npp-rtl-wrap0",
+                          GINT_TO_POINTER(wrap + 1));
+        if (wrap == SC_WRAP_NONE)
+            sci_msg(sci, SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
+    } else if (!rtl && was_rtl) {
+        int saved = GPOINTER_TO_INT(
+            g_object_get_data(G_OBJECT(sci), "npp-rtl-wrap0")) - 1;
+        if (saved == SC_WRAP_NONE)
+            sci_msg(sci, SCI_SETWRAPMODE, SC_WRAP_NONE, 0);
+        g_object_set_data(G_OBJECT(sci), "npp-rtl-wrap0", NULL);
+    }
+    g_object_set_data(G_OBJECT(sci), "npp-rtl",
+                      GINT_TO_POINTER(rtl ? 1 : 0));
+}
+
 /* GAP-152 — exported wrapper: main.c's main_refresh_title (the
  * "Show full path in title" live-apply hook) delegates here. */
 void editor_update_window_title(void);
@@ -4373,6 +4439,10 @@ void editor_apply_prefs(void)
             extern void shortcutmap_apply_sci_overrides(GtkWidget *sci);
             shortcutmap_apply_sci_overrides(sci);
         }
+        /* GAP-153 — the override pass rebuilds the keymap; re-assert
+         * the RTL arrow mirrors for views currently in RTL mode. */
+        if (editor_text_direction_rtl(sci))
+            apply_rtl_keys(sci, TRUE);
         sci_msg(sci, SCI_SETFONTQUALITY,        (uptr_t)g_prefs.font_quality, 0);
         /* Copy/cut whole line when nothing is selected. SCI_COPYALLOWLINE
          * is a per-call message in Scintilla, not a setter — we rebind the

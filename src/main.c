@@ -2835,8 +2835,9 @@ void main_menu_state_sync(void)
         marks_hidden =
             scintilla_send_message(so, SCI_GETMARGINWIDTHN, 1, 0) == 0;
         be_armed = g_object_get_data(G_OBJECT(sci), "npp-be-armed") != NULL;
-        rtl      = scintilla_send_message(so, SCI_GETBIDIRECTIONAL, 0, 0)
-                   == SC_BIDIRECTIONAL_R2L;
+        /* GAP-153 — the backend ignores SETBIDIRECTIONAL, so read the
+         * per-widget flag (GETBIDIRECTIONAL always returns 0 here). */
+        rtl      = editor_text_direction_rtl(sci);
     }
     menu_sync_state(am, "show-indent-guide", indent_g);
     menu_sync_state(am, "show-wrap-symbol",  wrapsym);
@@ -4575,11 +4576,14 @@ static void action_show_lines(GSimpleAction *a, GVariant *p, gpointer u) {
 }
 static void action_text_dir_ltr(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    sci_send(SCI_SETBIDIRECTIONAL, SC_BIDIRECTIONAL_DISABLED, 0);
+    editor_set_text_direction(current_sci(), FALSE);
 }
 static void action_text_dir_rtl(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    sci_send(SCI_SETBIDIRECTIONAL, SC_BIDIRECTIONAL_L2R, 0);
+    /* GAP-153 — was sending SC_BIDIRECTIONAL_L2R (1) instead of R2L
+     * (2); the full routine (key mirrors + wrap force) lives in
+     * editor.c now. */
+    editor_set_text_direction(current_sci(), TRUE);
 }
 static void action_toggle_monitoring(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
