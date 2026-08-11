@@ -82,6 +82,10 @@ gboolean   editor_text_direction_rtl(GtkWidget *sci);
 /* GAP-154 — Post-It/Distraction-Free chrome: hide the tab bar or
  * restore it to its pref/tabstrip-driven state. */
 void       editor_set_tab_bar_hidden_override(gboolean hide);
+/* GAP-155 — Hide Lines with boundary markers + per-block margin-click
+ * unhide (macOS hideLinesInSelection/_unhideMarkerAtLine). */
+void       editor_hide_lines_selection(GtkWidget *sci);
+gboolean   editor_unhide_at_line(GtkWidget *sci, int line);
 
 /* GAP-37 — clickable links: re-mark the visible range of one editor /
  * full-clear + re-mark every editor after a pref change. */

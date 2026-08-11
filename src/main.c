@@ -2601,7 +2601,7 @@ static void action_hide_line_marks(GSimpleAction *a, GVariant *p, gpointer u) {
     sptr_t cur = scintilla_send_message(SCINTILLA(doc->sci),
         SCI_GETMARGINWIDTHN, 1, 0);
     scintilla_send_message(SCINTILLA(doc->sci),
-        SCI_SETMARGINWIDTHN, 1, cur > 0 ? 0 : 16);
+        SCI_SETMARGINWIDTHN, 1, cur > 0 ? 0 : 9);
 }
 
 /* Q-fix View → Synchronize Scrolling. Pre-existing placeholders in toolbar.c
@@ -4613,13 +4613,9 @@ static void action_multisel_add_each(GSimpleAction *a, GVariant *p, gpointer u) 
 
 static void action_hide_lines(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    GtkWidget *sci = current_sci(); if (!sci) return;
-    ScintillaObject *s = SCINTILLA(sci);
-    sptr_t ss = scintilla_send_message(s, SCI_GETSELECTIONSTART, 0, 0);
-    sptr_t se = scintilla_send_message(s, SCI_GETSELECTIONEND, 0, 0);
-    sptr_t l0 = scintilla_send_message(s, SCI_LINEFROMPOSITION, ss, 0);
-    sptr_t l1 = scintilla_send_message(s, SCI_LINEFROMPOSITION, se, 0);
-    if (l1 > l0) scintilla_send_message(s, SCI_HIDELINES, l0, l1);
+    /* GAP-155 — clamped range + boundary markers; unhide is a margin
+     * click on either marker (macOS hideLinesInSelection). */
+    editor_hide_lines_selection(current_sci());
 }
 static void action_show_lines(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
@@ -4627,6 +4623,9 @@ static void action_show_lines(GSimpleAction *a, GVariant *p, gpointer u) {
     ScintillaObject *s = SCINTILLA(sci);
     sptr_t total = scintilla_send_message(s, SCI_GETLINECOUNT, 0, 0);
     scintilla_send_message(s, SCI_SHOWLINES, 0, total);
+    /* GAP-155 — orphaned boundary markers must go with the unhide. */
+    scintilla_send_message(s, SCI_MARKERDELETEALL, SC_MARKNUM_HIDELINES_BEGIN, 0);
+    scintilla_send_message(s, SCI_MARKERDELETEALL, SC_MARKNUM_HIDELINES_END, 0);
 }
 static void action_text_dir_ltr(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;

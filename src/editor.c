@@ -1037,6 +1037,92 @@ static void maintain_line_margin_on_edit(GtkWidget *sci)
     recompute_line_margin(sci);
 }
 
+/* GAP-155 — View â Hide Lines (macOS EditorView.mm:7531-7599, itself a
+ * port of Windows NPP). Hidden ranges get a green â¶ marker on the visible
+ * line BEFORE the range and a green â on the line AFTER; clicking either
+ * in the bookmark margin unhides that block (tried before the bookmark
+ * toggle). The 8x8 triangle images are generated once. */
+static void hide_lines_define_markers(GtkWidget *sci)
+{
+    static unsigned char begin_img[8 * 8 * 4], end_img[8 * 8 * 4];
+    static gboolean built = FALSE;
+    if (!built) {
+        for (int y = 0; y < 8; y++) {
+            int dist = MIN(y, 7 - y);       /* 0 at edges, 3 in middle */
+            for (int x = 0; x < 8; x++) {
+                unsigned char *b = begin_img + (y * 8 + x) * 4;
+                unsigned char *e = end_img   + (y * 8 + x) * 4;
+                /* â¶: vertical left edge, apex right; â mirrored.
+                 * Hide-lines green from the macOS/Windows icons. */
+                b[0] = 0x3A; b[1] = 0x96; b[2] = 0x63;
+                b[3] = (x <= 2 * dist + 1) ? 0xFF : 0x00;
+                e[0] = 0x3A; e[1] = 0x96; e[2] = 0x63;
+                e[3] = (x >= 6 - 2 * dist) ? 0xFF : 0x00;
+            }
+        }
+        built = TRUE;
+    }
+    sci_msg(sci, SCI_RGBAIMAGESETWIDTH,  8, 0);
+    sci_msg(sci, SCI_RGBAIMAGESETHEIGHT, 8, 0);
+    sci_msg(sci, SCI_RGBAIMAGESETSCALE, 100, 0);
+    sci_msg(sci, SCI_MARKERDEFINERGBAIMAGE, SC_MARKNUM_HIDELINES_BEGIN,
+            (sptr_t)begin_img);
+    sci_msg(sci, SCI_MARKERDEFINERGBAIMAGE, SC_MARKNUM_HIDELINES_END,
+            (sptr_t)end_img);
+}
+
+void editor_hide_lines_selection(GtkWidget *sci)
+{
+    if (!sci) return;
+    sptr_t l0 = sci_msg(sci, SCI_LINEFROMPOSITION,
+                        (uptr_t)sci_msg(sci, SCI_GETSELECTIONSTART, 0, 0), 0);
+    sptr_t l1 = sci_msg(sci, SCI_LINEFROMPOSITION,
+                        (uptr_t)sci_msg(sci, SCI_GETSELECTIONEND, 0, 0), 0);
+    sptr_t count = sci_msg(sci, SCI_GETLINECOUNT, 0, 0);
+    /* The first and last line can't be hidden â the boundary markers
+     * need a visible line on each side (macOS clamps identically). */
+    if (l0 <= 0) l0 = 1;
+    if (l1 >= count - 1) l1 = count - 2;
+    if (l0 > l1) return;
+    sptr_t mb = l0 - 1, me = l1 + 1;
+    /* Remove any conflicting markers in or around the range. */
+    for (sptr_t i = mb; i <= me; i++) {
+        sci_msg(sci, SCI_MARKERDELETE, (uptr_t)i, SC_MARKNUM_HIDELINES_BEGIN);
+        sci_msg(sci, SCI_MARKERDELETE, (uptr_t)i, SC_MARKNUM_HIDELINES_END);
+    }
+    sci_msg(sci, SCI_MARKERADD, (uptr_t)mb, SC_MARKNUM_HIDELINES_BEGIN);
+    sci_msg(sci, SCI_MARKERADD, (uptr_t)me, SC_MARKNUM_HIDELINES_END);
+    sci_msg(sci, SCI_HIDELINES, (uptr_t)l0, l1);
+}
+
+gboolean editor_unhide_at_line(GtkWidget *sci, int line)
+{
+    sptr_t mask = sci_msg(sci, SCI_MARKERGET, (uptr_t)line, 0);
+    gboolean has_b = (mask & (1 << SC_MARKNUM_HIDELINES_BEGIN)) != 0;
+    gboolean has_e = (mask & (1 << SC_MARKNUM_HIDELINES_END)) != 0;
+    if (!has_b && !has_e) return FALSE;
+
+    sptr_t begin = -1, end = -1;
+    if (has_b) {
+        begin = line;
+        sptr_t count = sci_msg(sci, SCI_GETLINECOUNT, 0, 0);
+        for (sptr_t i = line + 1; i < count; i++)
+            if (sci_msg(sci, SCI_MARKERGET, (uptr_t)i, 0) &
+                (1 << SC_MARKNUM_HIDELINES_END)) { end = i; break; }
+    } else {
+        end = line;
+        for (sptr_t i = line - 1; i >= 0; i--)
+            if (sci_msg(sci, SCI_MARKERGET, (uptr_t)i, 0) &
+                (1 << SC_MARKNUM_HIDELINES_BEGIN)) { begin = i; break; }
+    }
+    if (begin < 0 || end < 0 || end <= begin) return FALSE;
+
+    sci_msg(sci, SCI_SHOWLINES, (uptr_t)(begin + 1), end - 1);
+    sci_msg(sci, SCI_MARKERDELETE, (uptr_t)begin, SC_MARKNUM_HIDELINES_BEGIN);
+    sci_msg(sci, SCI_MARKERDELETE, (uptr_t)end,   SC_MARKNUM_HIDELINES_END);
+    return TRUE;
+}
+
 static void setup_sci(GtkWidget *sci)
 {
     sci_msg(sci, SCI_SETCODEPAGE,     SC_CP_UTF8, 0);
@@ -1062,10 +1148,20 @@ static void setup_sci(GtkWidget *sci)
      * Colours use the macOS bookmark palette: fill #5878D0, rim #1B3BBD.
      * Scintilla packs colours 0xBBGGRR, so RGB bytes are reversed. */
     sci_msg(sci, SCI_SETMARGINWIDTHN,    1, g_prefs.show_bookmark_margin ? 9 : 0);
-    sci_msg(sci, SCI_SETMARGINMASKN,     1, (sptr_t)(1 << SC_MARKNUM_BOOKMARK));
+    sci_msg(sci, SCI_SETMARGINMASKN,     1,
+            (sptr_t)((1 << SC_MARKNUM_BOOKMARK) |
+                     (1 << SC_MARKNUM_HIDELINES_BEGIN) |
+                     (1 << SC_MARKNUM_HIDELINES_END)));
     sci_msg(sci, SCI_MARKERDEFINE,  SC_MARKNUM_BOOKMARK, SC_MARK_CIRCLE);
     sci_msg(sci, SCI_MARKERSETBACK, SC_MARKNUM_BOOKMARK, 0xD07858); /* #5878D0 fill */
     sci_msg(sci, SCI_MARKERSETFORE, SC_MARKNUM_BOOKMARK, 0xBD3B1B); /* #1B3BBD rim  */
+    /* GAP-155 — hide-lines boundary arrows + green hidden-line rule.
+     * macOS/Windows use 14 px RGBA icons in a 14/16 px margin; our
+     * bookmark margin is deliberately 9 px (see above), so 8x8 green
+     * triangles are generated instead. */
+    hide_lines_define_markers(sci);
+    sci_msg(sci, SCI_SETELEMENTCOLOUR, SC_ELEMENT_HIDDEN_LINE,
+            (sptr_t)0xFF77CC77); /* RGB 0x77CC77, matches macOS/Windows */
     /* Margin 2: fold — box +/- tree markers */
     sci_msg(sci, SCI_SETMARGINTYPE,      2, SC_MARGIN_SYMBOL);
     sci_msg(sci, SCI_SETMARGINSENSITIVE, 2, 1);
@@ -2682,7 +2778,9 @@ brace_done:;
         /* SCN_MARGINCLICK sets position (line start), not line — derive it */
         int line = (int)sci_msg(sci, SCI_LINEFROMPOSITION, (uptr_t)n->position, 0);
         if (n->margin == 1) {
-            main_toggle_bookmark_at_line(sci, line);
+            /* GAP-155 — a hide-lines boundary marker eats the click. */
+            if (!editor_unhide_at_line(sci, line))
+                main_toggle_bookmark_at_line(sci, line);
         } else if (n->margin == 2) {
             int lvl = (int)sci_msg(sci, SCI_GETFOLDLEVEL, (uptr_t)line, 0);
             if (lvl & SC_FOLDLEVELHEADERFLAG)
@@ -4442,7 +4540,7 @@ void editor_apply_prefs(void)
         sci_msg(sci, SCI_SETMARGINWIDTHN, 0,
                 g_prefs.show_line_numbers ? 44 : 0);
         sci_msg(sci, SCI_SETMARGINWIDTHN, 1,
-                g_prefs.show_bookmark_margin ? 16 : 0);
+                g_prefs.show_bookmark_margin ? 9 : 0);
 
         /* Whitespace + EOL display */
         sci_msg(sci, SCI_SETVIEWWS,    g_prefs.show_whitespace ? SCWS_VISIBLEALWAYS : SCWS_INVISIBLE, 0);

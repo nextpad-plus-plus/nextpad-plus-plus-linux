@@ -62,6 +62,10 @@
  * MODIFIED) since GAP-42 — bookmarks on 24 rendered as the history
  * marker's dark-cyan FULLRECT. Modern N++ uses 20 for the same reason. */
 #define SC_MARKNUM_BOOKMARK      20
+/* GAP-155 — hide-lines boundary markers, same numbers as macOS
+ * (EditorView.mm kHideLinesBeginMarker/kHideLinesEndMarker). */
+#define SC_MARKNUM_HIDELINES_BEGIN 19 /* green â¶ on line BEFORE hidden range */
+#define SC_MARKNUM_HIDELINES_END   18 /* green â on line AFTER hidden range */
 #endif
 
 /* `Sci_TextRangeFull` is declared as `struct Sci_TextRangeFull` in
