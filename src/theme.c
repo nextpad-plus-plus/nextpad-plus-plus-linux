@@ -243,8 +243,51 @@ void theme_apply_gtk_settings(gboolean dark)
     g_object_set(s, "gtk-application-prefer-dark-theme", dark, NULL);
 }
 
+/* Round the BOTTOM window corners to match the top (user request,
+ * 2026-08-12). GTK themes deliberately ship top-only rounding for
+ * plain-GTK4 apps (Yaru: `window.csd { border-radius: 12px 12px 0 0 }`,
+ * GTK's built-in Default: `8px 8px 0 0`) while libadwaita apps round
+ * all four — that mismatch is why System Monitor has round bottoms and
+ * we did not. 12px = Yaru's top radius, so top and bottom agree on
+ * Ubuntu and every window (main, floating panels, dialogs) gets the
+ * uniform libadwaita-style outline. GtkWindow clips its content to the
+ * CSS box (verified: opaque children render with the corner cut), so
+ * the status bar / panel bodies need no changes. Maximized, fullscreen
+ * and tiled states keep square corners — GTK sorts providers by
+ * priority before specificity, so without the :not() guards this rule
+ * would defeat the theme's `window.maximized { border-radius: 0 }`.
+ * `.solid-csd` (non-composited X11) stays square like every other app
+ * there; NPP_ROUND_TEST extends the rule to it so a compositor-less
+ * Xvfb can render the corners for the test battery. */
+static GtkCssProvider *s_corner_css = NULL;
+
+static void theme_install_corner_css(void)
+{
+    if (s_corner_css) return;
+    s_corner_css = gtk_css_provider_new();
+    GString *css = g_string_new(
+        "window.csd:not(.maximized):not(.fullscreen):not(.tiled)"
+        ":not(.tiled-top):not(.tiled-bottom):not(.tiled-left)"
+        ":not(.tiled-right) {\n"
+        "  border-radius: 12px;\n"
+        "}\n");
+    if (g_getenv("NPP_ROUND_TEST"))
+        /* Headless X11 without a compositor gets NO csd/solid-csd class
+         * at all — match bare `window` so the Xvfb battery can render
+         * the rounding. Never set outside tests. */
+        g_string_append(css,
+            "window {\n  border-radius: 12px;\n}\n");
+    gtk_css_provider_load_from_data(s_corner_css, css->str, -1);
+    g_string_free(css, TRUE);
+    gtk_style_context_add_provider_for_display(
+        gdk_display_get_default(), GTK_STYLE_PROVIDER(s_corner_css),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
+}
+
 void theme_apply(ThemeMode mode)
 {
+    theme_install_corner_css();
+
     /* 1) Resolve effective dark/light. */
     gboolean dark = theme_resolve_is_dark(mode);
     s_effective_dark = dark;
