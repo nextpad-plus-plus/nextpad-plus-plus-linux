@@ -137,6 +137,22 @@ static void on_popin_clicked(GtkButton *b, gpointer ud) {
  * window's fate (explicit destroy vs. letting GTK's close-request
  * default run). */
 static void dockback_reparent(FloatingEntry *e) {
+    /* GAP-102 mirror — floating_popout already clears the MAIN window's
+     * focus before unparenting the frame; the dock-back direction was
+     * missing the same guard. Reparenting a subtree that still contains
+     * the FLOAT window's focus widget (a clicked row, the filter entry…)
+     * plants a stale focus-child in the destination paneds, and every
+     * later focus recomputation — e.g. the WM handing focus back to the
+     * main window when the float dies — logs one
+     * "Error finding last focus widget of GtkPaned…" per side-host
+     * paned. Drop the float's focus first; the main window takes focus
+     * right after anyway. */
+    if (GTK_IS_WINDOW(e->float_window)) {
+        GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(e->float_window));
+        if (focus && (focus == e->widget ||
+                      gtk_widget_is_ancestor(focus, e->widget)))
+            gtk_window_set_focus(GTK_WINDOW(e->float_window), NULL);
+    }
     g_object_ref(e->widget);
     gtk_container_remove(GTK_CONTAINER(e->float_window), e->widget);
     /* GAP-101 — restore the frame's own title bar for docked life. */
