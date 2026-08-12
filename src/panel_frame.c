@@ -216,13 +216,16 @@ static void pf_frame_gone(gpointer data, GObject *dead) {
  * built-in padding — at 14 px the strokes land on bad fractional pixel
  * positions and render soft (the detached float header always used 16,
  * which rasterizes crisply and visually matches the 14 px close X). */
-#define PF_POP_ICON_PX 13
+#define PF_POP_ICON_PX 16
 /* The move-side pictogram is denser art (frame + arrow) — rendered a
  * step larger so its hairlines survive; the button grows with it. */
-#define PF_MOVE_ICON_PX 14
-#define PF_POP_BTN_PX  14
-/* Margin around the title-bar tool buttons. */
-#define PF_POP_BTN_MARGIN 5
+#define PF_MOVE_ICON_PX 17
+#define PF_POP_BTN_PX  17
+/* Margins around the title-bar tool buttons: horizontal spacing is the
+ * user-tuned 5px; vertical stays 4px so the 17px buttons keep the
+ * title bar at its seam-tuned 25px. */
+#define PF_POP_BTN_MARGIN_H 5
+#define PF_POP_BTN_MARGIN_V 4
 
 /* GAP-123 — SF Symbol PNG loader. The macOS 2ccf0d9 chrome uses SF
  * Symbols; the author exported them as PNGs under
@@ -648,9 +651,9 @@ GtkWidget *panel_frame_new(const char *name,
     gtk_widget_set_focus_on_click(st->move_button, FALSE);
     gtk_widget_set_size_request(st->move_button, PF_POP_BTN_PX, PF_POP_BTN_PX);
     gtk_widget_set_valign(st->move_button, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_top(st->move_button,    PF_POP_BTN_MARGIN);
-    gtk_widget_set_margin_bottom(st->move_button, PF_POP_BTN_MARGIN);
-    gtk_widget_set_margin_start(st->move_button,  PF_POP_BTN_MARGIN);
+    gtk_widget_set_margin_top(st->move_button,    PF_POP_BTN_MARGIN_V);
+    gtk_widget_set_margin_bottom(st->move_button, PF_POP_BTN_MARGIN_V);
+    gtk_widget_set_margin_start(st->move_button,  PF_POP_BTN_MARGIN_H);
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->move_button),
         "nextpad-panel-frame-button");
@@ -666,10 +669,10 @@ GtkWidget *panel_frame_new(const char *name,
     gtk_widget_set_focus_on_click(st->pop_button, FALSE);
     gtk_widget_set_size_request(st->pop_button, PF_POP_BTN_PX, PF_POP_BTN_PX);
     gtk_widget_set_valign(st->pop_button, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_top(st->pop_button,    PF_POP_BTN_MARGIN);
-    gtk_widget_set_margin_bottom(st->pop_button, PF_POP_BTN_MARGIN);
-    gtk_widget_set_margin_start(st->pop_button,  PF_POP_BTN_MARGIN);
-    gtk_widget_set_margin_end(st->pop_button,    PF_POP_BTN_MARGIN);
+    gtk_widget_set_margin_top(st->pop_button,    PF_POP_BTN_MARGIN_V);
+    gtk_widget_set_margin_bottom(st->pop_button, PF_POP_BTN_MARGIN_V);
+    gtk_widget_set_margin_start(st->pop_button,  PF_POP_BTN_MARGIN_H);
+    gtk_widget_set_margin_end(st->pop_button,    PF_POP_BTN_MARGIN_H);
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->pop_button),
         "nextpad-panel-frame-button");
