@@ -217,6 +217,9 @@ static void pf_frame_gone(gpointer data, GObject *dead) {
  * positions and render soft (the detached float header always used 16,
  * which rasterizes crisply and visually matches the 14 px close X). */
 #define PF_POP_ICON_PX 16
+/* The move-side pictogram is denser art (frame + arrow) — rendered a
+ * step larger so its hairlines survive; the button grows with it. */
+#define PF_MOVE_ICON_PX 18
 #define PF_POP_BTN_PX  17
 /* Margin around the title-bar tool buttons. */
 #define PF_POP_BTN_MARGIN 4
@@ -392,9 +395,9 @@ static void pf_refresh_move_icon(PanelFrameState *st) {
      * DESTINATION side, as before. */
     GtkWidget *img = st->on_left
         ? pf_sfsymbol_image("sidebar-show-rtl",
-                            PF_POP_ICON_PX, "go-next")
+                            PF_MOVE_ICON_PX, "go-next")
         : pf_sfsymbol_image("sidebar-show",
-                            PF_POP_ICON_PX, "go-previous");
+                            PF_MOVE_ICON_PX, "go-previous");
     if (st->move_image)
         gtk_container_remove(GTK_CONTAINER(st->move_button), st->move_image);
     st->move_image = img;
