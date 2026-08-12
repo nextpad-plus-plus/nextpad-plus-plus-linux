@@ -182,35 +182,87 @@ static void render_icon(GtkTreeViewColumn *col, GtkCellRenderer *cell,
 /* Signal handlers                                                    */
 /* ------------------------------------------------------------------ */
 
+static void ws_dbg_press(GtkGestureClick *g, int n, double x, double y,
+                         gpointer u) {
+    (void)g;(void)n;(void)u;
+    int bx = 0, by = 0;
+    gtk_tree_view_convert_widget_to_bin_window_coords(
+        GTK_TREE_VIEW(s_tree), (int)x, (int)y, &bx, &by);
+    GtkTreePath *tp = NULL; GtkTreeViewColumn *col = NULL; int cx=0, cy=0;
+    gboolean on = gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(s_tree),
+                        bx, by, &tp, &col, &cx, &cy);
+    gchar *ps = on ? gtk_tree_path_to_string(tp) : g_strdup("(none)");
+    gboolean expanded = on ? gtk_tree_view_row_expanded(GTK_TREE_VIEW(s_tree), tp) : FALSE;
+    g_printerr("wsdbg: press w(%.0f,%.0f) bin(%d,%d) path=%s cell_x=%d expanded=%d\n",
+               x, y, bx, by, ps, cx, expanded);
+    g_free(ps);
+    if (tp) gtk_tree_path_free(tp);
+}
+
+static void ws_dbg_collapsed(GtkTreeView *tv, GtkTreeIter *it,
+                             GtkTreePath *tp, gpointer u) {
+    (void)tv;(void)it;(void)u;
+    if (g_getenv("NPP_WS_DEBUG")) {
+        gchar *ps = gtk_tree_path_to_string(tp);
+        g_printerr("wsdbg: row-collapsed %s\n", ps); g_free(ps);
+    }
+}
+static gboolean ws_dbg_test_collapse(GtkTreeView *tv, GtkTreeIter *it,
+                                     GtkTreePath *tp, gpointer u) {
+    (void)tv;(void)it;(void)u;
+    if (g_getenv("NPP_WS_DEBUG")) {
+        gchar *ps = gtk_tree_path_to_string(tp);
+        g_printerr("wsdbg: test-collapse %s\n", ps); g_free(ps);
+    }
+    return FALSE;   /* allow */
+}
+static gboolean ws_dbg_test_expand(GtkTreeView *tv, GtkTreeIter *it,
+                                   GtkTreePath *tp, gpointer u) {
+    (void)tv;(void)it;(void)u;
+    if (g_getenv("NPP_WS_DEBUG")) {
+        gchar *ps = gtk_tree_path_to_string(tp);
+        g_printerr("wsdbg: test-expand %s\n", ps); g_free(ps);
+    }
+    return FALSE;
+}
+
 static void on_row_expanded(GtkTreeView *tv, GtkTreeIter *iter,
                              GtkTreePath *tp, gpointer d)
 {
     (void)tv; (void)tp; (void)d;
-    if (!has_only_dummy(iter)) return;
+    /* The view iter belongs to the FILTER model — translate to the
+     * backing store before mutating it. */
+    GtkTreeIter sit = *iter;
+    if (s_filter_model)
+        gtk_tree_model_filter_convert_iter_to_child_iter(
+            s_filter_model, &sit, iter);
+    if (!has_only_dummy(&sit)) return;
 
-    /* Remove dummy placeholder */
-    GtkTreeIter child;
-    gtk_tree_model_iter_children(GTK_TREE_MODEL(s_store), &child, iter);
-    gtk_tree_store_remove(s_store, &child);
-
+    /* Populate FIRST, remove the dummy AFTER: removing the last child
+     * mid-expand makes GTK cancel the expansion (the first click on an
+     * unloaded folder visibly did nothing; the second worked). */
     char *dir_path = NULL;
-    gtk_tree_model_get(GTK_TREE_MODEL(s_store), iter, COL_PATH, &dir_path, -1);
+    gtk_tree_model_get(GTK_TREE_MODEL(s_store), &sit, COL_PATH, &dir_path, -1);
+    GtkTreeIter dummy;
+    gtk_tree_model_iter_children(GTK_TREE_MODEL(s_store), &dummy, &sit);
     if (dir_path) {
-        populate_dir(iter, dir_path);
+        populate_dir(&sit, dir_path);
         g_free(dir_path);
     }
+    gtk_tree_store_remove(s_store, &dummy);
 }
 
 static void on_row_activated(GtkTreeView *tv, GtkTreePath *tp,
                               GtkTreeViewColumn *col, gpointer d)
 {
     (void)tv; (void)col; (void)d;
+    GtkTreeModel *model = gtk_tree_view_get_model(tv);   /* filter */
     GtkTreeIter iter;
-    if (!gtk_tree_model_get_iter(GTK_TREE_MODEL(s_store), &iter, tp)) return;
+    if (!gtk_tree_model_get_iter(model, &iter, tp)) return;
 
     gboolean is_dir;
     char    *fpath = NULL;
-    gtk_tree_model_get(GTK_TREE_MODEL(s_store), &iter,
+    gtk_tree_model_get(model, &iter,
                        COL_IS_DIR, &is_dir,
                        COL_PATH,   &fpath, -1);
     if (!is_dir && fpath)
@@ -230,12 +282,14 @@ static void on_close_clicked(GtkButton *btn, gpointer d)
 /* ------------------------------------------------------------------ */
 
 /* Return the absolute path of the currently-selected row. NULL if none. */
+static void ws_sync_roots_to_prefs(void);
 static char *workspace_selected_path(void) {
     GtkTreeSelection *sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(s_tree));
+    GtkTreeModel *model = NULL;
     GtkTreeIter it;
-    if (!gtk_tree_selection_get_selected(sel, NULL, &it)) return NULL;
+    if (!gtk_tree_selection_get_selected(sel, &model, &it)) return NULL;
     char *p = NULL;
-    gtk_tree_model_get(GTK_TREE_MODEL(s_store), &it, COL_PATH, &p, -1);
+    gtk_tree_model_get(model, &it, COL_PATH, &p, -1);
     return p;
 }
 
@@ -400,6 +454,7 @@ static void ctx_remove_all(GtkButton *mi, gpointer u) {
     /* In-memory only — no filesystem deletion, matches macOS spec
      * ("Note that nothing is removed physically from the disk."). */
     if (s_store) gtk_tree_store_clear(s_store);
+    ws_sync_roots_to_prefs();
 }
 
 static void on_tree_button_press(GtkGestureClick *gesture, int n_press,
@@ -426,9 +481,9 @@ static void on_tree_button_press(GtkGestureClick *gesture, int n_press,
         gboolean is_dir = FALSE;
         gboolean is_root = gtk_tree_path_get_depth(path) == 1;
         GtkTreeIter it;
-        if (gtk_tree_model_get_iter(GTK_TREE_MODEL(s_store), &it, path))
-            gtk_tree_model_get(GTK_TREE_MODEL(s_store), &it,
-                               COL_IS_DIR, &is_dir, -1);
+        GtkTreeModel *vm = gtk_tree_view_get_model(GTK_TREE_VIEW(s_tree));
+        if (gtk_tree_model_get_iter(vm, &it, path))
+            gtk_tree_model_get(vm, &it, COL_IS_DIR, &is_dir, -1);
         if (is_dir) {
             if (is_root) {
                 /* Root folders are removed, not renamed. */
@@ -545,11 +600,19 @@ static void workspace_on_locate_clicked(GtkButton *b, gpointer ud) {
             gtk_tree_model_get(GTK_TREE_MODEL(s_store), &child,
                                1, &path, -1);
             if (path && g_strcmp0(path, doc->filepath) == 0) {
-                GtkTreePath *tp = gtk_tree_model_get_path(
+                GtkTreePath *sp = gtk_tree_model_get_path(
                     GTK_TREE_MODEL(s_store), &child);
-                gtk_tree_view_expand_to_path(GTK_TREE_VIEW(s_tree), tp);
-                gtk_tree_view_set_cursor(GTK_TREE_VIEW(s_tree), tp, NULL, FALSE);
-                gtk_tree_path_free(tp);
+                GtkTreePath *tp = s_filter_model
+                    ? gtk_tree_model_filter_convert_child_path_to_path(
+                          s_filter_model, sp)
+                    : gtk_tree_path_copy(sp);
+                if (tp) {
+                    gtk_tree_view_expand_to_path(GTK_TREE_VIEW(s_tree), tp);
+                    gtk_tree_view_set_cursor(GTK_TREE_VIEW(s_tree), tp,
+                                             NULL, FALSE);
+                    gtk_tree_path_free(tp);
+                }
+                gtk_tree_path_free(sp);
                 done = TRUE;
             }
             g_free(path);
@@ -558,16 +621,88 @@ static void workspace_on_locate_clicked(GtkButton *b, gpointer ud) {
     } while (!done && gtk_tree_model_iter_next(
         GTK_TREE_MODEL(s_store), &parent));
 }
+/* GAP — the filter (macOS FolderTreePanel controlTextDidChange /
+ * _itemVisibleUnderFilter, .mm:827-885): case-insensitive substring on
+ * the NAME; a folder is visible when its own name matches or ANY
+ * descendant's does; subtrees are eagerly loaded on first activation so
+ * matches surface at any depth; the tree expands while filtering and
+ * collapses back to the roots when cleared. */
+static gboolean ws_name_matches(GtkTreeIter *sit) {
+    char *name = NULL;
+    gtk_tree_model_get(GTK_TREE_MODEL(s_store), sit, COL_NAME, &name, -1);
+    gboolean hit = FALSE;
+    if (name && *name) {
+        char *low = g_ascii_strdown(name, -1);
+        hit = strstr(low, s_filter_needle) != NULL;
+        g_free(low);
+    }
+    g_free(name);
+    return hit;
+}
+
+static gboolean ws_visible_under_filter(GtkTreeIter *sit) {
+    char *path = NULL;
+    gtk_tree_model_get(GTK_TREE_MODEL(s_store), sit, COL_PATH, &path, -1);
+    gboolean dummy = (path && strcmp(path, DUMMY_PATH) == 0);
+    g_free(path);
+    if (dummy) return FALSE;
+    if (ws_name_matches(sit)) return TRUE;
+    GtkTreeIter child;
+    if (gtk_tree_model_iter_children(GTK_TREE_MODEL(s_store), &child, sit)) {
+        do {
+            if (ws_visible_under_filter(&child)) return TRUE;
+        } while (gtk_tree_model_iter_next(GTK_TREE_MODEL(s_store), &child));
+    }
+    return FALSE;
+}
+
+static gboolean ws_filter_visible(GtkTreeModel *m, GtkTreeIter *sit,
+                                  gpointer ud) {
+    (void)m; (void)ud;
+    if (!s_filter_needle) return TRUE;
+    return ws_visible_under_filter(sit);
+}
+
+/* Eagerly load every unloaded directory under `sit` (deep). */
+static void ws_ensure_loaded_deep(GtkTreeIter *sit) {
+    if (has_only_dummy(sit)) {
+        char *dir = NULL;
+        gtk_tree_model_get(GTK_TREE_MODEL(s_store), sit, COL_PATH, &dir, -1);
+        GtkTreeIter dummy;
+        gtk_tree_model_iter_children(GTK_TREE_MODEL(s_store), &dummy, sit);
+        if (dir) { populate_dir(sit, dir); g_free(dir); }
+        gtk_tree_store_remove(s_store, &dummy);
+    }
+    GtkTreeIter child;
+    if (gtk_tree_model_iter_children(GTK_TREE_MODEL(s_store), &child, sit)) {
+        do {
+            gboolean is_dir = FALSE;
+            gtk_tree_model_get(GTK_TREE_MODEL(s_store), &child,
+                               COL_IS_DIR, &is_dir, -1);
+            if (is_dir) ws_ensure_loaded_deep(&child);
+        } while (gtk_tree_model_iter_next(GTK_TREE_MODEL(s_store), &child));
+    }
+}
+
 static void workspace_on_filter_changed(GtkSearchEntry *e, gpointer ud) {
     (void)ud;
     const char *txt = gtk_entry_get_text(GTK_ENTRY(e));
+    gboolean was_active = (s_filter_needle != NULL);
     g_free(s_filter_needle);
     s_filter_needle = (txt && *txt) ? g_ascii_strdown(txt, -1) : NULL;
+    if (s_filter_needle) {
+        GtkTreeIter root;
+        if (gtk_tree_model_get_iter_first(GTK_TREE_MODEL(s_store), &root)) {
+            do { ws_ensure_loaded_deep(&root); }
+            while (gtk_tree_model_iter_next(GTK_TREE_MODEL(s_store), &root));
+        }
+    }
     if (s_filter_model)
         gtk_tree_model_filter_refilter(s_filter_model);
-    /* When the user types, expand all so matches deep in the tree are visible. */
     if (s_tree && s_filter_needle)
         gtk_tree_view_expand_all(GTK_TREE_VIEW(s_tree));
+    else if (s_tree && was_active)
+        gtk_tree_view_collapse_all(GTK_TREE_VIEW(s_tree));
 }
 
 GtkWidget *workspace_init(GtkWidget *parent_window)
@@ -650,8 +785,17 @@ GtkWidget *workspace_init(GtkWidget *parent_window)
                                  G_TYPE_BOOLEAN); /* COL_IS_DIR */
 
     /* Tree view */
-    s_tree = gtk_tree_view_new_with_model(GTK_TREE_MODEL(s_store));
+    s_filter_model = GTK_TREE_MODEL_FILTER(
+        gtk_tree_model_filter_new(GTK_TREE_MODEL(s_store), NULL));
+    gtk_tree_model_filter_set_visible_func(s_filter_model,
+                                           ws_filter_visible, NULL, NULL);
+    s_tree = gtk_tree_view_new_with_model(GTK_TREE_MODEL(s_filter_model));
     gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(s_tree), FALSE);
+    /* The paned divider's enlarged grab zone overlays the panel's first
+     * ~10 px; without clearance the ROOT rows' expander arrows sit inside
+     * it and their clicks never reach the tree (the top-level folder
+     * could not be collapsed). */
+    gtk_widget_set_margin_start(s_tree, 10);
     gtk_tree_view_set_enable_tree_lines(GTK_TREE_VIEW(s_tree), FALSE);
 
     GtkTreeViewColumn *col = gtk_tree_view_column_new();
@@ -669,6 +813,17 @@ GtkWidget *workspace_init(GtkWidget *parent_window)
     gtk_tree_view_append_column(GTK_TREE_VIEW(s_tree), col);
 
     g_signal_connect(s_tree, "row-expanded",  G_CALLBACK(on_row_expanded),  NULL);
+    g_signal_connect(s_tree, "row-collapsed", G_CALLBACK(ws_dbg_collapsed), NULL);
+    if (g_getenv("NPP_WS_DEBUG")) {
+        GtkGesture *dbg = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(dbg), GDK_BUTTON_PRIMARY);
+        gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dbg),
+                                                   GTK_PHASE_CAPTURE);
+        g_signal_connect(dbg, "pressed", G_CALLBACK(ws_dbg_press), NULL);
+        gtk_widget_add_controller(s_tree, GTK_EVENT_CONTROLLER(dbg));
+    }
+    g_signal_connect(s_tree, "test-collapse-row", G_CALLBACK(ws_dbg_test_collapse), NULL);
+    g_signal_connect(s_tree, "test-expand-row", G_CALLBACK(ws_dbg_test_expand), NULL);
     g_signal_connect(s_tree, "row-activated",      G_CALLBACK(on_row_activated),     NULL);
     {
         GtkGesture *gc = gtk_gesture_click_new();
@@ -686,6 +841,19 @@ GtkWidget *workspace_init(GtkWidget *parent_window)
 
     gtk_widget_hide(s_panel);
     return s_panel;
+}
+
+/* GAP — persist the CURRENT root set whenever it changes from the
+ * panel (Add Folder…, Remove, Remove All). File-menu adds already
+ * synced in main.c; the panel paths silently didn't, so panel-added
+ * folders vanished on restart. */
+static void ws_sync_roots_to_prefs(void)
+{
+    gchar **roots = workspace_get_roots();
+    int n = 0; while (roots && roots[n]) n++;
+    prefs_workspace_roots_set((const char *const *)roots, n);
+    g_strfreev(roots);
+    prefs_save();
 }
 
 /* P10 — multi-root support. workspace_set_folder() now APPENDS a root
@@ -722,9 +890,16 @@ void workspace_add_folder(const char *path)
                        -1);
     populate_dir(&root, path);
 
-    GtkTreePath *tp = gtk_tree_model_get_path(GTK_TREE_MODEL(s_store), &root);
-    gtk_tree_view_expand_row(GTK_TREE_VIEW(s_tree), tp, FALSE);
-    gtk_tree_path_free(tp);
+    GtkTreePath *stp = gtk_tree_model_get_path(GTK_TREE_MODEL(s_store), &root);
+    GtkTreePath *vtp = s_filter_model
+        ? gtk_tree_model_filter_convert_child_path_to_path(s_filter_model, stp)
+        : gtk_tree_path_copy(stp);
+    if (vtp) {
+        gtk_tree_view_expand_row(GTK_TREE_VIEW(s_tree), vtp, FALSE);
+        gtk_tree_path_free(vtp);
+    }
+    gtk_tree_path_free(stp);
+    ws_sync_roots_to_prefs();
 }
 
 void workspace_set_folder(const char *path) {
@@ -763,6 +938,7 @@ void workspace_remove_folder(const char *path) {
         g_free(existing);
         if (match) {
             gtk_tree_store_remove(s_store, &it);
+            ws_sync_roots_to_prefs();
             return;
         }
     } while (gtk_tree_model_iter_next(GTK_TREE_MODEL(s_store), &it));

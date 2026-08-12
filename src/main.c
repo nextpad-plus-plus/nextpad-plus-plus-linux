@@ -9057,10 +9057,17 @@ static void build_main_window(GtkApplication *app)
     /* P10 — apply persisted workspace roots. Reveal the panel if any
      * roots were loaded so the user can see their workspace immediately. */
     {
+        /* COPY the list first: workspace_add_folder now re-syncs the
+         * persisted roots on every change, which frees and replaces the
+         * array prefs_workspace_roots() returned — iterating it live
+         * dropped every root after the first (and read freed memory). */
         int n = 0;
         const char *const *roots = prefs_workspace_roots(&n);
+        gchar **copy = g_new0(gchar *, n + 1);
+        for (int i = 0; i < n; i++) copy[i] = g_strdup(roots[i]);
         for (int i = 0; i < n; i++)
-            workspace_add_folder(roots[i]);
+            workspace_add_folder(copy[i]);
+        g_strfreev(copy);
         /* With panel-state restore active (GAP-82) the remembered
          * layout owns visibility — auto-showing here would resurrect a
          * panel the user deliberately closed and pollute the saved
