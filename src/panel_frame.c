@@ -385,10 +385,15 @@ static void on_pop_clicked(GtkButton *btn, gpointer ud) {
  * mirror — the icon depicts the DESTINATION, like macOS. */
 static void pf_refresh_move_icon(PanelFrameState *st) {
     if (!st->move_button) return;
+    /* Adwaita-grid sidebar pictograms (16-unit, pixel-aligned strokes —
+     * crisp at small sizes unlike the 100-unit SF exports; user asset
+     * swap 2026-08-11). sidebar-show = panel on the LEFT edge,
+     * sidebar-show-rtl = panel on the RIGHT; the icon depicts the
+     * DESTINATION side, as before. */
     GtkWidget *img = st->on_left
-        ? pf_sfsymbol_image("inset.filled.righthalf.arrow.right.rectangle",
+        ? pf_sfsymbol_image("sidebar-show-rtl",
                             PF_POP_ICON_PX, "go-next")
-        : pf_sfsymbol_image("inset.filled.lefthalf.arrow.left.rectangle",
+        : pf_sfsymbol_image("sidebar-show",
                             PF_POP_ICON_PX, "go-previous");
     if (st->move_image)
         gtk_container_remove(GTK_CONTAINER(st->move_button), st->move_image);
