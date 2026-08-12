@@ -227,33 +227,25 @@ static GtkWidget *pf_sfsymbol_image(const char *symbol, int px,
                                     const char *fallback_icon) {
     char path[1024];
 
-    /* 2026-08-11 — the chrome icons are now ONE neutral SVG set
-     * (resources/icons/standard/panels/toolbar/<symbol>.svg, black
-     * glyphs on alpha). librsvg rasterizes at the requested size; for
-     * dark mode the black is recolored in place to the dark foreground
-     * (#E6E6E6) with alpha preserved — no separate dark exports. */
-    g_snprintf(path, sizeof(path), "%s/icons/standard/panels/toolbar/%s.svg",
+    /* 2026-08-11 — chrome icons are neutral SVGs named *-symbolic.svg
+     * (resources/icons/standard/panels/toolbar/). Handing them to
+     * GtkImage as a GIcon routes them through the SAME icon machinery
+     * as the window-close-symbolic X: rasterized at DEVICE pixels for
+     * the widget's scale factor (a plain pixbuf is rendered at logical
+     * px and upscaled on HiDPI — the earlier blur), and the -symbolic
+     * suffix recolors the glyph to the widget's foreground, so one
+     * asset serves light and dark. */
+    g_snprintf(path, sizeof(path),
+               "%s/icons/standard/panels/toolbar/%s-symbolic.svg",
                RESOURCES_DIR, symbol);
     if (g_file_test(path, G_FILE_TEST_EXISTS)) {
-        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(path, px, px, NULL);
-        if (pb) {
-            if (pf_is_dark() && gdk_pixbuf_get_has_alpha(pb) &&
-                gdk_pixbuf_get_n_channels(pb) == 4) {
-                guchar *row = gdk_pixbuf_get_pixels(pb);
-                int w = gdk_pixbuf_get_width(pb);
-                int h = gdk_pixbuf_get_height(pb);
-                int stride = gdk_pixbuf_get_rowstride(pb);
-                for (int y = 0; y < h; y++, row += stride) {
-                    guchar *q = row;
-                    for (int x = 0; x < w; x++, q += 4) {
-                        q[0] = q[1] = q[2] = 0xE6;   /* keep q[3] */
-                    }
-                }
-            }
-            GtkWidget *img = gtk_image_new_from_pixbuf(pb);
-            g_object_unref(pb);
-            return img;
-        }
+        GFile *f = g_file_new_for_path(path);
+        GIcon *gi = g_file_icon_new(f);
+        GtkWidget *img = gtk_image_new_from_gicon(gi);
+        gtk_image_set_pixel_size(GTK_IMAGE(img), px);
+        g_object_unref(gi);
+        g_object_unref(f);
+        return img;
     }
 
     /* Legacy per-theme PNG exports (pre-2026-08-11 installs). */
