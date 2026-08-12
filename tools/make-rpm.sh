@@ -19,7 +19,7 @@
 # glibc >= 2.38 and GTK >= 4.14, i.e. Fedora 40+, RHEL/Alma/Rocky 10+,
 # openSUSE Leap 16+/Tumbleweed. The RHEL 9 generation cannot run it.
 #
-# Output: nextpad-plus-plus-<VER>-1.<arch>.rpm in the repo root.
+# Output: Nextpad++v<VER>_<debarch>.rpm in the repo root (deb-style name).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -144,7 +144,15 @@ rpmbuild -bb "$TOP/SPECS/nextpad-plus-plus.spec" \
          --define "_topdir $TOP" \
          --quiet
 
-OUT="nextpad-plus-plus-${VER}-1.${ARCH}.rpm"
+# Output filename mirrors the .deb (Nextpad++v<VER>_<debarch>) so the
+# download listing is uniform; the package metadata inside keeps the
+# canonical rpm Name/arch (nextpad-plus-plus, aarch64/x86_64).
+case "$ARCH" in
+  aarch64) DEBARCH=arm64 ;;
+  x86_64)  DEBARCH=amd64 ;;
+  *)       DEBARCH="$ARCH" ;;
+esac
+OUT="Nextpad++v${VER}_${DEBARCH}.rpm"
 cp "$TOP/RPMS/$ARCH/"*.rpm "./$OUT"
 echo "── Built $OUT"
 rpm -qp --info "./$OUT" 2>/dev/null | sed -n '1,9p'

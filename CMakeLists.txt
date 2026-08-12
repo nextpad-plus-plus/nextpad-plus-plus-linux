@@ -280,6 +280,7 @@ install(DIRECTORY resources/ DESTINATION ${CMAKE_INSTALL_DATADIR}/nextpad-plus-p
         # FILES_MATCHING must precede every PATTERN (CMake requirement).
         FILES_MATCHING
         PATTERN "*.png"
+        PATTERN "*.svg"     # panel-chrome *-symbolic.svg (panel_frame.c, 2026-08-11)
         PATTERN "*.xml"
         PATTERN "*.json"
         PATTERN ".git" EXCLUDE

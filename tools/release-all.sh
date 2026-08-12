@@ -6,8 +6,8 @@
 #   NPP_REMOTES="ubuntu24 fedora-vm" tools/release-all.sh
 #
 # Produces, in dist/:
-#   Nextpad++v<VER>_arm64.deb   nextpad-plus-plus-<VER>-1.aarch64.rpm   (this host)
-#   Nextpad++v<VER>_amd64.deb   nextpad-plus-plus-<VER>-1.x86_64.rpm    (ubuntu24)
+#   Nextpad++v<VER>_arm64.deb   Nextpad++v<VER>_arm64.rpm   (this host)
+#   Nextpad++v<VER>_amd64.deb   Nextpad++v<VER>_amd64.rpm   (ubuntu24)
 #
 # WHY REMOTE HOSTS AND NOT CROSS-COMPILATION: each package embeds natively
 # compiled binaries, so every architecture must be built on a machine of that
@@ -44,8 +44,8 @@ echo "══ LOCAL ($(uname -m))"
 echo "  ✓ $(ls -t Nextpad++v${VER}_*.deb | head -1)"
 ./tools/make-rpm.sh > /tmp/npp-rel-rpm.log 2>&1 \
     || { echo "  rpm FAILED — see /tmp/npp-rel-rpm.log"; tail -15 /tmp/npp-rel-rpm.log; exit 1; }
-echo "  ✓ $(ls -t nextpad-plus-plus-${VER}-1.*.rpm | head -1)"
-mv -f Nextpad++v${VER}_*.deb nextpad-plus-plus-${VER}-1.*.rpm "$DIST/" 2>/dev/null || true
+echo "  ✓ $(ls -t Nextpad++v${VER}_*.rpm | head -1)"
+mv -f Nextpad++v${VER}_*.deb Nextpad++v${VER}_*.rpm "$DIST/" 2>/dev/null || true
 
 # ── remote architectures ────────────────────────────────────────────────
 REMOTE_PATH=/home/ubuntu/development/npp/nextpad-plus-plus-gtk4
@@ -75,7 +75,7 @@ for H in $REMOTES; do
 
     echo "  → fetching artifacts"
     scp -q "$H:$REMOTE_PATH/Nextpad++v${VER}_*.deb" \
-           "$H:$REMOTE_PATH/nextpad-plus-plus-${VER}-1.*.rpm" "$DIST/" 2>/dev/null || true
+           "$H:$REMOTE_PATH/Nextpad++v${VER}_*.rpm" "$DIST/" 2>/dev/null || true
     ssh -o BatchMode=yes "$H" "rm -f $REMOTE_PATH/*.deb $REMOTE_PATH/*.rpm" 2>/dev/null || true
     echo "  ✓ done"
 done
