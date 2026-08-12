@@ -216,13 +216,13 @@ static void pf_frame_gone(gpointer data, GObject *dead) {
  * built-in padding — at 14 px the strokes land on bad fractional pixel
  * positions and render soft (the detached float header always used 16,
  * which rasterizes crisply and visually matches the 14 px close X). */
-#define PF_POP_ICON_PX 16
+#define PF_POP_ICON_PX 13
 /* The move-side pictogram is denser art (frame + arrow) — rendered a
  * step larger so its hairlines survive; the button grows with it. */
-#define PF_MOVE_ICON_PX 18
-#define PF_POP_BTN_PX  17
+#define PF_MOVE_ICON_PX 14
+#define PF_POP_BTN_PX  14
 /* Margin around the title-bar tool buttons. */
-#define PF_POP_BTN_MARGIN 4
+#define PF_POP_BTN_MARGIN 5
 
 /* GAP-123 — SF Symbol PNG loader. The macOS 2ccf0d9 chrome uses SF
  * Symbols; the author exported them as PNGs under
@@ -685,9 +685,9 @@ GtkWidget *panel_frame_new(const char *name,
     st->close_button = gtk_button_new();
     gtk_button_set_has_frame(GTK_BUTTON(st->close_button), FALSE);
     gtk_widget_set_focus_on_click(st->close_button, FALSE);
-    gtk_widget_set_size_request(st->close_button, 17, 17);
+    gtk_widget_set_size_request(st->close_button, 14, 14);
     gtk_widget_set_valign(st->close_button, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_end(st->close_button, 4);
+    gtk_widget_set_margin_end(st->close_button, 5);
     gtk_widget_set_margin_start(st->close_button, 2);
     gtk_style_context_add_class(
         gtk_widget_get_style_context(st->close_button),
@@ -699,7 +699,7 @@ GtkWidget *panel_frame_new(const char *name,
     {
         GtkWidget *x_img = gtk_image_new_from_icon_name(
             "window-close-symbolic");
-        gtk_image_set_pixel_size(GTK_IMAGE(x_img), 14);
+        gtk_image_set_pixel_size(GTK_IMAGE(x_img), 11);
         gtk_container_add(GTK_CONTAINER(st->close_button), x_img);
     }
     gtk_widget_set_tooltip_text(st->close_button, "Close panel");
