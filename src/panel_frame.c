@@ -225,10 +225,40 @@ static void pf_frame_gone(gpointer data, GObject *dead) {
  * inset.* rectangles are wider than tall). */
 static GtkWidget *pf_sfsymbol_image(const char *symbol, int px,
                                     const char *fallback_icon) {
-    const char *theme_subdir = pf_is_dark() ? "dark" : "light";
     char path[1024];
+
+    /* 2026-08-11 — the chrome icons are now ONE neutral SVG set
+     * (resources/icons/standard/panels/toolbar/<symbol>.svg, black
+     * glyphs on alpha). librsvg rasterizes at the requested size; for
+     * dark mode the black is recolored in place to the dark foreground
+     * (#E6E6E6) with alpha preserved — no separate dark exports. */
+    g_snprintf(path, sizeof(path), "%s/icons/standard/panels/toolbar/%s.svg",
+               RESOURCES_DIR, symbol);
+    if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(path, px, px, NULL);
+        if (pb) {
+            if (pf_is_dark() && gdk_pixbuf_get_has_alpha(pb) &&
+                gdk_pixbuf_get_n_channels(pb) == 4) {
+                guchar *row = gdk_pixbuf_get_pixels(pb);
+                int w = gdk_pixbuf_get_width(pb);
+                int h = gdk_pixbuf_get_height(pb);
+                int stride = gdk_pixbuf_get_rowstride(pb);
+                for (int y = 0; y < h; y++, row += stride) {
+                    guchar *q = row;
+                    for (int x = 0; x < w; x++, q += 4) {
+                        q[0] = q[1] = q[2] = 0xE6;   /* keep q[3] */
+                    }
+                }
+            }
+            GtkWidget *img = gtk_image_new_from_pixbuf(pb);
+            g_object_unref(pb);
+            return img;
+        }
+    }
+
+    /* Legacy per-theme PNG exports (pre-2026-08-11 installs). */
     g_snprintf(path, sizeof(path), "%s/icons/%s/sfsymbols/%s.png",
-               RESOURCES_DIR, theme_subdir, symbol);
+               RESOURCES_DIR, pf_is_dark() ? "dark" : "light", symbol);
     if (g_file_test(path, G_FILE_TEST_EXISTS)) {
         GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(path, px, px, NULL);
         if (pb) {
