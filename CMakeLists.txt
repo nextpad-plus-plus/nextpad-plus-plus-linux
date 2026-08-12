@@ -236,10 +236,12 @@ set_target_properties(nextpad_pp PROPERTIES
     BUILD_RPATH   "${SCI_ROOT}/bin"
     INSTALL_RPATH "$ORIGIN/../lib/nextpad-plus-plus")
 
+find_package(X11)   # Window menu: Move to Monitor (X11 sessions only)
 target_link_libraries(nextpad_pp PRIVATE
     "${SCI_SO}"
     lexilla
     ${GTK4_LIBRARIES} ${ADW_LIBRARIES} ${UCHARDET_LIBRARIES}
+    ${X11_LIBRARIES}
     m
 )
 target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${ADW_LIBRARY_DIRS} ${UCHARDET_LIBRARY_DIRS})

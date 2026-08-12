@@ -72,6 +72,10 @@
 #include "paths.h"
 #include "panel_frame.h"
 #include "theme.h"
+#ifdef GDK_WINDOWING_X11
+#include <gdk/x11/gdkx.h>
+#include <X11/Xlib.h>
+#endif
 #include "udl_editor.h"
 
 static const char *kAppId = "org.nextpad.NextpadPP";
@@ -2794,6 +2798,154 @@ static void action_wikipedia_search(GSimpleAction *a, GVariant *p, gpointer u) {
                            url, GDK_CURRENT_TIME, NULL);
     g_free(url); g_free(esc); g_free(word);
 }
+/* ── GAP-96 — Window menu (macOS MenuBuilder.mm:946-971) ─────────────── */
+
+/* "Windows…" — the macOS showWindowsList: panel (MWC:6678-6790): a
+ * 540x300 resizable modal listing every open document across the
+ * primary and both split notebooks — File Name / Type / Path columns —
+ * with Activate (default, double-click too) and Close. */
+static void action_windows_list(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    GPtrArray *docs = editor_all_docs();
+    if (!docs || docs->len == 0) { if (docs) g_ptr_array_free(docs, TRUE); return; }
+
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(
+        i18n_translate("Windows"),
+        g_window ? GTK_WINDOW(g_window) : NULL,
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        i18n_translate("_Close"),   GTK_RESPONSE_CLOSE,
+        i18n_translate("Activate"), GTK_RESPONSE_ACCEPT,
+        NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dlg), 540, 300);
+    gtk_window_set_resizable(GTK_WINDOW(dlg), TRUE);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+
+    /* store: name, ext, path, doc pointer */
+    GtkListStore *ls = gtk_list_store_new(4, G_TYPE_STRING, G_TYPE_STRING,
+                                          G_TYPE_STRING, G_TYPE_POINTER);
+    for (guint d = 0; d < docs->len; d++) {
+        NppDoc *doc = g_ptr_array_index(docs, d);
+        char name[256];
+        editor_doc_display_name(doc, name, sizeof(name));
+        gchar *disp = g_strdup_printf("%s%s", doc->modified ? "*" : "", name);
+        const char *dot = strrchr(name, '.');
+        const char *ext = (dot && dot != name) ? dot + 1 : "";
+        GtkTreeIter it;
+        gtk_list_store_append(ls, &it);
+        gtk_list_store_set(ls, &it, 0, disp, 1, ext,
+                           2, doc->filepath ? doc->filepath : "", 3, doc, -1);
+        g_free(disp);
+    }
+    g_ptr_array_free(docs, TRUE);
+
+    GtkWidget *tv = gtk_tree_view_new_with_model(GTK_TREE_MODEL(ls));
+    g_object_unref(ls);
+    gtk_tree_selection_set_mode(
+        gtk_tree_view_get_selection(GTK_TREE_VIEW(tv)),
+        GTK_SELECTION_MULTIPLE);   /* macOS allowsMultipleSelection */
+    struct { const char *title; int col; int width; } cols[] = {
+        { "File Name", 0, 160 }, { "Type", 1, 60 }, { "Path", 2, 260 },
+    };
+    for (guint c = 0; c < G_N_ELEMENTS(cols); c++) {
+        GtkCellRenderer *r = gtk_cell_renderer_text_new();
+        if (cols[c].col == 2)
+            g_object_set(r, "ellipsize", PANGO_ELLIPSIZE_MIDDLE, NULL);
+        GtkTreeViewColumn *cc = gtk_tree_view_column_new_with_attributes(
+            i18n_translate(cols[c].title), r, "text", cols[c].col, NULL);
+        gtk_tree_view_column_set_resizable(cc, TRUE);
+        gtk_tree_view_column_set_fixed_width(cc, cols[c].width);
+        gtk_tree_view_append_column(GTK_TREE_VIEW(tv), cc);
+    }
+    /* Select the first row like macOS. */
+    {
+        GtkTreePath *tp = gtk_tree_path_new_first();
+        gtk_tree_view_set_cursor(GTK_TREE_VIEW(tv), tp, NULL, FALSE);
+        gtk_tree_path_free(tp);
+    }
+    /* Double-click = Activate (macOS doubleAction). */
+    g_signal_connect_swapped(tv, "row-activated",
+        G_CALLBACK(gtk_widget_activate_default), dlg);
+
+    GtkWidget *sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw),
+        GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_vexpand(sw, TRUE);
+    gtk_widget_set_margin_start(sw, 8);
+    gtk_widget_set_margin_end(sw, 8);
+    gtk_widget_set_margin_top(sw, 8);
+    gtk_widget_set_margin_bottom(sw, 8);
+    gtk_container_add(GTK_CONTAINER(sw), tv);
+    gtk_container_add(GTK_CONTAINER(
+        gtk_dialog_get_content_area(GTK_DIALOG(dlg))), sw);
+    gtk_widget_show_all(dlg);
+
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+        GtkTreeModel *m = NULL;
+        GList *rows = gtk_tree_selection_get_selected_rows(
+            gtk_tree_view_get_selection(GTK_TREE_VIEW(tv)), &m);
+        if (rows) {   /* first selected row, like macOS selectedRow */
+            GtkTreeIter it;
+            if (gtk_tree_model_get_iter(m, &it, (GtkTreePath *)rows->data)) {
+                gpointer doc = NULL;
+                gtk_tree_model_get(m, &it, 3, &doc, -1);
+                /* Dialog is modal: the doc set cannot change while
+                 * it is open, so the pointer is still live. */
+                if (doc)
+                    editor_activate_doc((NppDoc *)doc);
+            }
+            g_list_free_full(rows, (GDestroyNotify)gtk_tree_path_free);
+        }
+    }
+    gtk_widget_destroy(dlg);
+}
+
+/* "New Window" — macOS openNewWindow (⇧⌘N). One process per window on
+ * this port: spawn ourselves with -multiInst so the instance is
+ * separate and -nosession so it neither restores nor saves the session
+ * (the primary window remains the session owner). */
+static void action_new_window(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    char self[PATH_MAX];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (n <= 0) return;
+    self[n] = '\0';
+    const char *argv[] = { self, "-multiInst", "-nosession", NULL };
+    g_spawn_async(NULL, (gchar **)argv, NULL, G_SPAWN_SEARCH_PATH,
+                  NULL, NULL, NULL, NULL);
+}
+
+/* "Move to Monitor N" — the Linux-sensible cousin of macOS's
+ * "Move to <display>" items. X11 only: Wayland offers no API to
+ * position toplevels (same platform limit as Always-on-Top), so the
+ * submenu is only built when running on X11 with >1 monitor. */
+static void action_move_to_monitor(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)u;
+#ifdef GDK_WINDOWING_X11
+    if (!g_window || !p) return;
+    int want = (int)g_variant_get_int32(p);
+    GdkDisplay *d = gtk_widget_get_display(GTK_WIDGET(g_window));
+    if (!GDK_IS_X11_DISPLAY(d)) return;
+    GListModel *mons = gdk_display_get_monitors(d);
+    if (want < 0 || (guint)want >= g_list_model_get_n_items(mons)) return;
+    GdkMonitor *mon = g_list_model_get_item(mons, (guint)want);
+    GdkRectangle geo;
+    gdk_monitor_get_geometry(mon, &geo);
+    int scale = gdk_monitor_get_scale_factor(mon);
+    GdkSurface *surf = gtk_native_get_surface(GTK_NATIVE(g_window));
+    if (surf) {
+        Display *xd = gdk_x11_display_get_xdisplay(d);
+        Window   xw = gdk_x11_surface_get_xid(surf);
+        /* geometry is in logical px; X wants device px. +48 offset keeps
+         * the title bar reachable under any panel/dock. */
+        XMoveWindow(xd, xw, (geo.x + 48) * scale, (geo.y + 48) * scale);
+        XFlush(xd);
+    }
+    g_object_unref(mon);
+#else
+    (void)p;
+#endif
+}
+
 static void action_open_in_new_instance(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     gchar *path = current_selection_or_word(); if (!path) return;
@@ -6737,6 +6889,9 @@ static const GActionEntry kAppActions[] = {
     { "get-php-help",        action_get_php_help,        NULL, NULL, NULL },
     { "wikipedia-search",    action_wikipedia_search,    NULL, NULL, NULL },
     { "open-in-new-instance",action_open_in_new_instance,NULL, NULL, NULL },
+    { "windows-list",        action_windows_list,        NULL, NULL, NULL },
+    { "new-window",          action_new_window,          NULL, NULL, NULL },
+    { "move-to-monitor",     action_move_to_monitor,     "i",  NULL, NULL },
     { "modify-shortcut-macro",action_modify_shortcut_macro,NULL,NULL, NULL },
     { "modify-shortcut-run", action_modify_shortcut_run, NULL, NULL, NULL },
     { "begin-end-select",    action_begin_end_select,    NULL, "false", NULL },
@@ -8140,6 +8295,67 @@ static GMenuModel *build_menu_model(void)
     g_object_unref(plugins);
 
     /* Help */
+    /* ── Window (GAP-96 — macOS MenuBuilder.mm:946-971, Linux-sensible
+     * subset: the Minimize/Zoom/Fill/tiling family belongs to the WM). */
+    GMenu *winm = g_menu_new();
+    {
+        GMenu *grp = g_menu_new();
+        GMenu *sb = g_menu_new();
+        g_menu_append(sb, "File Name A to Z", "app.sort-tabs-name-asc");
+        g_menu_append(sb, "File Name Z to A", "app.sort-tabs-name-desc");
+        g_menu_append(sb, "File Type A to Z", "app.sort-tabs-ext-asc");
+        g_menu_append(sb, "File Type Z to A", "app.sort-tabs-ext-desc");
+        g_menu_append(sb, "Full Path A to Z", "app.sort-tabs-path-asc");
+        g_menu_append(sb, "Full Path Z to A", "app.sort-tabs-path-desc");
+        g_menu_append_submenu(grp, "Sort By", G_MENU_MODEL(sb));
+        g_object_unref(sb);
+        g_menu_append(grp, "Windows…",   "app.windows-list");
+        g_menu_append(grp, "New Window", "app.new-window");
+        g_menu_append_section(winm, NULL, G_MENU_MODEL(grp));
+        g_object_unref(grp);
+    }
+#ifdef GDK_WINDOWING_X11
+    {
+        /* Only on X11 with >1 monitor (Wayland can't place toplevels). */
+        GdkDisplay *disp = gdk_display_get_default();
+        if (disp && GDK_IS_X11_DISPLAY(disp)) {
+            GListModel *mons = gdk_display_get_monitors(disp);
+            guint nmon = g_list_model_get_n_items(mons);
+            if (nmon > 1) {
+                GMenu *mg = g_menu_new();
+                GMenu *mm = g_menu_new();
+                for (guint mi = 0; mi < nmon; mi++) {
+                    GdkMonitor *mon = g_list_model_get_item(mons, mi);
+                    GdkRectangle geo;
+                    gdk_monitor_get_geometry(mon, &geo);
+                    const char *model = gdk_monitor_get_model(mon);
+                    gchar *lbl = g_strdup_printf("Monitor %u — %s (%d×%d)",
+                        mi + 1, model ? model : "display",
+                        geo.width, geo.height);
+                    gchar *det = g_strdup_printf("app.move-to-monitor(%u)", mi);
+                    g_menu_append(mm, lbl, det);
+                    g_free(lbl); g_free(det);
+                    g_object_unref(mon);
+                }
+                g_menu_append_submenu(mg, "Move to Monitor",
+                                      G_MENU_MODEL(mm));
+                g_object_unref(mm);
+                g_menu_append_section(winm, NULL, G_MENU_MODEL(mg));
+                g_object_unref(mg);
+            }
+        }
+    }
+#endif
+    {
+        GMenu *grp = g_menu_new();
+        g_menu_append(grp, "Select Next Tab",     "app.tab-next");
+        g_menu_append(grp, "Select Previous Tab", "app.tab-prev");
+        g_menu_append_section(winm, NULL, G_MENU_MODEL(grp));
+        g_object_unref(grp);
+    }
+    g_menu_append_submenu(bar, "_Window", G_MENU_MODEL(winm));
+    g_object_unref(winm);
+
     GMenu *help = g_menu_new();
     g_menu_append(help, "Command Line Arguments…", "app.help-cli-args");
     g_menu_append(help, "Nextpad++ macOS Home",          "app.help-home");
@@ -9371,6 +9587,7 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.get-php-help",         "<Alt>F1");
     set_accel(app, "app.wikipedia-search",     "<Alt>F3");
     set_accel(app, "app.open-in-new-instance", "<Alt>F6");
+    set_accel(app, "app.new-window",           "<Primary><Shift>n");
 
     /* Menu bar — keep the English model (g_menu_english) for the context-
      * menu index and for live retranslation; the app menubar itself uses a
