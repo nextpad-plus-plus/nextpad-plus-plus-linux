@@ -58,6 +58,17 @@ static int icon_px(void) {
 /* ------------------------------------------------------------------ */
 static GtkWidget *s_window           = NULL;
 static GtkWidget *s_toolbar          = NULL;  /* the toolbar box, for theme reloads */
+/* Classic-mode overflow (macOS parity: buttons collapse behind a "»"
+ * pill when the window narrows). The button strip lives in a
+ * horizontal scroller (policy EXTERNAL — never scrolls, it just lets
+ * the strip be allocated less than its natural width), and the strip's
+ * hadjustment tells us exactly how much is clipped. */
+static GtkWidget *s_strip            = NULL;  /* classic button strip     */
+static GtkWidget *s_strip_scroller   = NULL;
+static GtkWidget *s_ovf_btn          = NULL;  /* the "»" menu button      */
+static GtkWidget *s_ovf_pop          = NULL;
+static GtkWidget *s_plugin_group     = NULL;  /* box appended on first
+                                                 plugin button            */
 static GtkWidget *s_btn_undo         = NULL;
 static GtkWidget *s_btn_redo         = NULL;
 static GtkWidget *s_btn_save         = NULL;
@@ -621,15 +632,34 @@ static void apply_toolbar_css(void)
     gboolean first = (prov == NULL);
     if (first) prov = gtk_css_provider_new();
     gboolean dark = is_dark_mode();
-    char buf[1024];
+    char buf[1536];
+    /* Button minimums track the icon size so the pref actually changes
+     * the toolbar's footprint (fixed 24px used to swallow every scale
+     * below 100%). */
+    int px = icon_px();
     snprintf(buf, sizeof(buf),
         ".npp-toolbar { padding: 2px 4px;"
         " border-bottom: 1px solid %s; }"
         ".npp-toolbar button { padding: 2px; margin: 0 1px;"
-        " min-width: 24px; min-height: 24px; }"
+        " min-width: %dpx; min-height: %dpx; }"
         ".npp-toolbar separator { margin: 2px 4px; }"
+        /* The » overflow pill: class sits on the OUTER menubutton node;
+         * frame/hover paint on the INNER button node. */
+        ".npp-toolbar .npp-tb-overflow { margin: 0 3px; }"
+        ".npp-toolbar .npp-tb-overflow > button { padding: 0 6px; }"
+        /* Big » glyph — scoped to the BUTTON branch only: the popover
+         * is parented inside the menubutton subtree, so a bare
+         * ".npp-tb-overflow label" would blow up the menu rows too.
+         * The negative margin hands back the extra line height so the
+         * toolbar row stays flat when » appears. */
+        ".npp-toolbar .npp-tb-overflow > button label { font-size: 25px;"
+        " margin: -6px 0; }"
+        /* Menu rows: zero out the 24px button minimum they inherit
+         * from ".npp-toolbar button" (the popover lives inside the
+         * toolbar subtree) — rows sit ~30% tighter without it. */
+        ".npp-overflow-menu button { padding: 2px 8px; min-height: 0; }"
         "%s",
-        dark ? "#444444" : "#e1e1e1",
+        dark ? "#444444" : "#e1e1e1", px, px,
         /* Dark-mode button states: hover / toggled-on / pressed.
          * Ordered hover < checked < active so a pressed or toggled
          * button out-paints the hover colour. */
@@ -709,14 +739,33 @@ static void on_overflow_row_plugin(GtkButton *b, gpointer cmd_id)
     if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
 }
 
-/* An empty overflow popover (vertical row box inside). */
+/* An empty overflow popover: a vertical row box inside a scroller, so
+ * a long menu (every toolbar item hidden at a tiny window width) caps
+ * out and scrolls like macOS's NSMenu instead of outgrowing the
+ * screen. The row box is stashed on the popover — callers must use
+ * overflow_popover_box(), not gtk_popover_get_child(). */
 static GtkWidget *overflow_popover_new(void)
 {
     GtkWidget *pop = gtk_popover_new();
+    GtkWidget *sw  = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_propagate_natural_height(
+        GTK_SCROLLED_WINDOW(sw), TRUE);
+    gtk_scrolled_window_set_propagate_natural_width(
+        GTK_SCROLLED_WINDOW(sw), TRUE);
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_add_css_class(box, "npp-overflow-menu");
-    gtk_popover_set_child(GTK_POPOVER(pop), box);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), box);
+    gtk_popover_set_child(GTK_POPOVER(pop), sw);
+    g_object_set_data(G_OBJECT(pop), "npp-ovf-box", box);
+    g_object_set_data(G_OBJECT(pop), "npp-ovf-sw",  sw);
     return pop;
+}
+
+static GtkWidget *overflow_popover_box(GtkWidget *pop)
+{
+    return g_object_get_data(G_OBJECT(pop), "npp-ovf-box");
 }
 
 /* One icon+label row. `icon` may be NULL (label indents consistently
@@ -725,7 +774,7 @@ static GtkWidget *overflow_popover_add(GtkWidget *pop, GtkWidget *icon,
                                        const char *label, GCallback cb,
                                        gpointer data)
 {
-    GtkWidget *box = gtk_popover_get_child(GTK_POPOVER(pop));
+    GtkWidget *box = overflow_popover_box(pop);
     GtkWidget *btn = gtk_button_new();
     gtk_button_set_has_frame(GTK_BUTTON(btn), FALSE);
     GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -1068,6 +1117,249 @@ static void append_tab_controls(GtkWidget *tb)
     gtk_box_append(GTK_BOX(tb), editor_make_tab_controls());
 }
 
+/* ── Classic-mode overflow (macOS parity) ──────────────────────────────
+ * macOS gets this from NSToolbar: narrowing the window slides trailing
+ * items behind a "»" whose menu lists them (menuFormRepresentation:
+ * tooltip title + the button's own action, populated lazily on open) —
+ * and AppKit collapses whole items, never drawing a half-clipped
+ * button. Modelled here: the strip sits in an EXTERNAL-policy scroller
+ * purely so the window may narrow below the strip's natural width; on
+ * every width change an idle pass hides the trailing "units" (strip
+ * children, with the plugin group collapsing per-button) that no
+ * longer fully fit and shows », whose popover is rebuilt from the
+ * hidden units each time it opens. */
+
+static GtkWidget *make_plugin_icon_image(const char *icon_path);
+
+#define NPP_OVF_HIDDEN "npp-ovf-hidden"   /* unit hidden by overflow   */
+#define NPP_OVF_WIDTH  "npp-ovf-width"    /* nat width cached at hide  */
+#define OVF_MAX_UNITS  96
+#define OVF_SPACING    2                  /* strip box spacing         */
+
+static guint s_ovf_idle = 0;
+static int   ovf_w      = 0;   /* » natural width, cached while shown;
+                                  reset when the icon scale changes
+                                  (CSS button minimums track it) */
+
+static gboolean ovf_flagged(GtkWidget *w)
+{
+    return g_object_get_data(G_OBJECT(w), NPP_OVF_HIDDEN) != NULL;
+}
+
+/* A unit takes part in overflow if it is visible or was hidden by US.
+ * Widgets hidden some other way (toolbarButtonsConf) are left alone. */
+static gboolean ovf_candidate(GtkWidget *w)
+{
+    return gtk_widget_get_visible(w) || ovf_flagged(w);
+}
+
+/* The ordered collapse units: the strip's direct children, except the
+ * plugin group box whose member buttons collapse individually (macOS
+ * hides plugin segments one by one, not the whole block). */
+static guint ovf_units(GtkWidget **out)
+{
+    guint n = 0;
+    if (!s_strip) return 0;
+    for (GtkWidget *c = gtk_widget_get_first_child(s_strip);
+         c && n < OVF_MAX_UNITS; c = gtk_widget_get_next_sibling(c)) {
+        if (s_plugin_group && c == s_plugin_group) {
+            for (GtkWidget *p = gtk_widget_get_first_child(c);
+                 p && n < OVF_MAX_UNITS; p = gtk_widget_get_next_sibling(p))
+                if (ovf_candidate(p)) out[n++] = p;
+        } else if (ovf_candidate(c)) {
+            out[n++] = c;
+        }
+    }
+    return n;
+}
+
+/* gtk_widget_measure reports 0 for hidden widgets, so each unit's
+ * natural width is cached the moment it is hidden. */
+static int ovf_unit_width(GtkWidget *u)
+{
+    if (gtk_widget_get_visible(u)) {
+        int nat = 0;
+        gtk_widget_measure(u, GTK_ORIENTATION_HORIZONTAL, -1,
+                           NULL, &nat, NULL, NULL);
+        return nat;
+    }
+    return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(u), NPP_OVF_WIDTH));
+}
+
+static void ovf_unit_hide(GtkWidget *u)
+{
+    if (!gtk_widget_get_visible(u)) return;
+    int nat = 0;
+    gtk_widget_measure(u, GTK_ORIENTATION_HORIZONTAL, -1,
+                       NULL, &nat, NULL, NULL);
+    g_object_set_data(G_OBJECT(u), NPP_OVF_WIDTH, GINT_TO_POINTER(nat));
+    g_object_set_data(G_OBJECT(u), NPP_OVF_HIDDEN, GINT_TO_POINTER(1));
+    gtk_widget_set_visible(u, FALSE);
+}
+
+static void ovf_unit_show(GtkWidget *u)
+{
+    if (!ovf_flagged(u)) return;
+    g_object_set_data(G_OBJECT(u), NPP_OVF_HIDDEN, NULL);
+    gtk_widget_set_visible(u, TRUE);
+}
+
+static gboolean ovf_recompute(gpointer data)
+{
+    (void)data;
+    s_ovf_idle = 0;
+    if (!s_strip || !s_strip_scroller || !s_ovf_btn) return G_SOURCE_REMOVE;
+
+    GtkWidget *units[OVF_MAX_UNITS];
+    guint n = ovf_units(units);
+    if (!n) return G_SOURCE_REMOVE;
+
+    GtkAdjustment *adj = gtk_scrolled_window_get_hadjustment(
+                             GTK_SCROLLED_WINDOW(s_strip_scroller));
+    double page = gtk_adjustment_get_page_size(adj);
+    if (page <= 1.0) return G_SOURCE_REMOVE;     /* not allocated yet */
+
+    /* Stable reference: the width the strip would get with » hidden
+     * (the scroller's hexpand absorbs exactly the »-sized hole).
+     * ovf_w may still be 0 here (never measured); that's fine — it is
+     * only non-zero when » has been visible, which is the only case
+     * this term applies. */
+    double avail_all = page +
+        (gtk_widget_get_visible(s_ovf_btn) ? ovf_w + OVF_SPACING : 0);
+
+    double total = 0;
+    for (guint i = 0; i < n; i++)
+        total += ovf_unit_width(units[i]) + (i ? OVF_SPACING : 0);
+
+    guint keep = n;
+    if (total > avail_all + 0.5) {
+        /* » width — measured while it is legitimately shown (it is
+         * about to be anyway). The old show→measure→hide-again toggle
+         * ran on EVERY startup even with no overflow; suspected source
+         * of the map-churn Gtk-CRITICALs seen on the live desktop. */
+        if (!gtk_widget_get_visible(s_ovf_btn))
+            gtk_widget_set_visible(s_ovf_btn, TRUE);
+        if (!ovf_w) {
+            gtk_widget_measure(s_ovf_btn, GTK_ORIENTATION_HORIZONTAL, -1,
+                               NULL, &ovf_w, NULL, NULL);
+            if (ovf_w <= 0) ovf_w = 34;
+        }
+        double avail = avail_all - ovf_w - OVF_SPACING, w = 0;
+        for (keep = 0; keep < n; keep++) {
+            double nw = w + ovf_unit_width(units[keep])
+                          + (keep ? OVF_SPACING : 0);
+            if (nw > avail + 0.5) break;
+            w = nw;
+        }
+        /* Whole-button collapse never leaves a dangling separator. */
+        while (keep > 0 && GTK_IS_SEPARATOR(units[keep - 1])) keep--;
+    }
+
+    for (guint i = 0; i < n; i++) {
+        if (i >= keep) ovf_unit_hide(units[i]);
+        else           ovf_unit_show(units[i]);
+    }
+
+    /* The plugin group box (and thereby its strip spacing slot) is
+     * visible iff any member survived — derived, never flagged. */
+    if (s_plugin_group) {
+        gboolean any = FALSE;
+        for (GtkWidget *p = gtk_widget_get_first_child(s_plugin_group); p;
+             p = gtk_widget_get_next_sibling(p))
+            if (gtk_widget_get_visible(p)) { any = TRUE; break; }
+        if (gtk_widget_get_visible(s_plugin_group) != any)
+            gtk_widget_set_visible(s_plugin_group, any);
+    }
+
+    gboolean want_btn = keep < n;
+    if (gtk_widget_get_visible(s_ovf_btn) != want_btn)
+        gtk_widget_set_visible(s_ovf_btn, want_btn);
+    return G_SOURCE_REMOVE;
+}
+
+/* Coalesced trigger — the strip hadjustment fires on every width or
+ * content change; the recompute is idempotent, so the re-fire caused
+ * by its own visibility writes settles in one extra no-op pass. */
+static void classic_overflow_sync(GtkAdjustment *adj, gpointer u)
+{
+    (void)adj; (void)u;
+    if (!s_strip_scroller || s_ovf_idle) return;
+    s_ovf_idle = g_idle_add(ovf_recompute, NULL);
+}
+
+static void on_ovf_row(GtkButton *b, gpointer target)
+{
+    (void)b;
+    /* Activating the real (hidden) button reuses its exact handler and,
+     * for toggles, flips their state — no parallel action table. */
+    gtk_widget_activate(GTK_WIDGET(target));
+    if (s_ovf_pop) gtk_popover_popdown(GTK_POPOVER(s_ovf_pop));
+}
+
+/* Append popover rows for every actionable button inside a hidden
+ * unit (a unit is usually one button; the allchars composite holds a
+ * toggle plus its ▾ arrow, which has no menu equivalent). */
+static void ovf_add_rows(GtkWidget *pop, GtkWidget *w,
+                         gboolean *pending_sep, gboolean *any)
+{
+    if (GTK_IS_MENU_BUTTON(w)) return;
+    if (GTK_IS_BUTTON(w)) {
+        /* Inside a composite, skip buttons hidden for other reasons
+         * (toolbarButtonsConf) — only overflow-hidden ones surface. */
+        if (!gtk_widget_get_visible(w) && !ovf_flagged(w))
+            return;
+        /* transfer NONE in GTK4 (GTK3 returned a copy) — never free. */
+        const char *tip = gtk_widget_get_tooltip_text(w);
+        if (!tip || !*tip) return;
+        const char *name  = g_object_get_data(G_OBJECT(w), "npp-icon");
+        const char *ppath = g_object_get_data(G_OBJECT(w), "npp-plugin-path");
+        GtkWidget *img = NULL;
+        if (name)       img = load_icon(name);
+        else if (ppath) img = make_plugin_icon_image(ppath);
+        if (img && GTK_IS_IMAGE(img))
+            gtk_image_set_pixel_size(GTK_IMAGE(img), 16);
+        if (*any && *pending_sep) {
+            GtkWidget *box = overflow_popover_box(pop);
+            gtk_box_append(GTK_BOX(box),
+                           gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+        }
+        *pending_sep = FALSE;
+        *any = TRUE;
+        overflow_popover_add(pop, img, tip, G_CALLBACK(on_ovf_row), w);
+        return;                             /* don't descend into buttons */
+    }
+    for (GtkWidget *c = gtk_widget_get_first_child(w); c;
+         c = gtk_widget_get_next_sibling(c))
+        ovf_add_rows(pop, c, pending_sep, any);
+}
+
+static void classic_overflow_fill(GtkWidget *pop, gpointer u)
+{
+    (void)u;
+    GtkWidget *box = overflow_popover_box(pop);
+    GtkWidget *c;
+    while ((c = gtk_widget_get_first_child(box)))
+        gtk_box_remove(GTK_BOX(box), c);
+
+    /* Cap the menu below the window height — beyond that it scrolls
+     * (macOS's ≫ NSMenu scrolls the same way). */
+    GtkWidget *sw = g_object_get_data(G_OBJECT(pop), "npp-ovf-sw");
+    int wh = s_window ? gtk_widget_get_height(s_window) : 0;
+    if (sw && wh > 160)
+        gtk_scrolled_window_set_max_content_height(
+            GTK_SCROLLED_WINDOW(sw), wh - 120);
+
+    GtkWidget *units[OVF_MAX_UNITS];
+    guint n = ovf_units(units);
+    gboolean pending_sep = FALSE, any = FALSE;
+    for (guint i = 0; i < n; i++) {
+        GtkWidget *w = units[i];
+        if (!ovf_flagged(w)) continue;      /* only hidden units listed */
+        if (GTK_IS_SEPARATOR(w)) { pending_sep = TRUE; continue; }
+        ovf_add_rows(pop, w, &pending_sep, &any);
+    }
+}
+
 GtkWidget *toolbar_init(GtkWidget *parent_window)
 {
     s_window = parent_window;
@@ -1087,7 +1379,13 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
         return tb;
     }
 
-#define ADD(item) gtk_box_append(GTK_BOX(tb), (item))
+    /* Classic strip: the buttons live in their own box inside an
+     * EXTERNAL scroller so the window can narrow below the strip's
+     * natural width (clipped buttons surface in the » popover). */
+    GtkWidget *strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+    s_strip = strip;
+
+#define ADD(item) gtk_box_append(GTK_BOX(strip), (item))
 
     /* Q3 — Toolbar order matches macOS toolbarDescriptors:
      *   New Open Save SaveAll Close CloseAll Print | Cut Copy Paste | Undo Redo |
@@ -1175,7 +1473,47 @@ GtkWidget *toolbar_init(GtkWidget *parent_window)
 
 #undef ADD
 
-    append_tab_controls(tb);           /* GAP-102 — right-aligned + ▾ ✕ */
+    GtkWidget *scroller = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller),
+                                   GTK_POLICY_EXTERNAL, GTK_POLICY_NEVER);
+    gtk_scrolled_window_set_propagate_natural_height(
+        GTK_SCROLLED_WINDOW(scroller), TRUE);
+    gtk_scrolled_window_set_propagate_natural_width(
+        GTK_SCROLLED_WINDOW(scroller), TRUE);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), strip);
+    /* The auto-wrapped viewport must never actually scroll (the clip
+     * math assumes the visible range starts at x = 0) — GTK4 viewports
+     * scroll-to-focus by default. */
+    GtkWidget *vp = gtk_widget_get_parent(strip);
+    if (GTK_IS_VIEWPORT(vp))
+        gtk_viewport_set_scroll_to_focus(GTK_VIEWPORT(vp), FALSE);
+    gtk_widget_set_hexpand(scroller, TRUE);
+    gtk_box_append(GTK_BOX(tb), scroller);
+    s_strip_scroller = scroller;
+
+    s_ovf_pop = overflow_popover_new();
+    g_signal_connect(s_ovf_pop, "show",
+                     G_CALLBACK(classic_overflow_fill), NULL);
+    s_ovf_btn = gtk_menu_button_new();
+    /* A plain big » like macOS's ≫ — a CHILD label, not set_label: a
+     * label forces GtkMenuButton's built-in dropdown arrow (the stray
+     * ⌄), a child suppresses it. Size comes from the CSS font-size. */
+    gtk_menu_button_set_child(GTK_MENU_BUTTON(s_ovf_btn),
+                              gtk_label_new("»"));
+    gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(s_ovf_btn), FALSE);
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(s_ovf_btn), s_ovf_pop);
+    gtk_widget_add_css_class(s_ovf_btn, "npp-tb-overflow");
+    gtk_widget_set_tooltip_text(s_ovf_btn, "More toolbar items");
+    gtk_widget_set_visible(s_ovf_btn, FALSE);
+    gtk_box_append(GTK_BOX(tb), s_ovf_btn);
+
+    g_signal_connect(
+        gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(scroller)),
+        "changed", G_CALLBACK(classic_overflow_sync), NULL);
+
+    /* GAP-102 — right-aligned + ▾ ✕. No spacer here: the scroller's
+     * hexpand claims the slack, so the controls hug the right edge. */
+    gtk_box_append(GTK_BOX(tb), editor_make_tab_controls());
     toolbar_update_macro_buttons();
     return tb;
 }
@@ -1218,7 +1556,6 @@ static void on_plugin_toolbar_clicked(GtkButton *b, gpointer u)
  * (macOS default-mode plugin grouping). Icons are PNG paths supplied by
  * the plugin; the colorization pref's "apply to plugin icons" toggle
  * routes them through the same pipeline. */
-static GtkWidget *s_plugin_group;   /* box appended on first button */
 
 /* One plugin icon button (shared by Classic group + Tahoe capsule). */
 /* GAP-157g — macOS plugin-toolbar-icon lookup order
@@ -1702,16 +2039,20 @@ void toolbar_add_plugin_button(const char *plugin_dir,
         return;
     }
 
-    /* Classic: one trailing group after a divider (unchanged). */
+    /* Classic: one trailing group after a divider, inside the button
+     * strip so it clips into the » overflow with everything else (it
+     * used to append to the toolbar box itself, which stranded plugin
+     * icons to the right of the tab controls). */
     if (!s_plugin_group) {
+        GtkWidget *host = s_strip ? s_strip : s_toolbar;
         GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
         gtk_widget_set_margin_start(sep, 4);
         gtk_widget_set_margin_end(sep, 4);
-        gtk_box_append(GTK_BOX(s_toolbar), sep);
+        gtk_box_append(GTK_BOX(host), sep);
         s_plugin_group = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
         gtk_widget_add_css_class(s_plugin_group,
                                  "npp-plugin-toolbar-group");
-        gtk_box_append(GTK_BOX(s_toolbar), s_plugin_group);
+        gtk_box_append(GTK_BOX(host), s_plugin_group);
     }
     if (!s_plugin_items)
         s_plugin_items = g_ptr_array_new();
@@ -1725,6 +2066,9 @@ void toolbar_add_plugin_button(const char *plugin_dir,
     it->btn       = make_plugin_icon_button(
                         it->icon_path[0] ? it->icon_path : NULL,
                         cmd_id, tooltip);
+    if (it->icon_path[0])   /* » overflow rows clone the icon from this */
+        g_object_set_data_full(G_OBJECT(it->btn), "npp-plugin-path",
+                               g_strdup(it->icon_path), g_free);
     g_ptr_array_add(s_plugin_items, it);
     gtk_box_append(GTK_BOX(s_plugin_group), it->btn);
 }
@@ -1815,6 +2159,36 @@ void toolbar_apply_icon_scale(int idx) {
     static const double pickScales[] = { 0.50, 0.75, 0.90, 1.00, 1.25, 1.50 };
     if (idx < 0 || idx > 5) idx = 3;
     s_icon_scale = pickScales[idx];
+}
+
+/* Re-render the live toolbar at the current icon scale. The scale used
+ * to be picked up only at construction, so the Preferences ▸ Misc combo
+ * silently did nothing until the next restart (macOS applies it live).
+ * Reuses the theme-reload walk for the built-in buttons; plugin buttons
+ * keep their resolved icon path and just get a re-sized image. */
+void toolbar_refresh_icon_sizes(void)
+{
+    apply_toolbar_css();                     /* button minimums track px */
+    if (s_toolbar) reload_icons_recursive(s_toolbar);
+    if (s_plugin_items) {
+        for (guint i = 0; i < s_plugin_items->len; i++) {
+            PluginTbItem *it = g_ptr_array_index(s_plugin_items, i);
+            if (!it->btn) continue;
+            GtkWidget *img = make_plugin_icon_image(
+                it->icon_path[0] ? it->icon_path : NULL);
+            if (img) gtk_button_set_child(GTK_BUTTON(it->btn), img);
+        }
+    }
+    /* Every unit width just changed — drop the overflow state (stale
+     * cached widths, » included) and let the recompute re-hide from
+     * fresh measures. */
+    ovf_w = 0;
+    if (s_strip) {
+        GtkWidget *units[OVF_MAX_UNITS];
+        guint n = ovf_units(units);
+        for (guint i = 0; i < n; i++) ovf_unit_show(units[i]);
+    }
+    classic_overflow_sync(NULL, NULL);
 }
 
 /* ── GAP-90 — Preferences ▸ Tahoe: toolbar-group editor API ─────────── */

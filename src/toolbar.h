@@ -26,6 +26,8 @@ void toolbar_update_macro_buttons(void);
 /* Re-apply the toolbar base line + reload every icon from the light/dark
  * icon set — called when the appearance changes at runtime. */
 void toolbar_apply_theme(void);
+/* Live re-render at the current icon scale (Preferences ▸ Misc). */
+void toolbar_refresh_icon_sizes(void);
 
 /* ── GAP-90 — Preferences ▸ Tahoe toolbar-group editor ──────────────── */
 enum { NPP_TB_PLACE_PRIMARY = 0, NPP_TB_PLACE_OVERFLOW = 1,

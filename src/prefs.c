@@ -1140,11 +1140,13 @@ void editor_tabstrip_sync(void);   /* GAP-37 */
 void main_refresh_title(void);
 void statusbar_set_visible(gboolean v);   /* defined in statusbar.c */
 void toolbar_apply_icon_scale(int scale); /* may be stubbed */
+void toolbar_refresh_icon_sizes(void);    /* may be stubbed */
 
 /* Weak/optional hooks — provide stubs so the .c builds even when the
  * matching subsystem is not linked yet. */
 __attribute__((weak)) void statusbar_set_visible(gboolean v)   { (void)v; }
 __attribute__((weak)) void toolbar_apply_icon_scale(int scale) { (void)scale; }
+__attribute__((weak)) void toolbar_refresh_icon_sizes(void)    {}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -1284,12 +1286,77 @@ extern bool gNppUseBoostRegex;
 CHK(boost_regex,       use_boost_regex,            gNppUseBoostRegex = g_prefs.use_boost_regex)
 
 /* GAP-70 Phase 0 — appearance_style is an int (0 classic / 1 modern),
- * so the bool CHK macro doesn't fit. Restart-gated: only persisted here. */
+ * so the bool CHK macro doesn't fit. Restart-gated: persisted here,
+ * then the macOS "Restart required" alert (PreferencesWC.mm
+ * _tahoeLookToggled): Later (default, safe) / Quit Now. */
+static void modern_do_quit(void)
+{
+    GApplication *app = g_application_get_default();
+    if (app)
+        g_action_group_activate_action(G_ACTION_GROUP(app), "quit", NULL);
+}
+
+#if GTK_CHECK_VERSION(4, 10, 0)
+static void on_modern_restart_choice(GObject *src, GAsyncResult *res,
+                                     gpointer d)
+{
+    (void)d;
+    if (gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(src), res, NULL) == 1)
+        modern_do_quit();
+}
+#else
+static void on_modern_restart_response(GtkDialog *dlg, int resp, gpointer d)
+{
+    (void)d;
+    gtk_window_destroy(GTK_WINDOW(dlg));
+    if (resp == GTK_RESPONSE_ACCEPT) modern_do_quit();
+}
+#endif
+
+static void modern_restart_alert(GtkWidget *anchor, gboolean on)
+{
+    const char *title = i18n_translate("Restart required");
+    const char *body  = on
+        ? i18n_translate("The new Tahoe look will be applied after you "
+                         "restart Nextpad++.")
+        : i18n_translate("The Classic look will be restored after you "
+                         "restart Nextpad++.");
+    GtkRoot *root = gtk_widget_get_root(anchor);
+    GtkWindow *parent = GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL;
+#if GTK_CHECK_VERSION(4, 10, 0)
+    GtkAlertDialog *dlg = gtk_alert_dialog_new("%s", title);
+    gtk_alert_dialog_set_detail(dlg, body);
+    const char *btns[] = { i18n_translate("Later"),
+                           i18n_translate("Quit Now"), NULL };
+    gtk_alert_dialog_set_buttons(dlg, btns);
+    gtk_alert_dialog_set_default_button(dlg, 0);   /* Later — safe */
+    gtk_alert_dialog_set_cancel_button(dlg, 0);    /* Esc = Later   */
+    gtk_alert_dialog_choose(dlg, parent, NULL,
+                            on_modern_restart_choice, NULL);
+    g_object_unref(dlg);
+#else
+    GtkWidget *dlg = gtk_message_dialog_new(parent, GTK_DIALOG_MODAL,
+        GTK_MESSAGE_INFO, GTK_BUTTONS_NONE, "%s", title);
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
+                                             "%s", body);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), i18n_translate("Later"),
+                          GTK_RESPONSE_CANCEL);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), i18n_translate("Quit Now"),
+                          GTK_RESPONSE_ACCEPT);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_CANCEL);
+    g_signal_connect(dlg, "response",
+                     G_CALLBACK(on_modern_restart_response), NULL);
+    gtk_window_present(GTK_WINDOW(dlg));
+#endif
+}
+
 static void on_modern_style(GtkToggleButton *b, gpointer d)
 {
     (void)d;
-    g_prefs.appearance_style = gtk_toggle_button_get_active(b) ? 1 : 0;
+    gboolean on = gtk_toggle_button_get_active(b);
+    g_prefs.appearance_style = on ? 1 : 0;
     prefs_save();
+    modern_restart_alert(GTK_WIDGET(b), on);
 }
 CHK(delim_doc,         delim_entire_doc,           (void)0)
 CHK(wc_default,        word_chars_use_default,     editor_apply_prefs())
@@ -1476,7 +1543,10 @@ static void on_wheel_gain(GtkComboBox *c, gpointer d)
 }
 
 static void on_toolbar_scale(GtkComboBox *c, gpointer d)
-    { (void)d; g_prefs.toolbar_icon_scale = gtk_combo_box_get_active(c); toolbar_apply_icon_scale(g_prefs.toolbar_icon_scale); prefs_save(); }
+    { (void)d; g_prefs.toolbar_icon_scale = gtk_combo_box_get_active(c);
+      toolbar_apply_icon_scale(g_prefs.toolbar_icon_scale);
+      toolbar_refresh_icon_sizes();   /* live, like macOS */
+      prefs_save(); }
 
 static void on_edge_mode(GtkComboBox *c, gpointer d)
     { (void)d; g_prefs.edge_mode = gtk_combo_box_get_active(c); editor_apply_prefs(); prefs_save(); }
