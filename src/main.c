@@ -6332,6 +6332,20 @@ static void install_tab_color_css(void) {
         "  padding: 2px 6px; margin: 0; }\n"
         ".npp-tabstrip flowboxchild.npp-strip-tab.active-tab {\n"
         "  background: #fdfdfd; }\n"
+        /* The close button must be de-themed here exactly as it is on the
+         * notebook `tab` node below — without this the theme's 24px
+         * button min-height drove the row and wrapped tabs rendered
+         * TALLER than docked ones (user report 2026-08-13). macOS lays
+         * wrap rows out with the same activeH/inactiveH as single-row
+         * (NppTabBar _layoutWrapTabs, rowStep = activeH + 1), so the two
+         * modes must be pixel-identical. */
+        ".npp-tabstrip flowboxchild.npp-strip-tab button {\n"
+        "  min-height: 0; min-width: 0; padding: 0; margin: 0; }\n"
+        ".npp-tabstrip flowboxchild.npp-strip-tab button,\n"
+        ".npp-tabstrip flowboxchild.npp-strip-tab button:hover,\n"
+        ".npp-tabstrip flowboxchild.npp-strip-tab button:active {\n"
+        "  background-color: transparent; background-image: none;\n"
+        "  box-shadow: none; border: none; }\n"
         ".npp-tabstrip flowboxchild.tab-color-1 { box-shadow: inset 0 3px 0 0 #FCE386; }\n"
         ".npp-tabstrip flowboxchild.tab-color-2 { box-shadow: inset 0 3px 0 0 #A9F08C; }\n"
         ".npp-tabstrip flowboxchild.tab-color-3 { box-shadow: inset 0 3px 0 0 #7AC9F5; }\n"
@@ -6420,7 +6434,18 @@ static void install_tab_color_css(void) {
         "notebook.npp-editor-tabs > header > tabs > tab:checked {"
         "  min-height: %dpx;"
         "  margin-top: 0;"
-        "}\n", tab_min, tab_min_on);
+        "}\n"
+        /* GAP-32 — the wrapped strip reuses the notebook's tab metrics so
+         * a tab is the same height docked or wrapped (macOS parity: wrap
+         * rows use the same activeH/inactiveH). The flowboxchild pads
+         * 2px top/bottom like the `tab` node, so the same min-height
+         * lands on the same painted height. */
+        ".npp-tabstrip flowboxchild.npp-strip-tab {"
+        "  min-height: %dpx;"
+        "}\n"
+        ".npp-tabstrip flowboxchild.npp-strip-tab.active-tab {"
+        "  min-height: %dpx;"
+        "}\n", tab_min, tab_min_on, tab_min, tab_min_on);
 
     /* macOS NppTabBar styling — light mode only; dark keeps the Yaru
      * theme tabs. Values mirror NppThemeManager: #f0f0f0 strip, white

@@ -1775,6 +1775,12 @@ static void tabstrip_host_page(int page, gboolean in_strip)
             gtk_notebook_set_tab_label(GTK_NOTEBOOK(s_notebook), pagew,
                                        gtk_label_new(""));
         gtk_flow_box_insert(GTK_FLOW_BOX(s_tabstrip), box, page);
+        /* A page appended while show-tabs is OFF hands us a tab label
+         * GtkNotebook has already hidden; moved as-is it becomes a 9px
+         * empty sliver in the strip (the "broken tab bar until you
+         * toggle the pref" report, 2026-08-13). The strip is its own
+         * host now — visibility there is ours to assert. */
+        gtk_widget_set_visible(box, TRUE);
         GtkWidget *child = gtk_widget_get_parent(box);
         gtk_widget_add_css_class(child, "npp-strip-tab");
     } else {
@@ -1786,6 +1792,12 @@ static void tabstrip_host_page(int page, gboolean in_strip)
     g_object_unref(box);
     /* Re-anchor the colour class on the new host node. */
     editor_apply_tab_color(sci);
+    /* Keep the strip's own visibility in step: sync() only runs on the
+     * pref toggle and at construction (0 or 1 pages), so pages opened
+     * later — a restored session, File▸Open — must re-assert it. */
+    if (s_tabstrip)
+        gtk_widget_set_visible(s_tabstrip, tabstrip_active() &&
+            gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook)) > 0);
 }
 
 /* Rebuild strip membership to match the pref (live toggle + startup). */
