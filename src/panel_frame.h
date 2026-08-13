@@ -41,6 +41,11 @@ GtkWidget *panel_frame_new(const char *name,
 /* Update title (useful for panels that show the active file name). */
 void panel_frame_set_title(GtkWidget *frame, const char *title);
 
+/* The display title currently in the bar — NULL if `frame` isn't a
+ * panel frame or the title is empty. (floating.c uses this for the
+ * detached window's title instead of the internal registry key.) */
+const char *panel_frame_get_title(GtkWidget *frame);
+
 /* Toggle the embedded chrome — used by floating.c when popping out
  * (collapse chrome to 0) and docking back (restore). */
 void panel_frame_set_chrome_visible(GtkWidget *frame, gboolean visible);

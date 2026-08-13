@@ -240,9 +240,12 @@ void floating_popout(const char *name) {
     if (s_dock_hook) s_dock_hook(NULL);
 
     GtkWidget *win = gtk_window_new();
-    char title[128];
-    g_snprintf(title, sizeof(title), "%s — Nextpad++ Panel", e->name);
-    gtk_window_set_title(GTK_WINDOW(win), title);
+    /* Just the user-facing panel title from the frame's bar ("Folder as
+     * Workspace", "MCP Server") — NOT the internal registry key
+     * ("workspace", "plugin-panel-5"), and no "— Nextpad++ Panel"
+     * suffix (user request 2026-08-13). */
+    const char *disp = panel_frame_get_title(e->widget);
+    gtk_window_set_title(GTK_WINDOW(win), disp ? disp : e->name);
     gtk_window_set_default_size(GTK_WINDOW(win), e->float_w, e->float_h);
     g_signal_connect(win, "close-request",
                      G_CALLBACK(on_float_window_delete), e);
@@ -252,6 +255,17 @@ void floating_popout(const char *name) {
      * levels, so pin = transient-for-main; unpin = free-floating. */
     {
         GtkWidget *hb  = gtk_header_bar_new();
+        /* Left-aligned title (user request 2026-08-13): the header
+         * bar's CENTER slot stays centered no matter what (its internal
+         * GtkCenterBox only cedes position under width pressure), so
+         * the name is START-packed instead and the center slot gets an
+         * empty widget to suppress the default centered title. */
+        GtkWidget *tl = gtk_label_new(disp ? disp : e->name);
+        gtk_label_set_ellipsize(GTK_LABEL(tl), PANGO_ELLIPSIZE_END);
+        gtk_widget_add_css_class(tl, "title");
+        gtk_header_bar_pack_start(GTK_HEADER_BAR(hb), tl);
+        gtk_header_bar_set_title_widget(GTK_HEADER_BAR(hb),
+            gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
         /* GAP-101 — macOS float chrome: [pin][pop-in] at the trailing
          * edge (FloatingPanelWindow accessory). pack_end order: first
          * packed lands rightmost, so pop-in goes in first. */

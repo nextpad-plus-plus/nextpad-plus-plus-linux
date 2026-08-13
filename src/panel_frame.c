@@ -765,6 +765,14 @@ void panel_frame_set_title(GtkWidget *frame, const char *title) {
     gtk_label_set_text(GTK_LABEL(st->title_label), title ? title : "");
 }
 
+const char *panel_frame_get_title(GtkWidget *frame) {
+    if (!frame || !GTK_IS_WIDGET(frame)) return NULL;
+    PanelFrameState *st = pf_state(frame);
+    if (!st) return NULL;
+    const char *t = gtk_label_get_text(GTK_LABEL(st->title_label));
+    return (t && *t) ? t : NULL;
+}
+
 void panel_frame_set_chrome_visible(GtkWidget *frame, gboolean visible) {
     g_return_if_fail(GTK_IS_WIDGET(frame));
     PanelFrameState *st = pf_state(frame);
