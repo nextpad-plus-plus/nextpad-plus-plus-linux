@@ -212,11 +212,11 @@ static void pf_frame_gone(gpointer data, GObject *dead) {
 
 /* GAP-123 chrome sizes — the title-bar tool buttons (move-dock, detach)
  * match the close ✕ button exactly per design: 17×17 button, 14px icon. */
-/* 16 px, not 14: the SF-symbol SVGs live on a 100-unit viewBox with
- * built-in padding — at 14 px the strokes land on bad fractional pixel
- * positions and render soft (the detached float header always used 16,
- * which rasterizes crisply and visually matches the 14 px close X). */
-#define PF_POP_ICON_PX 16
+/* 15 px (user request 2026-08-13): the earlier 16px was to keep the old
+ * SF-symbol art crisp — its 100-unit viewBox strokes landed on
+ * fractional pixels below 16 — but the detach / dock-back SVGs were
+ * redrawn to rasterize cleanly at the smaller size. */
+#define PF_POP_ICON_PX 15
 /* The move-side pictogram is denser art (frame + arrow) — rendered a
  * step larger so its hairlines survive; the button grows with it. */
 #define PF_MOVE_ICON_PX 17

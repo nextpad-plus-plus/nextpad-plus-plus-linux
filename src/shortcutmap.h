@@ -23,6 +23,11 @@ void shortcut_mapper_show(GtkWidget *parent);
  * live keymap (called on editor creation and after mapper Save). */
 void shortcutmap_apply_sci_overrides(GtkWidget *sci);
 
+/* Bind the stored <PluginCommands> shortcuts to their
+ * app.plugin-check-<cmdID> actions — call once at startup, after
+ * plugin_load_all(). */
+void shortcutmap_apply_plugin_accels(void);
+
 /* ── Legacy API kept for ABI compatibility ─────────────────────────────── */
 
 typedef struct {

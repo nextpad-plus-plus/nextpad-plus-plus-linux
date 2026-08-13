@@ -213,13 +213,16 @@ void macro_on_record(unsigned int msg, uptr_t wp, sptr_t lp)
 /* ── Menu-command recording (GAP-20) ─────────────────────────────────
  * Scintilla is told to stop emitting SCN_MACRORECORD while the menu
  * command runs (otherwise e.g. UPPERCASE would record raw SCI_REPLACESEL
- * text dumps); afterwards a single type-2 step is recorded. If the user
- * had a mouse-made selection when they clicked the menu, a synthetic
- * select-all step is injected first (mouse selections are invisible to
- * Scintilla's recorder) — same heuristic as the macOS port. */
+ * text dumps); afterwards a single type-2 step is recorded.
+ *
+ * NOTE (2026-08-13): the macOS port injects a synthetic select-all here
+ * when a mouse selection existed at record time. That heuristic was
+ * DROPPED on Linux (user report): it made every replay act on the WHOLE
+ * FILE, killing the standard Windows-N++ workflow of recording a
+ * transform once and applying it to whatever is selected at PLAYBACK
+ * time. Windows records only the type-2 command; we now match that. */
 
 static GtkWidget *s_wrap_sci = NULL;
-static gboolean   s_wrap_had_selection = FALSE;
 
 gboolean macro_menu_wrap_begin(void)
 {
@@ -227,32 +230,14 @@ gboolean macro_menu_wrap_begin(void)
     NppDoc *doc = editor_current_doc();
     if (!doc) return FALSE;
     s_wrap_sci = doc->sci;
-    sptr_t a = sci_msg(s_wrap_sci, SCI_GETSELECTIONSTART, 0, 0);
-    sptr_t b = sci_msg(s_wrap_sci, SCI_GETSELECTIONEND,   0, 0);
-    s_wrap_had_selection = (a != b);
     sci_msg(s_wrap_sci, SCI_STOPRECORD, 0, 0);
     return TRUE;
-}
-
-static gboolean step_is_select_all(const MacroStep *st)
-{
-    if (!st || st->type != MT_MENU_COMMAND) return FALSE;
-    if (st->wp == 42007) return TRUE;                       /* IDM */
-    return g_strcmp0(st->sparam, "selectAll:") == 0 ||
-           g_strcmp0(st->sparam, "select-all") == 0;
 }
 
 void macro_menu_wrap_end(const char *linux_action, int plugin_cmd_id)
 {
     if (!s_wrap_sci || !s_current) return;
     sci_msg(s_wrap_sci, SCI_STARTRECORD, 0, 0);
-
-    if (s_wrap_had_selection) {
-        const MacroStep *last = s_current->len
-            ? &g_array_index(s_current, MacroStep, s_current->len - 1) : NULL;
-        if (!step_is_select_all(last))
-            steps_append(s_current, MT_MENU_COMMAND, 0, 42007, 0, NULL);
-    }
 
     if (plugin_cmd_id > 0) {
         /* macOS/Windows-interoperable plugin form: cmdID in wParam. */
@@ -266,7 +251,6 @@ void macro_menu_wrap_end(const char *linux_action, int plugin_cmd_id)
                      m ? NULL : linux_action);
     }
     s_wrap_sci = NULL;
-    s_wrap_had_selection = FALSE;
 }
 
 gboolean macro_is_recording(void) { return s_recording; }

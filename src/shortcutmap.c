@@ -22,6 +22,7 @@
 #include "gtk_compat.h"
 #include "branding.h"
 #include "macro.h"
+#include "plugin.h"
 
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
@@ -604,6 +605,58 @@ void shortcutmap_apply_sci_overrides(GtkWidget *sci)
     g_free(x.current_cmd_name);
 }
 
+static gchar *gtk_accel_string_for_row(const ShortcutRow *r);
+
+/* Bind the stored <PluginCommands> shortcuts at startup (the mapper's
+ * Save pushes them live, but nothing re-applied them on the next
+ * launch). Safe to call before the plugin-check actions exist —
+ * GtkApplication accels are keyed by NAME and take effect when the
+ * action is added. Call after plugin_load_all(). */
+void shortcutmap_apply_plugin_accels(void)
+{
+    GApplication *gapp = g_application_get_default();
+    if (!GTK_IS_APPLICATION(gapp)) return;
+    GtkApplication *app = GTK_APPLICATION(gapp);
+
+    XmlCtx x = {0};
+    x.macros  = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.runcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.plugins = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.intcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.sci_over = g_hash_table_new_full(g_direct_hash, g_direct_equal,
+                                       NULL, shortcut_row_free);
+    load_shortcuts_xml(&x);
+
+    for (guint i = 0; i < x.plugins->len; i++) {
+        ShortcutRow *r = g_ptr_array_index(x.plugins, i);
+        if (!r->keycode) continue;
+        /* (moduleName, FuncItem index) → runtime cmdID */
+        int cid = -1;
+        for (int pi = 0; pi < plugin_count() && cid < 0; pi++) {
+            if (g_strcmp0(plugin_name_at(pi), r->plugin_name) != 0)
+                continue;
+            if (r->command_id >= 0 && r->command_id < plugin_func_count(pi))
+                cid = plugin_func_cmd_id(pi, r->command_id);
+        }
+        if (cid < 0) continue;                /* plugin not loaded */
+        gchar *acc = gtk_accel_string_for_row(r);
+        if (!acc) continue;
+        gchar *act = g_strdup_printf("app.plugin-check-%d", cid);
+        const gchar *accels[2] = { acc, NULL };
+        gtk_application_set_accels_for_action(app, act, accels);
+        g_free(act);
+        g_free(acc);
+    }
+
+    g_ptr_array_free(x.macros,  TRUE);
+    g_ptr_array_free(x.runcmds, TRUE);
+    g_ptr_array_free(x.plugins, TRUE);
+    g_ptr_array_free(x.intcmds, TRUE);
+    g_hash_table_destroy(x.sci_over);
+    if (x.current_cmd_text) g_string_free(x.current_cmd_text, TRUE);
+    g_free(x.current_cmd_name);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════ */
 /*  Loaders for each tab                                                   */
 /* ═══════════════════════════════════════════════════════════════════════ */
@@ -854,7 +907,9 @@ static void refresh_tab(SmTab t) {
     GtkListStore *store = G->stores[t];
     if (!store) return;
     gtk_list_store_clear(store);
-    const char *needle = gtk_entry_get_text(GTK_ENTRY(G->search));
+    /* GTK4: GtkSearchEntry is NOT a GtkEntry subclass (GTK3 was) —
+     * read through the GtkEditable interface both implement. */
+    const char *needle = gtk_editable_get_text(GTK_EDITABLE(G->search));
     GPtrArray *rows = G->rows[t];
     int rownum = 0;
     for (guint i = 0; i < rows->len; i++) {
@@ -887,6 +942,7 @@ static ShortcutRow *selected_row(SmTab t) {
 }
 
 static void update_conflict_label_for(const ShortcutRow *r) {
+    if (!G || !G->conflict_label) return;   /* mid-construction */
     if (!r || r->keycode == 0) {
         gtk_label_set_markup(GTK_LABEL(G->conflict_label),
             "<span size='small'>No shortcut conflicts for this item.</span>");
@@ -1072,15 +1128,20 @@ static void push_live_accels(void) {
     if (!GTK_IS_APPLICATION(gapp)) return;
     GtkApplication *app = GTK_APPLICATION(gapp);
 
-    GPtrArray *rows = G->rows[TAB_MAIN];
-    for (guint i = 0; i < rows->len; i++) {
-        ShortcutRow *r = (ShortcutRow *)g_ptr_array_index(rows, i);
-        if (!r->action_id || !*r->action_id) continue;
-        gchar *acc = gtk_accel_string_for_row(r);
-        const gchar *accels[2] = { acc ? acc : NULL, NULL };
-        gtk_application_set_accels_for_action(app, r->action_id,
-            acc ? accels : (const gchar *[]){ NULL });
-        g_free(acc);
+    /* Main menu + Plugin commands — both bind via GtkApplication accels
+     * (plugin rows carry "app.plugin-check-<cmdID>" action ids). */
+    static const int accel_tabs[] = { TAB_MAIN, TAB_PLUGIN };
+    for (gsize t = 0; t < G_N_ELEMENTS(accel_tabs); t++) {
+        GPtrArray *rows = G->rows[accel_tabs[t]];
+        for (guint i = 0; i < rows->len; i++) {
+            ShortcutRow *r = (ShortcutRow *)g_ptr_array_index(rows, i);
+            if (!r->action_id || !*r->action_id) continue;
+            gchar *acc = gtk_accel_string_for_row(r);
+            const gchar *accels[2] = { acc ? acc : NULL, NULL };
+            gtk_application_set_accels_for_action(app, r->action_id,
+                acc ? accels : (const gchar *[]){ NULL });
+            g_free(acc);
+        }
     }
 }
 
@@ -1263,6 +1324,7 @@ static void on_search_changed(GtkSearchEntry *e, gpointer ud) {
 
 static void on_tab_changed(GtkNotebook *nb, GtkWidget *page, guint pn, gpointer ud) {
     (void)nb; (void)page; (void)ud;
+    if (!G || !G->btn_delete) return;       /* mid-construction */
     gtk_widget_set_sensitive(G->btn_delete,
         pn == TAB_MACROS || pn == TAB_RUN);
     update_conflict_label_for(NULL);
@@ -1380,6 +1442,46 @@ static void sync_macro_rows(void) {
     }
 }
 
+/* Plugins tab — live FuncItem enumeration (macOS _loadPluginEntries
+ * walks the Plugins menu; the loaded-plugin registry is the same truth
+ * here), with <PluginCommands> XML overrides merged on top. The tab
+ * used to show ONLY the XML rows, which is empty on a fresh install —
+ * so no plugin command was ever mappable (user report 2026-08-13).
+ * internalID = FuncItem INDEX within its plugin (Windows schema);
+ * accels bind to the per-command action "app.plugin-check-<cmdID>". */
+static void load_plugin_rows(ShortcutMapper *m, GPtrArray *overrides) {
+    for (int pi = 0; pi < plugin_count(); pi++) {
+        const char *pname = plugin_name_at(pi);
+        int nf = plugin_func_count(pi);
+        for (int fi = 0; fi < nf; fi++) {
+            const char *fname = plugin_func_name(pi, fi);
+            if (!fname || !*fname || g_strcmp0(fname, "-") == 0)
+                continue;                       /* separators */
+            ShortcutRow *r = g_new0(ShortcutRow, 1);
+            r->name        = g_strdup(fname);
+            r->plugin_name = g_strdup(pname ? pname : "");
+            r->category    = g_strdup(pname ? pname : "");
+            r->command_id  = fi;
+            r->action_id   = g_strdup_printf("app.plugin-check-%d",
+                                 plugin_func_cmd_id(pi, fi));
+            for (guint i = 0; i < overrides->len; i++) {
+                ShortcutRow *o = g_ptr_array_index(overrides, i);
+                if (o->command_id != fi ||
+                    g_strcmp0(o->plugin_name, r->plugin_name) != 0)
+                    continue;
+                r->has_ctrl  = o->has_ctrl;
+                r->has_alt   = o->has_alt;
+                r->has_shift = o->has_shift;
+                r->has_super = o->has_super;
+                r->keycode   = o->keycode;
+                r->modified  = TRUE;   /* re-persist on Save */
+                break;
+            }
+            g_ptr_array_add(m->rows[TAB_PLUGIN], r);
+        }
+    }
+}
+
 static void load_all_data(void) {
     for (int t = 0; t < TAB_COUNT; t++)
         G->rows[t] = g_ptr_array_new_with_free_func(shortcut_row_free);
@@ -1401,9 +1503,7 @@ static void load_all_data(void) {
         g_ptr_array_add(G->rows[TAB_RUN], g_ptr_array_index(x.runcmds, i));
     g_ptr_array_set_free_func(x.runcmds, NULL);
 
-    for (guint i = 0; i < x.plugins->len; i++)
-        g_ptr_array_add(G->rows[TAB_PLUGIN], g_ptr_array_index(x.plugins, i));
-    g_ptr_array_set_free_func(x.plugins, NULL);
+    load_plugin_rows(G, x.plugins);
 
     load_main_menu(G, x.intcmds);
     load_scintilla(G, x.sci_over);
@@ -1448,10 +1548,11 @@ static void build_ui(GtkWidget *parent) {
                      G_CALLBACK(on_search_changed), NULL);
     npp_box_pack(GTK_BOX(root), G->search, FALSE, 0);
 
-    /* Notebook */
+    /* Notebook. NOTE: "switch-page" is connected at the END of this
+     * constructor — the first append_page fires it, and the handler
+     * touches btn_delete/conflict_label which don't exist yet (the
+     * two Gtk-CRITICALs on open, user report 2026-08-13). */
     G->notebook = gtk_notebook_new();
-    g_signal_connect(G->notebook, "switch-page",
-                     G_CALLBACK(on_tab_changed), NULL);
     npp_box_pack(GTK_BOX(root), G->notebook, TRUE, 0);
 
     static const struct { SmTab t; const char *title; gboolean cat; } TABS[] = {
@@ -1498,6 +1599,11 @@ static void build_ui(GtkWidget *parent) {
 
     /* Delete is only active on Macros/Run tabs */
     gtk_widget_set_sensitive(G->btn_delete, FALSE);
+
+    /* Now that every widget the handler touches exists (see NOTE at the
+     * notebook above). */
+    g_signal_connect(G->notebook, "switch-page",
+                     G_CALLBACK(on_tab_changed), NULL);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════ */

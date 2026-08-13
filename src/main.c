@@ -335,6 +335,7 @@ static GMenu *g_recent_menu = NULL;        /* Submenu rebuilt on every add/clear
 /* Q-fix: named macros section at the bottom of the Macro menu — refreshed
  * after every macro-save so newly-saved macros become playable. */
 static GMenu *g_named_macros_menu = NULL;
+void main_retranslate_menu(void);   /* defined later in this file */
 static void rebuild_macro_menu(void) {
     if (!g_named_macros_menu) return;
     g_menu_remove_all(g_named_macros_menu);
@@ -347,6 +348,11 @@ static void rebuild_macro_menu(void) {
         g_menu_append_item(g_named_macros_menu, mi);
         g_object_unref(mi);
     }
+    /* The menubar shows an i18n DEEP COPY of the model — mutating the
+     * live GMenu is invisible until a fresh copy is pushed (the
+     * set_update_badge idiom). Without this, saved macros only appeared
+     * after a restart (user report 2026-08-13). */
+    main_retranslate_menu();
 }
 static void action_macro_play_named(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a; (void)u;
@@ -3108,6 +3114,12 @@ void main_menu_state_sync(void)
     menu_sync_enabled(am, "eol-cr",   have);
     /* Monitoring needs a real file on disk. */
     menu_sync_enabled(am, "toggle-monitoring", d && d->filepath != NULL);
+
+    /* Toolbar record/stop/play buttons mirror the same truth. The
+     * toolbar's own handlers already called this pair; menu-initiated
+     * Start/Stop Recording reached only the menu half, leaving the
+     * toolbar buttons stale (user report 2026-08-13). */
+    toolbar_update_macro_buttons();
 }
 
 /* Idle trampoline — editor.c defers the tab-switch sync here because
@@ -9431,6 +9443,7 @@ static void on_startup(GtkApplication *app, gpointer ud)
     menu_state_hook_actions(G_ACTION_MAP(app));   /* GAP-150 */
     macro_set_changed_hook(rebuild_macro_menu);
     macro_push_accels();
+    shortcutmap_apply_plugin_accels();   /* stored <PluginCommands> keys */
 
     /* Grey out the macOS-parity items that have no Linux backend yet. */
     for (size_t i = 0; i < G_N_ELEMENTS(kStubActions); i++) {
