@@ -30,14 +30,6 @@
  */
 
 #include "pluginsadmin.h"
-/* TEMPORARY bring-up: an embedded token for the private .linux plugin
- * repos, supplied via the GITIGNORED src/github_token.h (see the
- * .example template). Env NPP_GITHUB_TOKEN overrides. */
-#if defined(__has_include)
-#  if __has_include("github_token.h")
-#    include "github_token.h"
-#  endif
-#endif
 #include "gtk_compat.h"
 #include "branding.h"
 #include "paths.h"
@@ -75,13 +67,14 @@ static const char *const CATALOG_WIN =
     "https://raw.githubusercontent.com/notepad-plus-plus/nppPluginList/"
     "master/src/pl.x64.json";
 
-/* macOS kPluginListVersion — the plugin-list schema version shown in
- * the footer. */
-#define PLUGIN_LIST_VERSION "0.2.0"
-
 /* Track which catalog ended up populating the rows — informational only,
  * surfaced in the footer tooltip and in the build-status report. */
 static const char *g_catalog_origin = "(none)";
+
+/* Basename of the catalog file the rows were pulled from — shown in
+ * the footer stats line so an arm64/x86 mixup is visible at a glance
+ * (user request 2026-08-12). NULL while offline. */
+static char *g_catalog_file = NULL;
 
 /* ═══════════════════════════════════════════════════════════════════════
  * Data model
@@ -164,6 +157,8 @@ typedef struct {
     GtkWidget   *notebook;
     GtkWidget   *action_btn;
     GtkWidget   *close_btn;
+    GtkWidget   *progress;      /* batch install/update bar, bottom right */
+    gboolean     busy;          /* a batch worker is running              */
     GtkWidget   *status_lbl;    /* footer stats line (macOS _statsLabel)  */
     GtkWidget   *desc_view;     /* GAP-139 — shared description pane      */
     GtkTextTag  *red_tag;       /* "(Nextpad++ needs update)" highlight   */
@@ -480,14 +475,25 @@ static gboolean rm_rf(const char *path) {
 }
 
 /* Shell out to curl with optional extra headers. Writes the response
- * body to `dest_path`. Returns TRUE on HTTP 2xx. */
+ * body to `dest_path`. Returns TRUE on HTTP 2xx. `retry` adds curl's
+ * own backoff (3 tries) — wanted for release-zip downloads, where one
+ * transient TLS reset / CDN 5xx used to fail the plugin outright (the
+ * "2 of 12 failed, retried fine" report), but NOT for the catalog
+ * probes: those run at dialog-open time and retries would triple the
+ * offline stall. */
 static gboolean curl_to_file(const char *url, const char *dest_path,
-                             const char *hdr1, const char *hdr2) {
-    const char *argv[16];
+                             const char *hdr1, const char *hdr2,
+                             gboolean retry) {
+    const char *argv[24];
     int n = 0;
     argv[n++] = "curl"; argv[n++] = "-L"; argv[n++] = "-fsS";
     argv[n++] = "--connect-timeout"; argv[n++] = "10";
     argv[n++] = "--max-time"; argv[n++] = "120";
+    if (retry) {
+        argv[n++] = "--retry"; argv[n++] = "3";
+        argv[n++] = "--retry-delay"; argv[n++] = "2";
+        argv[n++] = "--retry-all-errors";   /* curl ≥7.71; jammy = 7.81 */
+    }
     if (hdr1) { argv[n++] = "-H"; argv[n++] = hdr1; }
     if (hdr2) { argv[n++] = "-H"; argv[n++] = hdr2; }
     argv[n++] = "-o"; argv[n++] = dest_path;
@@ -504,85 +510,13 @@ static gboolean curl_to_file(const char *url, const char *dest_path,
     return g_spawn_check_wait_status(exit_status, NULL);
 }
 
-/* TEST-ONLY private-repo support (never embed credentials in the
- * binary: a token baked into source/binary can be extracted from any
- * shipped .deb, lives in git history forever, and kills every old
- * binary when rotated). When NPP_GITHUB_TOKEN is set:
- *  - raw.githubusercontent.com fetches send the Authorization header;
- *  - github.com/<o>/<r>/releases/download/<tag>/<asset> URLs are
- *    resolved through the GitHub API — private release assets DO NOT
- *    honour an Authorization header on the browser download URL; the
- *    supported route is /releases/tags/<tag> -> asset id ->
- *    /releases/assets/<id> with Accept: application/octet-stream. */
-static gboolean gh_private_asset_fetch(const char *url,
-                                       const char *dest_path,
-                                       const char *token) {
-    /* Parse github.com/<owner>/<repo>/releases/download/<tag>/<asset> */
-    const char *p = strstr(url, "github.com/");
-    if (!p) return FALSE;
-    gchar **seg = g_strsplit(p + strlen("github.com/"), "/", 6);
-    guint nseg = g_strv_length(seg);
-    gboolean shaped = nseg == 6 && strcmp(seg[2], "releases") == 0 &&
-                      strcmp(seg[3], "download") == 0;
-    if (!shaped) { g_strfreev(seg); return FALSE; }
-
-    gchar *auth = g_strdup_printf("Authorization: Bearer %s", token);
-    gchar *rel_url = g_strdup_printf(
-        "https://api.github.com/repos/%s/%s/releases/tags/%s",
-        seg[0], seg[1], seg[4]);
-    gchar *tmp = NULL;
-    gboolean ok = FALSE;
-    gint fd = g_file_open_tmp("npp-ghrel-XXXXXX.json", &tmp, NULL);
-    if (fd >= 0) {
-        close(fd);
-        if (curl_to_file(rel_url, tmp, auth,
-                         "Accept: application/vnd.github+json")) {
-            gchar *body = NULL;
-            gsize blen = 0;
-            if (g_file_get_contents(tmp, &body, &blen, NULL)) {
-                JNode *root = json_parse(body, blen);
-                JNode *assets = root ? jobj_get(root, "assets") : NULL;
-                if (assets && assets->kind == J_ARR) {
-                    for (guint ai = 0; ai < assets->u.arr->len && !ok;
-                         ai++) {
-                        JNode *a = g_ptr_array_index(assets->u.arr, ai);
-                        const char *an = jobj_str(a, "name");
-                        const char *aurl = jobj_str(a, "url");
-                        if (an && aurl && strcmp(an, seg[5]) == 0)
-                            ok = curl_to_file(aurl, dest_path, auth,
-                                    "Accept: application/octet-stream");
-                    }
-                }
-                if (root) jnode_free(root);
-                g_free(body);
-            }
-        }
-        g_unlink(tmp);
-        g_free(tmp);
-    }
-    g_free(rel_url);
-    g_free(auth);
-    g_strfreev(seg);
-    return ok;
-}
-
+/* Catalog and release-zip repos are all PUBLIC now (2026-08-12), so a
+ * plain unauthenticated fetch is the whole story. The private-repo
+ * bring-up path (embedded token + GitHub-API asset resolution) was
+ * removed with them; the update checker keeps its own copy while the
+ * APP repo remains private. */
 gboolean http_get_to_file(const char *url, const char *dest_path) {
-    const char *token = g_getenv("NPP_GITHUB_TOKEN");
-#ifdef NPP_EMBEDDED_GITHUB_TOKEN
-    if (!token || !*token) token = NPP_EMBEDDED_GITHUB_TOKEN;
-#endif
-    if (token && *token) {
-        if (strstr(url, "github.com/") && strstr(url, "/releases/download/"))
-            if (gh_private_asset_fetch(url, dest_path, token))
-                return TRUE;                    /* else fall through */
-        if (strstr(url, "raw.githubusercontent.com/")) {
-            gchar *auth = g_strdup_printf("Authorization: Bearer %s", token);
-            gboolean ok = curl_to_file(url, dest_path, auth, NULL);
-            g_free(auth);
-            return ok;
-        }
-    }
-    return curl_to_file(url, dest_path, NULL, NULL);
+    return curl_to_file(url, dest_path, NULL, NULL, TRUE);
 }
 
 /* Best-effort `unzip -o -q SRC -d DEST`. */
@@ -681,7 +615,7 @@ static char *fetch_catalog_to_string(const char *url, gsize *out_len) {
     close(fd);
     char *body = NULL;
     *out_len = 0;
-    if (http_get_to_file(url, tmp)) {
+    if (curl_to_file(url, tmp, NULL, NULL, /*retry*/ FALSE)) {
         gsize len = 0;
         if (g_file_get_contents(tmp, &body, &len, NULL))
             *out_len = len;
@@ -709,10 +643,14 @@ static void load_catalogs(AdminUI *ui) {
 #else
     const char *origin = "linux-x86";
 #endif
+    const char *loaded_url = cat_url;
     if (!nbody) {
         nbody  = fetch_catalog_to_string(CATALOG_MAC, &n_len);
         origin = "macos-arm64 (fallback)";
+        loaded_url = CATALOG_MAC;
     }
+    g_free(g_catalog_file);
+    g_catalog_file = nbody ? g_path_get_basename(loaded_url) : NULL;
     if (nbody) {
         GPtrArray *rows = parse_catalog_bytes(nbody, n_len, /*native*/ TRUE);
         for (guint i = 0; i < rows->len; i++) {
@@ -1030,12 +968,15 @@ static void adminui_repopulate_all(AdminUI *ui) {
     populate_incompatible(ui);
 
     /* GAP-139 — macOS footer stats: "Plugins in catalog: N ·
-     * Installable on macOS: M" (updateStatsLabel). The catalog-origin
-     * string stays reachable as the label's tooltip (fallback-catalog
-     * debugging). */
+     * Installable on macOS: M" (updateStatsLabel), plus the catalog
+     * FILE the rows came from (per-arch: pl.linux-arm64.json /
+     * pl.linux-x86.json). The catalog-origin string stays reachable
+     * as the label's tooltip (fallback-catalog debugging). */
     char *msg = g_strdup_printf(
-        "Plugins in catalog:  %u  ·  Installable on Linux:  %u",
-        ui->catalog->len + ui->win_only->len, ui->catalog->len);
+        "Plugins in catalog:  %u  ·  Installable on Linux:  %u%s%s",
+        ui->catalog->len + ui->win_only->len, ui->catalog->len,
+        g_catalog_file ? "  ·  " : "",
+        g_catalog_file ? g_catalog_file : "");
     gtk_label_set_text(GTK_LABEL(ui->status_lbl), msg);
     g_free(msg);
     char *tip = g_strdup_printf("Catalog: %s · %u installed",
@@ -1225,6 +1166,121 @@ static gboolean backup_and_remove(PlugRow *installed, GString *errbuf) {
     return TRUE;
 }
 
+/* ── Threaded batch install/update ──────────────────────────────────────
+ * The old loop ran every download on the GTK main thread — a 26-plugin
+ * install froze the window long enough for the compositor's "not
+ * responding" dialog (user report 2026-08-12). macOS never blocks: it
+ * chains async NSURLSession downloads with a spinner running
+ * (PluginsAdminWC.mm downloadAndInstallPlugins:index:). Here the batch
+ * runs on a worker thread and a determinate progress bar next to the
+ * Close button ticks once per plugin. The worker owns DEEP COPIES of
+ * the catalog rows, so it never touches UI-owned data; all widget
+ * access happens in idle callbacks on the main thread. */
+
+typedef struct {
+    AdminUI   *ui;
+    GPtrArray *items;      /* PlugRow* lite clones, owned             */
+    gboolean   update;     /* TRUE = backup+replace, FALSE = install  */
+    GString   *errs;
+    guint      ok;
+} BatchJob;
+
+typedef struct { AdminUI *ui; char *text; double frac; } BatchTick;
+
+/* Just the fields install_one/backup_and_remove/the result dialog
+ * read; plugrow_free handles the NULL rest. */
+static PlugRow *plugrow_lite_clone(const PlugRow *s) {
+    PlugRow *c = g_new0(PlugRow, 1);
+    c->folder     = g_strdup(s->folder);
+    c->display    = g_strdup(s->display);
+    c->version    = g_strdup(s->version);
+    c->repository = g_strdup(s->repository);
+    c->zip_sha256 = g_strdup(s->zip_sha256);
+    return c;
+}
+
+static gboolean batch_tick_idle(gpointer data) {
+    BatchTick *t = data;
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(t->ui->progress),
+                                  t->frac);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(t->ui->progress), t->text);
+    g_free(t->text);
+    g_free(t);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean batch_finish_idle(gpointer data) {
+    BatchJob *j = data;
+    AdminUI *ui = j->ui;
+
+    ui->busy = FALSE;
+    gtk_widget_set_visible(ui->progress, FALSE);
+    gtk_widget_set_sensitive(ui->close_btn, TRUE);
+    gtk_widget_set_sensitive(ui->refresh_btn, TRUE);
+
+    adminui_rescan_installed(ui);
+    adminui_repopulate_all(ui);   /* also re-arms the action button */
+
+    GString *msg = g_string_new(NULL);
+    if (j->update)
+        g_string_append_printf(msg, "Updated %u plugin(s).\n", j->ok);
+    else
+        g_string_append_printf(msg, "Installed %u plugin(s).\n", j->ok);
+    if (j->errs->len > 0) g_string_append(msg, j->errs->str);
+    g_string_append(msg,
+        "\nRestart " APP_NAME " for the changes to take effect.");
+    show_message(GTK_WINDOW(ui->window),
+        j->errs->len ? GTK_MESSAGE_WARNING : GTK_MESSAGE_INFO,
+        "Restart required", msg->str);
+    g_string_free(msg, TRUE);
+
+    g_ptr_array_set_free_func(j->items, (GDestroyNotify)plugrow_free);
+    g_ptr_array_free(j->items, TRUE);
+    g_string_free(j->errs, TRUE);
+    g_free(j);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer batch_worker(gpointer data) {
+    BatchJob *j = data;
+    guint n = j->items->len;
+    for (guint i = 0; i < n; i++) {
+        PlugRow *r = g_ptr_array_index(j->items, i);
+        BatchTick *t = g_new0(BatchTick, 1);
+        t->ui   = j->ui;
+        t->frac = n ? (double)i / n : 0.0;
+        t->text = g_strdup_printf("%s %u/%u — %s…",
+                                  j->update ? "Updating" : "Installing",
+                                  i + 1, n, r->display);
+        g_idle_add(batch_tick_idle, t);
+
+        if (j->update && !backup_and_remove(r, j->errs)) continue;
+        if (install_one(r, j->errs)) j->ok++;
+    }
+    g_idle_add(batch_finish_idle, j);
+    return NULL;
+}
+
+/* Takes ownership of `items` (PlugRow* lite clones). */
+static void batch_start(AdminUI *ui, GPtrArray *items, gboolean update) {
+    BatchJob *j = g_new0(BatchJob, 1);
+    j->ui     = ui;
+    j->items  = items;
+    j->update = update;
+    j->errs   = g_string_new(NULL);
+
+    ui->busy = TRUE;
+    gtk_widget_set_sensitive(ui->action_btn, FALSE);
+    gtk_widget_set_sensitive(ui->close_btn, FALSE);
+    gtk_widget_set_sensitive(ui->refresh_btn, FALSE);
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ui->progress), 0.0);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ui->progress), "Starting…");
+    gtk_widget_set_visible(ui->progress, TRUE);
+
+    GThread *t = g_thread_new("npp-plugin-batch", batch_worker, j);
+    g_thread_unref(t);
+}
+
 static void do_install(AdminUI *ui) {
     GtkListStore *ls = ui->store[TAB_AVAILABLE];
     GPtrArray *folders = collect_checked(ls);
@@ -1249,28 +1305,17 @@ static void do_install(AdminUI *ui) {
     }
     g_string_free(names, TRUE);
 
-    GString *errs = g_string_new(NULL);
-    guint ok_count = 0;
+    /* Snapshot the checked rows and hand them to the worker thread —
+     * the confirm dialog is gone, the window stays live, the progress
+     * bar ticks per plugin (macOS parity in spirit; theirs spins). */
+    GPtrArray *items = g_ptr_array_new();
     for (guint i = 0; i < folders->len; i++) {
         PlugRow *r = find_row_by_folder(ui->catalog, folders->pdata[i]);
-        if (!r) continue;
-        if (install_one(r, errs)) ok_count++;
+        if (r) g_ptr_array_add(items, plugrow_lite_clone(r));
     }
     g_ptr_array_free(folders, TRUE);
-
-    adminui_rescan_installed(ui);
-    adminui_repopulate_all(ui);
-
-    GString *msg = g_string_new(NULL);
-    g_string_append_printf(msg, "Installed %u plugin(s).\n", ok_count);
-    if (errs->len > 0) g_string_append(msg, errs->str);
-    g_string_append(msg,
-        "\nRestart " APP_NAME " for the changes to take effect.");
-    show_message(GTK_WINDOW(ui->window),
-        errs->len ? GTK_MESSAGE_WARNING : GTK_MESSAGE_INFO,
-        "Restart required", msg->str);
-    g_string_free(msg, TRUE);
-    g_string_free(errs, TRUE);
+    if (items->len == 0) { g_ptr_array_free(items, TRUE); return; }
+    batch_start(ui, items, /*update*/ FALSE);
 }
 
 static void do_update(AdminUI *ui) {
@@ -1299,31 +1344,18 @@ static void do_update(AdminUI *ui) {
     }
     g_string_free(names, TRUE);
 
-    GString *errs = g_string_new(NULL);
-    guint ok_count = 0;
+    /* Same worker-thread path as install; backup_and_remove only needs
+     * the folder name, so the catalog clone serves both steps. */
+    GPtrArray *items = g_ptr_array_new();
     for (guint i = 0; i < folders->len; i++) {
         const char *folder = folders->pdata[i];
         PlugRow *cat = find_row_by_folder(ui->catalog,   folder);
         PlugRow *ip  = find_row_by_folder(ui->installed, folder);
-        if (!cat || !ip) continue;
-        if (!backup_and_remove(ip, errs)) continue;
-        if (install_one(cat, errs))       ok_count++;
+        if (cat && ip) g_ptr_array_add(items, plugrow_lite_clone(cat));
     }
     g_ptr_array_free(folders, TRUE);
-
-    adminui_rescan_installed(ui);
-    adminui_repopulate_all(ui);
-
-    GString *msg = g_string_new(NULL);
-    g_string_append_printf(msg, "Updated %u plugin(s).\n", ok_count);
-    if (errs->len > 0) g_string_append(msg, errs->str);
-    g_string_append(msg,
-        "\nRestart " APP_NAME " for the changes to take effect.");
-    show_message(GTK_WINDOW(ui->window),
-        errs->len ? GTK_MESSAGE_WARNING : GTK_MESSAGE_INFO,
-        "Restart required", msg->str);
-    g_string_free(msg, TRUE);
-    g_string_free(errs, TRUE);
+    if (items->len == 0) { g_ptr_array_free(items, TRUE); return; }
+    batch_start(ui, items, /*update*/ TRUE);
 }
 
 static void do_remove(AdminUI *ui) {
@@ -1555,6 +1587,10 @@ static void on_tab_switched(GtkNotebook *nb, GtkWidget *page,
  * row is checked (checkboxToggled: → _actionButton.enabled). Locked and
  * hidden rows never count. */
 static void update_action_sensitivity(AdminUI *ui) {
+    if (ui->busy) {          /* batch running — nothing may re-arm it */
+        gtk_widget_set_sensitive(ui->action_btn, FALSE);
+        return;
+    }
     if (ui->current_tab == TAB_INCOMPATIBLE) return;   /* button hidden */
     GPtrArray *checked = collect_checked(ui->store[ui->current_tab]);
     gtk_widget_set_sensitive(ui->action_btn, checked->len > 0);
@@ -1584,15 +1620,18 @@ static void on_check_toggled(GtkCellRendererToggle *r, gchar *path_str,
 
 static gboolean on_window_delete(GtkWindow *w, gpointer user) {
     AdminUI *ui = user;
-    /* Hide rather than destroy so we keep the singleton across opens. */
-    gtk_widget_set_visible(GTK_WIDGET(w), FALSE);
-    (void)ui;
+    /* Hide rather than destroy so we keep the singleton across opens.
+     * While a batch worker is running the window stays put — its
+     * widgets are the worker's progress/result surface. */
+    if (!ui->busy)
+        gtk_widget_set_visible(GTK_WIDGET(w), FALSE);
     return TRUE;
 }
 
 static void on_close_clicked(GtkButton *b, gpointer user) {
     (void)b;
     AdminUI *ui = user;
+    if (ui->busy) return;
     gtk_widget_hide(ui->window);
 }
 
@@ -1829,8 +1868,9 @@ static AdminUI *adminui_create(GtkWindow *parent) {
         g_signal_connect(gtk_tree_view_get_selection(ui->view[t]),
             "changed", G_CALLBACK(on_selection_changed), ui);
 
-    /* GAP-139 — macOS footer block, centered: repository link, plugin
-     * list version, catalog stats (screenshot layout). */
+    /* GAP-139 — macOS footer block, centered: repository link +
+     * catalog stats (screenshot layout). The "Plugin list version"
+     * line was dropped as meaningless (user request 2026-08-12). */
     GtkWidget *footer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
     gtk_widget_set_halign(footer, GTK_ALIGN_CENTER);
     GtkWidget *repo_link = gtk_link_button_new_with_label(
@@ -1838,10 +1878,6 @@ static AdminUI *adminui_create(GtkWindow *parent) {
         "Plugin list repository");
     gtk_widget_set_halign(repo_link, GTK_ALIGN_CENTER);
     npp_box_pack(GTK_BOX(footer), repo_link, FALSE, 0);
-    GtkWidget *ver_lbl = gtk_label_new(
-        "Plugin list version:  " PLUGIN_LIST_VERSION);
-    gtk_widget_add_css_class(ver_lbl, "dim-label");
-    npp_box_pack(GTK_BOX(footer), ver_lbl, FALSE, 0);
     ui->status_lbl = gtk_label_new("");
     gtk_widget_add_css_class(ui->status_lbl, "dim-label");
     npp_box_pack(GTK_BOX(footer), ui->status_lbl, FALSE, 0);
@@ -1858,6 +1894,16 @@ static AdminUI *adminui_create(GtkWindow *parent) {
     g_signal_connect(ui->close_btn, "clicked",
         G_CALLBACK(on_close_clicked), ui);
     npp_box_pack_end(GTK_BOX(bottom), ui->close_btn, FALSE, 0);
+
+    /* Batch progress — bottom right, left of Close; hidden until an
+     * install/update batch runs (macOS shows a spinner by the filter
+     * box; a determinate per-plugin bar is more honest for 26 zips). */
+    ui->progress = gtk_progress_bar_new();
+    gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(ui->progress), TRUE);
+    gtk_widget_set_valign(ui->progress, GTK_ALIGN_CENTER);
+    gtk_widget_set_size_request(ui->progress, 280, -1);
+    npp_box_pack_end(GTK_BOX(bottom), ui->progress, FALSE, 0);
+    gtk_widget_set_visible(ui->progress, FALSE);
 
     npp_box_pack(GTK_BOX(root), bottom, FALSE, 0);
 

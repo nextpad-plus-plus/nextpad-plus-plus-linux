@@ -162,6 +162,12 @@ static void scan_dir(const char *dir)
         char sopath[2048];
         snprintf(sopath, sizeof(sopath), "%s/%s/%s.so",
                  dir, ent->d_name, ent->d_name);
+        /* macOS loadPlugins parity: a subfolder without the eponymous
+         * binary is DATA, not a plugin (plugins/Config is the settings
+         * dir the host itself creates) — skip silently. The loud
+         * dlopen message below stays for .so files that exist but
+         * fail to load. */
+        if (!g_file_test(sopath, G_FILE_TEST_IS_REGULAR)) continue;
         load_plugin(sopath);
     }
     closedir(d);
