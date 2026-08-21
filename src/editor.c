@@ -321,10 +321,16 @@ static gboolean reload_doc_from_disk_with_enc(NppDoc *doc,
     sptr_t saved_column = sci_msg(doc->sci, SCI_GETCOLUMN, (uptr_t)saved_pos, 0);
     sptr_t saved_first  = sci_msg(doc->sci, SCI_GETFIRSTVISIBLELINE, 0, 0);
 
-    sci_msg(doc->sci, SCI_SETTEXT, 0, (sptr_t)utf8);
+    /* Length-aware insert (macOS EditorView.mm ~791: "SCI_ADDTEXT with
+     * explicit length — binary safe"): SETTEXT strlen()s its payload and
+     * truncates at the first NUL, silently dropping the rest of any
+     * binary / NUL-embedded file. CLEARALL + ADDTEXT carry the real
+     * byte count. Caret lands at the end; the restore below re-places it. */
+    sci_msg(doc->sci, SCI_CLEARALL, 0, 0);
+    sci_msg(doc->sci, SCI_ADDTEXT, (uptr_t)utf8_len, (sptr_t)utf8);
     sci_msg(doc->sci, SCI_SETSAVEPOINT, 0, 0);
     sci_msg(doc->sci, SCI_EMPTYUNDOBUFFER, 0, 0);
-    /* The SETTEXT above fired SCN_MODIFIED for every line — a reload is
+    /* The insert above fired SCN_MODIFIED for every line — a reload is
      * not a user edit; the margin must not turn solid yellow. */
     changehistory_clear(doc->sci);
 
@@ -3517,7 +3523,12 @@ gboolean editor_open_path(const char *path)
      * BEFORE the text lands and stays off for large tabs; the undo
      * buffer would otherwise shadow the whole multi-GB insert). */
     sci_msg(sci, SCI_SETUNDOCOLLECTION, large ? 0 : 1, 0);
-    sci_msg(sci, SCI_SETTEXT, 0, (sptr_t)utf8);
+    /* Length-aware insert (macOS EditorView.mm ~791: "SCI_ADDTEXT with
+     * explicit length — binary safe"): SETTEXT strlen()s its payload and
+     * truncates at the first NUL, so binary / NUL-embedded files loaded
+     * empty or clipped. Caret lands at the end; GOTOPOS 0 below resets. */
+    sci_msg(sci, SCI_CLEARALL, 0, 0);
+    sci_msg(sci, SCI_ADDTEXT, (uptr_t)utf8_len, (sptr_t)utf8);
     sci_msg(sci, SCI_SETSAVEPOINT, 0, 0);
     sci_msg(sci, SCI_EMPTYUNDOBUFFER, 0, 0);
     /* Per-widget marking + feature-allow flags (read by

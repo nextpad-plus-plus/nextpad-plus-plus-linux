@@ -517,9 +517,10 @@ void session_restore_from(const char *path)
              * is nothing to restore. resolve_backup_path remaps paths
              * recorded before the config-dir migration (GAP-59). */
             gchar *content = NULL;
+            gsize  content_len = 0;
             gchar *bp = e->backup_filepath[0]
                 ? resolve_backup_path(e->backup_filepath) : NULL;
-            if (bp) g_file_get_contents(bp, &content, NULL, NULL);
+            if (bp) g_file_get_contents(bp, &content, &content_len, NULL);
             /* A renamed-but-empty tab restores with no content (macOS
              * #177: organizational tabs survive relaunch); anything else
              * without a readable snapshot has nothing to restore. */
@@ -538,9 +539,17 @@ void session_restore_from(const char *path)
                     g_free(nd->custom_name);
                     nd->custom_name = g_strdup(e->custom_name);
                 }
-                if (content)
-                    scintilla_send_message(SCINTILLA(nd->sci), SCI_SETTEXT,
-                                           0, (sptr_t)content);
+                if (content) {
+                    /* Length-aware insert (macOS parity): SETTEXT
+                     * strlen()s and truncates at the first NUL — a
+                     * snapshot of a binary/NUL-embedded buffer must
+                     * restore byte-complete. GOTOPOS 0 keeps SETTEXT's
+                     * caret-at-start when no selection was recorded. */
+                    scintilla_send_message(SCINTILLA(nd->sci), SCI_CLEARALL, 0, 0);
+                    scintilla_send_message(SCINTILLA(nd->sci), SCI_ADDTEXT,
+                                           (uptr_t)content_len, (sptr_t)content);
+                    scintilla_send_message(SCINTILLA(nd->sci), SCI_GOTOPOS, 0, 0);
+                }
                 /* Restoring is not editing — reset the change-history
                  * baseline (needs an empty undo stack; the restore
                  * itself is not undoable, which is fine on a fresh
@@ -577,11 +586,12 @@ void session_restore_from(const char *path)
              * calls backup_clean() and deletes the snapshot from disk.
              * (Verified live — reading after open finds the file gone.) */
             gchar *backup_content = NULL;
+            gsize  backup_len = 0;
             gchar *bp = NULL;
             if (e->backup_filepath[0]) {
                 bp = resolve_backup_path(e->backup_filepath);
                 if (bp)
-                    g_file_get_contents(bp, &backup_content, NULL, NULL);
+                    g_file_get_contents(bp, &backup_content, &backup_len, NULL);
             }
             if (!editor_open_path(e->filepath)) {
                 g_free(bp);
@@ -597,9 +607,15 @@ void session_restore_from(const char *path)
             if (backup_content) {
                 NppDoc *bd = editor_current_doc();
                 if (bd) {
+                    /* Length-aware insert (macOS parity) — see the
+                     * untitled-snapshot site above for the rationale. */
                     scintilla_send_message(SCINTILLA(bd->sci),
-                                           SCI_SETTEXT, 0,
+                                           SCI_CLEARALL, 0, 0);
+                    scintilla_send_message(SCINTILLA(bd->sci),
+                                           SCI_ADDTEXT, (uptr_t)backup_len,
                                            (sptr_t)backup_content);
+                    scintilla_send_message(SCINTILLA(bd->sci),
+                                           SCI_GOTOPOS, 0, 0);
                     scintilla_send_message(SCINTILLA(bd->sci),
                                            SCI_EMPTYUNDOBUFFER, 0, 0);
                     changehistory_clear(bd->sci);
