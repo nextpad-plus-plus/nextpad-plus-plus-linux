@@ -56,6 +56,11 @@
   </provides>
 
   <releases>
+    <release version="1.1.1" date="2026-08-21">
+      <description>
+        <p>Binary-safe file loading, Window menu, macro and toolbar refinements, floating-panel polish, threaded plugin installs, and the HexEditor plugin.</p>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-08-02">
       <description>
         <p>Plugins Admin catalog, dockable plugin panel persistence, git side panel, update checker, SDK parity batch, and 26 ported plugins available.</p>
