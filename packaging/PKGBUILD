@@ -1,23 +1,100 @@
 # Maintainer: Andrew Letov <aletik@gmail.com>
+#
+# Nextpad++ — Arch Linux package.
+#
+# Built by tools/make-arch.sh, which runs makepkg inside an
+# archlinux:base-devel container (makepkg and pacman cannot run natively on
+# the Ubuntu build hosts). The container hands this file a source tarball of
+# the working tree; nothing here is Arch-container-specific, so pointing
+# source= at a public release tarball turns this into an AUR-ready PKGBUILD
+# unchanged — see the note above source=.
+#
+# Deliberately NOT a mirror of the .deb/.rpm recipes in one respect: those
+# run ldconfig from their post-install scriptlets, and this package does not
+# need to. libscintilla.so is a PRIVATE bundled library found through the
+# binary's relocatable $ORIGIN/../lib/nextpad-plus-plus rpath, never through
+# the ld.so cache, so there is nothing for ldconfig to add.
+
 pkgname=nextpad-plus-plus
-pkgver=1.0.6
+pkgver=1.1.1
 pkgrel=1
 pkgdesc="Multi-tab text editor (Linux port of Notepad++)"
+# Arch proper is x86_64 only; aarch64 is Arch Linux ARM, which builds the
+# same recipe from its own repositories.
 arch=('x86_64' 'aarch64')
 url="https://nextpad.org"
-license=('GPL3')
-depends=('gtk3' 'glib2')
-makedepends=('cmake' 'pkgconf')
-source=("${pkgname}-${pkgver}.tar.gz::https://github.com/nextpad-plus-plus/nextpad-plus-plus/archive/v${pkgver}.tar.gz")
+license=('GPL-3.0-or-later')
+
+# Runtime linkage, verified with ldd against an Arch-built binary:
+# gtk4, glib2, uchardet, libx11 (Window menu > Move to Monitor), plus the
+# toolchain runtimes. libadwaita is a BUILD dependency only — the sources
+# include its headers but the link stage pulls in no libadwaita symbol.
+#
+# curl is not linked either: every remote fetch (plugin catalog, UDL
+# installs, update check) spawns the curl BINARY, which is invisible to any
+# dependency scanner and absent from a minimal Arch install.
+#
+# hicolor-icon-theme owns the /usr/share/icons/hicolor tree this package
+# installs its app icons into (standard Arch practice for that reason).
+depends=('gtk4' 'glib2' 'uchardet' 'libx11' 'curl' 'gcc-libs' 'glibc'
+         'hicolor-icon-theme')
+# glib2-devel supplies glib-genmarshal and glib-mkenums, which Scintilla's
+# GTK4 makefile runs to generate its marshallers and enum tables. Arch splits
+# those tools out of glib2; Debian ships them inside libglib2.0-dev, which is
+# why nothing in the .deb recipe names them.
+makedepends=('cmake' 'pkgconf' 'libadwaita' 'glib2-devel')
+optdepends=('unzip: Plugins Admin archive extraction'
+            'git: Git side panel')
+
+# Admin-editable AppArmor profile — keep local edits across upgrades.
+backup=('etc/apparmor.d/nextpad-plus-plus')
+install="${pkgname}.install"
+
+# !debug: Arch's default options split debug symbols into a SECOND package
+# (nextpad-plus-plus-debug). We ship one artifact per architecture, matching
+# the .deb and .rpm, so suppress it rather than emit a package that nothing
+# publishes. Stripping itself stays on — that is the Arch norm.
+options=('!debug')
+
+# For an AUR submission, replace the bare filename with the release URL:
+#   source=("${pkgname}-${pkgver}.tar.gz::https://github.com/nextpad-plus-plus/nextpad-plus-plus-linux/archive/v${pkgver}.tar.gz")
+# and replace SKIP with the real checksum. NOTE this is not possible today:
+# the public repository carries neither the vendored Scintilla tree nor its
+# patch series, both of which this build requires.
+source=("${pkgname}-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
+# Memory-aware job cap, same budget the .deb/.rpm scripts use. An unbounded
+# parallel build once OOM-killed a whole desktop session here (~122 lexilla
+# translation units at ~50-60 MB per cc1plus) and the build VMs have as
+# little as 1.9 GB of RAM. Budget 500 MB per job, never exceed nproc.
+_jobs() {
+    local mem_mb jobs cap
+    mem_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+    jobs=$(nproc); cap=$(( mem_mb / 500 )); (( cap < 1 )) && cap=1
+    (( jobs > cap )) && jobs=$cap
+    echo "$jobs"
+}
+
 build() {
-    cmake -B build -S "${pkgname}-${pkgver}" \
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    local jobs; jobs=$(_jobs)
+
+    # Scintilla's GTK4 backend builds through its own makefile (it drives the
+    # GObject enum/marshaller codegen). CMake invokes it too, but only
+    # serially via a custom command, so build it up front in parallel.
+    make -C scintilla/gtk4 shared -j"$jobs"
+
+    # RESOURCES_DIR is a compile-time literal, so the FINAL install path must
+    # be configured in — a package cannot be built and then relocated.
+    cmake -B build-arch -S . \
         -DCMAKE_BUILD_TYPE=Release \
+        -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
         -DCMAKE_INSTALL_PREFIX=/usr
-    cmake --build build
+    cmake --build build-arch -j"$jobs"
 }
 
 package() {
-    DESTDIR="${pkgdir}" cmake --install build
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    DESTDIR="${pkgdir}" cmake --install build-arch
 }

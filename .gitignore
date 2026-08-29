@@ -15,6 +15,7 @@ build-*/
 /nextpad-plus-plus
 /Nextpad++
 *.deb
+*.pkg.tar.zst
 
 # Generated apt repository tree (make-apt-repo.sh output)
 dist/apt/

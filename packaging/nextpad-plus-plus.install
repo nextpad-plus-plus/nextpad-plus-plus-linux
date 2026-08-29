@@ -1,0 +1,37 @@
+# pacman scriptlet — AppArmor profile only.
+#
+# Everything else the .deb/.rpm scriptlets do is already handled on Arch:
+# the desktop-file, icon-cache and AppStream caches are refreshed by pacman
+# hooks, and ldconfig is irrelevant here because libscintilla.so is found
+# through the binary's $ORIGIN rpath rather than the ld.so cache.
+#
+# AppArmor is optional on Arch and inactive on a stock install, so every
+# step is guarded and failure is never fatal: the profile grants the user
+# namespace access that WebKitGTK-based plugins need for their sandbox on
+# systems that restrict it, and is inert everywhere else.
+
+_profile=/etc/apparmor.d/nextpad-plus-plus
+
+_apparmor_load() {
+    if command -v apparmor_parser >/dev/null 2>&1 &&
+       [ -d /sys/kernel/security/apparmor ] && [ -f "$_profile" ]; then
+        apparmor_parser -r -T -W "$_profile" || true
+    fi
+}
+
+post_install() {
+    _apparmor_load
+}
+
+post_upgrade() {
+    _apparmor_load
+}
+
+pre_remove() {
+    # Unload while the profile file still exists — pacman deletes package
+    # files before post_remove runs.
+    if command -v apparmor_parser >/dev/null 2>&1 &&
+       [ -d /sys/kernel/security/apparmor ] && [ -f "$_profile" ]; then
+        apparmor_parser -R "$_profile" 2>/dev/null || true
+    fi
+}

@@ -8,6 +8,11 @@
 # Produces, in dist/:
 #   Nextpad++v<VER>_arm64.deb   Nextpad++v<VER>_arm64.rpm   (this host)
 #   Nextpad++v<VER>_amd64.deb   Nextpad++v<VER>_amd64.rpm   (ubuntu24)
+#   Nextpad++v<VER>_amd64.pkg.tar.zst                       (ubuntu24)
+#
+# The Arch package is built only where podman is available, because it must
+# be compiled inside an Arch container against Arch's own libraries — see
+# the header of make-arch.sh. Hosts without podman skip it and say so.
 #
 # WHY REMOTE HOSTS AND NOT CROSS-COMPILATION: each package embeds natively
 # compiled binaries, so every architecture must be built on a machine of that
@@ -45,7 +50,15 @@ echo "  ✓ $(ls -t Nextpad++v${VER}_*.deb | head -1)"
 ./tools/make-rpm.sh > /tmp/npp-rel-rpm.log 2>&1 \
     || { echo "  rpm FAILED — see /tmp/npp-rel-rpm.log"; tail -15 /tmp/npp-rel-rpm.log; exit 1; }
 echo "  ✓ $(ls -t Nextpad++v${VER}_*.rpm | head -1)"
+if command -v podman >/dev/null 2>&1; then
+    ./tools/make-arch.sh > /tmp/npp-rel-arch.log 2>&1 \
+        || { echo "  arch FAILED — see /tmp/npp-rel-arch.log"; tail -15 /tmp/npp-rel-arch.log; exit 1; }
+    echo "  ✓ $(ls -t Nextpad++v${VER}_*.pkg.tar.zst | head -1)"
+else
+    echo "  – arch skipped (no podman on this host)"
+fi
 mv -f Nextpad++v${VER}_*.deb Nextpad++v${VER}_*.rpm "$DIST/" 2>/dev/null || true
+mv -f Nextpad++v${VER}_*.pkg.tar.zst "$DIST/" 2>/dev/null || true
 
 # ── remote architectures ────────────────────────────────────────────────
 REMOTE_PATH=/home/ubuntu/development/npp/nextpad-plus-plus-gtk4
@@ -68,15 +81,20 @@ for H in $REMOTES; do
     ssh -o BatchMode=yes "$H" "cd $REMOTE_PATH && \
         (cd scintilla/gtk4 && make shared -j4 >/tmp/npp-sci.log 2>&1) && \
         ./tools/make-deb.sh >/tmp/npp-deb.log 2>&1 && \
-        ./tools/make-rpm.sh >/tmp/npp-rpm.log 2>&1" \
-      || { echo "  ✗ build FAILED — logs on $H: /tmp/npp-{sci,deb,rpm}.log"
-           ssh -o BatchMode=yes "$H" "tail -12 /tmp/npp-rpm.log /tmp/npp-deb.log 2>/dev/null" | tail -20
+        ./tools/make-rpm.sh >/tmp/npp-rpm.log 2>&1 && \
+        if command -v podman >/dev/null 2>&1; then \
+            ./tools/make-arch.sh >/tmp/npp-arch.log 2>&1; \
+        else echo 'no podman — arch package skipped'; fi" \
+      || { echo "  ✗ build FAILED — logs on $H: /tmp/npp-{sci,deb,rpm,arch}.log"
+           ssh -o BatchMode=yes "$H" "tail -12 /tmp/npp-arch.log /tmp/npp-rpm.log /tmp/npp-deb.log 2>/dev/null" | tail -20
            continue; }
 
     echo "  → fetching artifacts"
     scp -q "$H:$REMOTE_PATH/Nextpad++v${VER}_*.deb" \
            "$H:$REMOTE_PATH/Nextpad++v${VER}_*.rpm" "$DIST/" 2>/dev/null || true
-    ssh -o BatchMode=yes "$H" "rm -f $REMOTE_PATH/*.deb $REMOTE_PATH/*.rpm" 2>/dev/null || true
+    scp -q "$H:$REMOTE_PATH/Nextpad++v${VER}_*.pkg.tar.zst" "$DIST/" 2>/dev/null || true
+    ssh -o BatchMode=yes "$H" \
+        "rm -f $REMOTE_PATH/*.deb $REMOTE_PATH/*.rpm $REMOTE_PATH/*.pkg.tar.zst" 2>/dev/null || true
     echo "  ✓ done"
 done
 
@@ -89,6 +107,7 @@ echo "Verify before publishing:"
 echo "  dpkg-deb -I dist/*.deb | head"
 echo "  rpm -qp --requires dist/*.rpm | grep -v rpmlib"
 echo "  podman run --rm -v \$PWD/dist:/d fedora:43 rpm -i --test /d/*.x86_64.rpm"
+echo "  podman run --rm -v \$PWD/dist:/d archlinux bash -c 'pacman -Sy --noconfirm && pacman -U --noconfirm /d/*.pkg.tar.zst'"
 echo
 echo "GitHub upload note: URL-encode '+' as %2B in the asset-name query,"
 echo "or the '++' in the .deb filename becomes spaces."
