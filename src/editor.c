@@ -711,6 +711,12 @@ static gsize link_trim_trailing(const char *text, gsize start, gsize end)
     return end;
 }
 
+/* GAP-148 — main.c owns the per-widget large-file gate lookup. Declared here,
+ * above its first use: it was previously declared several hundred lines
+ * further down, so this call compiled as an implicit declaration — a warning
+ * on GCC 13, a hard error from GCC 14 on. */
+gboolean main_large_file_allows(GtkWidget *sci, const char *feature);
+
 static gboolean link_gating_off(GtkWidget *sci)
 {
     if (!g_prefs.clickable_link_enable) return TRUE;
@@ -1001,9 +1007,6 @@ static void apply_word_chars(GtkWidget *sci)
     sci_msg(sci, SCI_SETWORDCHARS, 0, (sptr_t)combined->str);
     g_string_free(combined, TRUE);
 }
-
-/* GAP-148 — main.c owns the per-widget large-file gate lookup. */
-gboolean main_large_file_allows(GtkWidget *sci, const char *feature);
 
 /* GAP-149 — dynamic line-number margin (macOS recomputeLineNumberMargin,
  * EditorView.mm:2680). Measures "_<linecount>" in STYLE_LINENUMBER via

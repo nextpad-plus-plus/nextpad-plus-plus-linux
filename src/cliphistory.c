@@ -114,7 +114,7 @@ static gboolean on_clip_key(GtkEventControllerKey *c, guint keyval,
             : NULL;
         if (text) {
             gdk_clipboard_set_text(
-                gtk_widget_get_clipboard(s_listbox), text);
+                gtk_widget_get_clipboard(GTK_WIDGET(s_listbox)), text);
             return TRUE;
         }
     }
@@ -191,7 +191,7 @@ GtkWidget *cliphistory_init(GtkWidget *window)
          * the clipboard without pasting (macOS pasteboardWriterForRow). */
         GtkEventController *kc = gtk_event_controller_key_new();
         g_signal_connect(kc, "key-pressed", G_CALLBACK(on_clip_key), NULL);
-        gtk_widget_add_controller(s_listbox, kc);
+        gtk_widget_add_controller(GTK_WIDGET(s_listbox), kc);
     }
 
     GtkWidget *scroll = gtk_scrolled_window_new();

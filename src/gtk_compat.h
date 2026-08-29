@@ -24,8 +24,17 @@
  *
  * pack_end has no GTK4 equivalent; npp_box_pack_end appends (correct for the
  * common single-end-child case — revisit any box with multiple end children).
+ *
+ * The box parameter is GtkBox *, not GtkWidget *: every one of the ~450 call
+ * sites already writes npp_box_pack(GTK_BOX(x), …), mirroring the GTK3 call
+ * it replaced. Declaring it GtkWidget * made each of those a mismatched
+ * pointer argument — harmless at runtime, since the cast yields the same
+ * address, but -Wincompatible-pointer-types became a hard ERROR in GCC 14,
+ * so the whole app failed to compile on any modern toolchain (found on Arch,
+ * GCC 16). Matching the parameter to what the call sites pass fixes all of
+ * them without touching a single one.
  */
-static inline void npp_box_pack(GtkWidget *box, GtkWidget *child,
+static inline void npp_box_pack(GtkBox *box, GtkWidget *child,
                                 gboolean expand, int padding)
 {
     gboolean horiz = gtk_orientable_get_orientation(GTK_ORIENTABLE(box))
@@ -40,10 +49,10 @@ static inline void npp_box_pack(GtkWidget *box, GtkWidget *child,
         else       { gtk_widget_set_margin_top(child, padding);
                      gtk_widget_set_margin_bottom(child, padding); }
     }
-    gtk_box_append(GTK_BOX(box), child);
+    gtk_box_append(box, child);
 }
 
-static inline void npp_box_pack_end(GtkWidget *box, GtkWidget *child,
+static inline void npp_box_pack_end(GtkBox *box, GtkWidget *child,
                                     gboolean expand, int padding)
 {
     npp_box_pack(box, child, expand, padding);

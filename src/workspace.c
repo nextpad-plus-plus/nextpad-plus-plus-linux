@@ -1,5 +1,6 @@
 #include "workspace.h"
 #include "gtk_compat.h"
+#include "prefs.h"      /* ws_sync_roots_to_prefs: roots_set + prefs_save */
 #include "npp_menu.h"
 #include "editor.h"
 #include "macrobatch.h"
