@@ -24,6 +24,12 @@ const char *lexer_display_name(const char *lang_name);
    Applies aliases: c/objc → cpp, typescript → javascript. */
 const char *lexer_get_keywords(const char *lang_name);
 
+/* Lexilla lexer name ("cpp", "hypertext", …) for a langs.xml internal
+   language name, or NULL when no built-in lexer serves it (case-insensitive;
+   the kLangLexer table). Additive accessor for the terminal editor, which
+   wires the lexer itself and takes its styles from the TUI theme shim. */
+const char *lexer_lexilla_name(const char *lang_name);
+
 #ifdef __cplusplus
 }
 #endif

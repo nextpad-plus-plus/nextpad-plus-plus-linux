@@ -477,6 +477,11 @@ static void apply_fold_props(GtkWidget *sci, const char *lang)
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
+const char *lexer_lexilla_name(const char *lang_name)
+{
+    return lang_to_lexer(lang_name);
+}
+
 void lexer_apply(GtkWidget *sci, const char *lang_name)
 {
     g_object_set_data_full(G_OBJECT(sci), "npp-lang",

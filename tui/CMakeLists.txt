@@ -130,6 +130,7 @@ add_library(npp_core STATIC
     "${SRC}/encoding.c"
     "${SRC}/paths.c"
     "${SRC}/funclist_xml.c"
+    "${SRC}/langcaptions.c"
     "${SRC}/lexilla_bridge.cpp"
     # tier 2 — through the seam
     "${SRC}/stylestore.c"
@@ -173,25 +174,27 @@ add_library(npp_tui_shim STATIC
 target_include_directories(npp_tui_shim PUBLIC "${TUI_DIR}")
 target_link_libraries(npp_tui_shim PUBLIC npp_core scintilla_curses)
 
+# nextpad-tui (`npp`) — phase 2. main.cpp is the transcription of the macOS
+# tui/main.mm against the Linux replacements of docs/12 §8.3; the five
+# shim/*.cpp bodies (phase 2a) implement shim/*.h.
 # -----------------------------------------------------------------------------
-# nextpad-tui (`npp`) — PHASE 2b. Intended shape, from the macOS target with
-# the Linux replacements of docs/12 §8.3; enable once main.cpp exists (the
-# shim bodies are npp_tui_shim above; their headers are the contract).
-# -----------------------------------------------------------------------------
-# add_executable(nextpad-tui main.cpp)
-# set_target_properties(nextpad-tui PROPERTIES OUTPUT_NAME npp)
-# target_compile_definitions(nextpad-tui PRIVATE _XOPEN_SOURCE_EXTENDED=1)
-# target_link_libraries(nextpad-tui PRIVATE
-#     npp_tui_shim        # shim/ funclist interop session workspace theme
-#     npp_tui_chrome      # chrome/ input/ scene/ term/ (+ npp_fuzzy)
-#     npp_core            # langsmgr encoding paths funclist_xml stylestore udl lexer
-#     scintilla_curses    # + ncursesw/tinfo
-#     lexilla
-#     util                # forkpty/openpty (tests only; harmless here)
-# )
-# install(TARGETS nextpad-tui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-# install(FILES "${CMAKE_SOURCE_DIR}/packaging/npp.1"
-#         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+add_executable(nextpad-tui main.cpp)
+set_target_properties(nextpad-tui PROPERTIES OUTPUT_NAME npp)
+# Wide-char curses (cchar_t / mvwin_wch for the dim-behind pass), same as the
+# scinterm sources; GCC 14 needs <cstdint> ahead of Sci_Position.h.
+target_compile_definitions(nextpad-tui PRIVATE _XOPEN_SOURCE_EXTENDED=1)
+target_compile_options(nextpad-tui PRIVATE "-include" "cstdint" ${NCURSESW_CFLAGS_OTHER})
+target_link_libraries(nextpad-tui PRIVATE
+    npp_tui_shim        # shim/ funclist interop session workspace theme
+    npp_tui_chrome      # chrome/ input/ scene/ term/ (+ npp_fuzzy)
+    npp_core            # langsmgr encoding paths funclist_xml stylestore udl lexer
+    scintilla_curses    # + ncursesw/tinfo
+    lexilla
+    ${TUI_GLIB_LIBRARIES} ${UCHARDET_LIBRARIES}
+)
+target_link_directories(nextpad-tui PRIVATE ${TUI_GLIB_LIBRARY_DIRS} ${UCHARDET_LIBRARY_DIRS})
+install(TARGETS nextpad-tui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# (packaging/npp.1 is installed from the root CMakeLists NPP_BUILD_TUI block.)
 
 # -----------------------------------------------------------------------------
 # Unit tests — one executable per tests/*_test.cpp, exit 0 = pass. Same
@@ -230,9 +233,8 @@ add_test(NAME tui.linktest COMMAND tui_linktest)
 
 # -----------------------------------------------------------------------------
 # Phase 4.0 E2E harness (drives the real `npp` on a pty against the in-memory
-# screen model). Builds now — driver.cpp only needed <pty.h> — and becomes a
-# ctest entry with the nextpad-tui target in phase 2:
-#   NPP_E2E_BIN=$<TARGET_FILE:nextpad-tui> e2e-smoke …
+# screen model). Each battery is a ctest entry fed the freshly built binary:
+#   ctest --test-dir build-tui -R tui.e2e
 # -----------------------------------------------------------------------------
 add_library(npp_tui_e2e STATIC tests/e2e/driver.cpp)
 target_include_directories(npp_tui_e2e PUBLIC "${TUI_DIR}")
@@ -240,5 +242,9 @@ target_link_libraries(npp_tui_e2e PUBLIC npp_tui_chrome util)
 foreach(_e smoke edit features brace panel)
     add_executable(e2e-${_e} tests/e2e/e2e_${_e}.cpp)
     target_link_libraries(e2e-${_e} PRIVATE npp_tui_e2e)
+    add_test(NAME tui.e2e.${_e} COMMAND e2e-${_e} $<TARGET_FILE:nextpad-tui>)
+    set_tests_properties(tui.e2e.${_e} PROPERTIES
+        ENVIRONMENT "NPP_E2E_BIN=$<TARGET_FILE:nextpad-tui>"
+        TIMEOUT 600)
 endforeach()
-add_custom_target(tui-e2e DEPENDS e2e-smoke e2e-edit e2e-features e2e-brace e2e-panel)
+add_custom_target(tui-e2e DEPENDS nextpad-tui e2e-smoke e2e-edit e2e-features e2e-brace e2e-panel)
