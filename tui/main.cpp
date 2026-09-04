@@ -1017,9 +1017,15 @@ static void buildFolderTreeRows(void) {
   }
 }
 
-// Paints the dock, rebuilding its rows from the live state each frame.
-static void drawPanel(void) {
-  if (!gPanelVisible || !panelWin) return;
+// Rebuilds the dock's rows from the live state (cached scans no-op when
+// nothing changed). Called by every paint AND, on Linux, before a focused
+// dock handles a navigation key: when the palette's Enter that shows the
+// panel, F6, Down and Enter arrive in ONE read (an e2e battery or a fast
+// paste), the main loop drains them all before the first repaint, so the
+// rows — and the Function List's item cache — did not exist yet and
+// Down/Enter silently acted on an empty list. Same latent race in the macOS
+// main.mm (it wins on pty timing there).
+static void buildPanelRows(void) {
   switch (gPanelKind) {
     case PanelKind::DocList: buildDocListRows(); break;
     case PanelKind::Functions: buildFunctionRows(); break;
@@ -1028,6 +1034,12 @@ static void drawPanel(void) {
   }
   if (gPanel.selected >= gPanel.rows.size())
     gPanel.selected = gPanel.rows.empty() ? 0 : gPanel.rows.size() - 1;
+}
+
+// Paints the dock, rebuilding its rows from the live state each frame.
+static void drawPanel(void) {
+  if (!gPanelVisible || !panelWin) return;
+  buildPanelRows();
   gPanel.focused = gPanelFocused;
   int rows = 0, cols = 0;
   getmaxyx(panelWin, rows, cols);
@@ -3617,6 +3629,7 @@ static void applyKey(const npptui::KeyEvent &k, bool &running, std::string *tran
     int rows = 0, cols = 0;
     if (panelWin) getmaxyx(panelWin, rows, cols);
     (void)cols;
+    buildPanelRows();  // Linux: rows may not have been painted yet (see above)
     switch (k.code.kind) {
       case KeyKind::Up: gPanel.moveSelection(-1, rows); return;
       case KeyKind::Down: gPanel.moveSelection(1, rows); return;

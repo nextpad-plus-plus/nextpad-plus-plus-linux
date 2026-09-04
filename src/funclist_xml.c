@@ -266,7 +266,12 @@ static char *parser_path_for(const char *lang)
     for (int v = 0; v < 2 && !found; v++) {
         if (v == 1 && strcmp(variants[0], variants[1]) == 0) break;
         gchar *fname = g_strdup_printf("%s.xml", variants[v]);
-        gchar *user = npp_user_file("functionList", fname);
+        /* TUI test hook (macOS NPP_TUI_FUNCLIST_DIR, honoured by its
+         * funclist.mm): an explicit rules directory wins over the user
+         * dir and the bundle. Unset in normal GUI/TUI use. */
+        const char *ovr = g_getenv("NPP_TUI_FUNCLIST_DIR");
+        gchar *user = ovr && *ovr ? g_build_filename(ovr, fname, NULL)
+                                  : npp_user_file("functionList", fname);
         if (user && g_file_test(user, G_FILE_TEST_EXISTS)) found = user;
         else {
             g_free(user);
