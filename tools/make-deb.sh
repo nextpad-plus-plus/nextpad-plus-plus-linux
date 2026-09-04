@@ -61,7 +61,7 @@ fi
 
 mkdir -p "$STAGE/DEBIAN"
 
-# The binary links gtk4/glib/uchardet/libstdc++ (NOT libadwaita — checked
+# The binary links gtk4/glib/uchardet/libxml2/libstdc++ (NOT libadwaita — checked
 # via ldd 2026-07-23); libscintilla.so ships inside the package itself.
 # unzip: Plugins Admin archive extraction. git: the Git side panel.
 cat > "$STAGE/DEBIAN/control" <<EOF
@@ -71,7 +71,7 @@ Section: editors
 Priority: optional
 Architecture: $ARCH
 Maintainer: Andrew Letov <aletik@gmail.com>
-Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libstdc++6, libc6, curl
+Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libxml2, libstdc++6, libc6, curl
 Recommends: unzip, git
 Description: Multi-tab text editor (Linux port of Notepad++)
  Nextpad++ is a native Linux port of the Notepad++ text editor, built on

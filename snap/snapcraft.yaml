@@ -78,11 +78,13 @@ parts:
       - cmake
       - pkg-config
       - libuchardet-dev
+      - libxml2-dev        # Paste with Hyperlinks (offline HTML parse)
     stage-packages:
       - curl               # pluginsadmin/updatecheck/udladmin spawn `curl`
       - unzip              # Plugins Admin archive extraction
       - git                # Git side panel
       - libuchardet0
+      - libxml2
     override-build: |
       craftctl set version="$(sed -n 's/#define APP_VERSION *"\(.*\)"/\1/p' src/branding.h)"
       # Memory-aware job cap (same 500 MB/job rule as tools/make-*.sh).

@@ -22,6 +22,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK4 REQUIRED gtk4)
 pkg_check_modules(ADW  REQUIRED libadwaita-1)
 pkg_check_modules(UCHARDET REQUIRED uchardet)   # GAP-57 CJK detection
+pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)  # GAP-171 Paste with Hyperlinks (offline HTML parse)
 
 set(SCI_ROOT "${CMAKE_SOURCE_DIR}/scintilla")
 set(LEX_ROOT "${CMAKE_SOURCE_DIR}/lexilla")
@@ -186,6 +187,8 @@ set(APP_SRCS
     "${SRC}/ctxmenu.c"
     # P6 — toolbarButtonsConf.xml parser
     "${SRC}/toolbarconf.c"
+    # GAP-171 — Paste Special ▸ Paste with Hyperlinks (HTML/RTF → [text](url))
+    "${SRC}/pastelinks.c"
 )
 
 add_executable(nextpad_pp ${APP_SRCS})
@@ -199,7 +202,7 @@ target_include_directories(nextpad_pp PRIVATE
     "${CMAKE_SOURCE_DIR}/regex"
     "${CMAKE_SOURCE_DIR}/fuzzy"
     "${CMAKE_SOURCE_DIR}/fuzzy/rapidfuzz"
-    ${GTK4_INCLUDE_DIRS} ${ADW_INCLUDE_DIRS}
+    ${GTK4_INCLUDE_DIRS} ${ADW_INCLUDE_DIRS} ${LIBXML2_INCLUDE_DIRS}
 )
 # RESOURCES_DIR is baked in at compile time. For a dev build it points at
 # the in-tree resources/. For a packaged build, pass -DNPP_RES_DIR=<path>
@@ -240,11 +243,11 @@ find_package(X11)   # Window menu: Move to Monitor (X11 sessions only)
 target_link_libraries(nextpad_pp PRIVATE
     "${SCI_SO}"
     lexilla
-    ${GTK4_LIBRARIES} ${ADW_LIBRARIES} ${UCHARDET_LIBRARIES}
+    ${GTK4_LIBRARIES} ${ADW_LIBRARIES} ${UCHARDET_LIBRARIES} ${LIBXML2_LIBRARIES}
     ${X11_LIBRARIES}
     m
 )
-target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${ADW_LIBRARY_DIRS} ${UCHARDET_LIBRARY_DIRS})
+target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${ADW_LIBRARY_DIRS} ${UCHARDET_LIBRARY_DIRS} ${LIBXML2_LIBRARY_DIRS})
 
 # -----------------------------------------------------------------------------
 # Install / packaging targets

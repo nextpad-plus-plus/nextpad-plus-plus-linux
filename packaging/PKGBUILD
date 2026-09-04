@@ -26,7 +26,8 @@ url="https://nextpad.org"
 license=('GPL-3.0-or-later')
 
 # Runtime linkage, verified with ldd against an Arch-built binary:
-# gtk4, glib2, uchardet, libx11 (Window menu > Move to Monitor), plus the
+# gtk4, glib2, uchardet, libxml2 (Paste with Hyperlinks), libx11 (Window
+# menu > Move to Monitor), plus the
 # toolchain runtimes. libadwaita is a BUILD dependency only — the sources
 # include its headers but the link stage pulls in no libadwaita symbol.
 #
@@ -36,7 +37,7 @@ license=('GPL-3.0-or-later')
 #
 # hicolor-icon-theme owns the /usr/share/icons/hicolor tree this package
 # installs its app icons into (standard Arch practice for that reason).
-depends=('gtk4' 'glib2' 'uchardet' 'libx11' 'curl' 'gcc-libs' 'glibc'
+depends=('gtk4' 'glib2' 'uchardet' 'libxml2' 'libx11' 'curl' 'gcc-libs' 'glibc'
          'hicolor-icon-theme')
 # glib2-devel supplies glib-genmarshal and glib-mkenums, which Scintilla's
 # GTK4 makefile runs to generate its marshallers and enum tables. Arch splits

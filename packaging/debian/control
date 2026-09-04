@@ -8,7 +8,8 @@ Build-Depends: debhelper-compat (= 13),
                libgtk-4-dev,
                libadwaita-1-dev,
                libglib2.0-dev,
-               libuchardet-dev
+               libuchardet-dev,
+               libxml2-dev
 Standards-Version: 4.6.0
 Homepage: https://nextpad.org
 Vcs-Browser: https://github.com/nextpad-plus-plus/nextpad-plus-plus

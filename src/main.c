@@ -77,6 +77,7 @@
 #include <X11/Xlib.h>
 #endif
 #include "udl_editor.h"
+#include "pastelinks.h"
 
 static const char *kAppId = "org.nextpad.NextpadPP";
 
@@ -2407,6 +2408,165 @@ static void action_paste_html(GSimpleAction *a, GVariant *p, gpointer u) {
 static void action_paste_rtf(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     paste_special_mime("text/rtf");
+}
+
+/* GAP-171 (macOS 48335e2, issue #299): Paste Special ▸ Paste with Hyperlinks.
+ * A browser copy carries text/plain, text/html and sometimes text/rtf; a
+ * normal paste keeps only the plain text, where anchor hrefs don't exist —
+ * links "vanish". This converts the HTML flavour (RTF as fallback, plain
+ * text as last resort) into readable text where every anchor becomes
+ * Markdown-style [text](url) — see pastelinks.c for the 1:1 walker port.
+ * Inserted via SCI_REPLACESEL: one undo step, read-only-safe, the same
+ * semantics as the sibling Paste Special commands; Ctrl-V is untouched.
+ *
+ * GTK4 clipboard reads are async, so the macOS if-chain becomes a chain of
+ * callbacks over one job: [source URL] → text/html → text/rtf → text.
+ *
+ * Source-URL side channel (macOS reads org.chromium.source-url /
+ * public.url to resolve relative hrefs): on Linux, Firefox exports
+ * text/x-moz-url-priv (its kURLPrivateMime — the copied page's URL,
+ * UTF-16) next to its HTML; Chromium's Linux clipboard code exports no
+ * source-URL flavour (org.chromium.source-url is macOS-only), so
+ * chromium/x-source-url is probed only in case a build starts offering
+ * it. Neither was checked against a live browser here (headless Xvfb +
+ * xclip only) — gdk_content_formats_to_string(gdk_clipboard_get_formats())
+ * is the way to re-verify. With no side channel available, relative
+ * hrefs stay verbatim, exactly like macOS with an empty base. */
+enum { kPasteLinksMaxHTML = 4 * 1024 * 1024 };   /* whole-page copies stay sane */
+
+typedef struct {
+    GdkClipboard *cb;
+    char         *base;     /* source URL for relative hrefs, may be NULL */
+    int           step;     /* 0 base, 1 html, 2 rtf */
+} PasteLinksJob;
+
+static void paste_links_step(PasteLinksJob *job);
+
+static void paste_links_done(PasteLinksJob *job, char *txt) {
+    if (txt && *txt) sci_send(SCI_REPLACESEL, 0, (sptr_t)txt);
+    else gdk_display_beep(gdk_display_get_default());   /* NSBeep */
+    g_free(txt);
+    g_free(job->base);
+    g_free(job);
+}
+
+static void on_paste_links_text(GObject *src, GAsyncResult *res, gpointer ud) {
+    PasteLinksJob *job = ud;
+    char *txt = gdk_clipboard_read_text_finish(GDK_CLIPBOARD(src), res, NULL);
+    paste_links_done(job, txt);          /* plain fallback — or beep */
+}
+
+/* One flavour's bytes are in (NULL/0 when the owner doesn't offer it). */
+static void paste_links_consume(PasteLinksJob *job, const guchar *bytes, gsize len) {
+    char *txt = NULL;
+    if (job->step == 0) {
+        /* Firefox's x-moz-url-priv is "url" (sometimes "url\ntitle"), UTF-16. */
+        char *u = pastelinks_bytes_to_utf8(bytes, len);
+        if (u) {
+            char *nl = strchr(u, '\n');
+            if (nl) *nl = '\0';
+            g_strstrip(u);
+            if (*u) job->base = g_strdup(u);
+            g_free(u);
+        }
+    } else if (job->step == 1) {
+        if (len && len < kPasteLinksMaxHTML) {
+            char *html = pastelinks_bytes_to_utf8(bytes, len);
+            txt = pastelinks_from_html(html, -1, job->base);
+            g_free(html);
+        }
+    } else {
+        txt = pastelinks_from_rtf((const char *)bytes, (gssize)len);
+    }
+    if (txt) { paste_links_done(job, txt); return; }
+    job->step++;
+    paste_links_step(job);
+}
+
+static void on_paste_links_spliced(GObject *src, GAsyncResult *res, gpointer ud) {
+    PasteLinksJob *job = ud;
+    GOutputStream *mem = G_OUTPUT_STREAM(src);
+    g_output_stream_splice_finish(mem, res, NULL);
+    GBytes *b = g_memory_output_stream_steal_as_bytes(G_MEMORY_OUTPUT_STREAM(mem));
+    g_object_unref(mem);
+    gsize len = 0;
+    const guchar *bytes = g_bytes_get_data(b, &len);
+    paste_links_consume(job, bytes, len);
+    g_bytes_unref(b);
+}
+
+/* The selection stream must be drained ASYNCHRONOUSLY: on X11 it is fed by
+ * SelectionNotify/INCR events that only arrive through the main loop, so a
+ * blocking g_input_stream_read() loop here deadlocks the app (verified
+ * under Xvfb with xclip owning text/html). */
+static void on_paste_links_mime(GObject *src, GAsyncResult *res, gpointer ud) {
+    PasteLinksJob *job = ud;
+    GInputStream *in = gdk_clipboard_read_finish(GDK_CLIPBOARD(src), res, NULL, NULL);
+    if (!in) { paste_links_consume(job, NULL, 0); return; }
+    GOutputStream *mem = g_memory_output_stream_new_resizable();
+    g_output_stream_splice_async(mem, in,
+                                 G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE |
+                                 G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET,
+                                 G_PRIORITY_DEFAULT, NULL, on_paste_links_spliced, job);
+    g_object_unref(in);
+}
+
+/* Ask only for flavours the owner advertises: GDK's X11 backend requests
+ * whatever target it is handed, and promiscuous owners (xclip) answer ANY
+ * target with their one payload — RTF would come back labelled text/html.
+ * A still-unfetched (empty) format list means "unknown" → ask anyway. */
+static gboolean paste_links_offered(GdkClipboard *cb, const char *mime) {
+    GdkContentFormats *f = gdk_clipboard_get_formats(cb);
+    gsize n = 0;
+    gdk_content_formats_get_mime_types(f, &n);
+    return n == 0 || gdk_content_formats_contain_mime_type(f, mime);
+}
+
+static void paste_links_step(PasteLinksJob *job) {
+    static const char *kHtml[] = { "text/html", NULL };
+    static const char *kRtf[]  = { "text/rtf", NULL };
+    for (;;) {
+        if (job->step == 1) {
+            if (paste_links_offered(job->cb, kHtml[0])) {
+                gdk_clipboard_read_async(job->cb, kHtml, G_PRIORITY_DEFAULT, NULL,
+                                         on_paste_links_mime, job);
+                return;
+            }
+            job->step = 2;
+        } else if (job->step == 2) {
+            if (paste_links_offered(job->cb, kRtf[0])) {
+                gdk_clipboard_read_async(job->cb, kRtf, G_PRIORITY_DEFAULT, NULL,
+                                         on_paste_links_mime, job);
+                return;
+            }
+            job->step = 3;
+        } else {
+            gdk_clipboard_read_text_async(job->cb, NULL, on_paste_links_text, job);
+            return;
+        }
+    }
+}
+
+static void action_paste_hyperlinks(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    if (!current_sci()) return;          /* [self currentEditor] guard */
+    PasteLinksJob *job = g_new0(PasteLinksJob, 1);
+    job->cb = gdk_display_get_clipboard(gdk_display_get_default());
+    /* Only ask for a source URL the owner actually offers — an unmet
+     * read_async just errors, but it costs a round trip. */
+    static const char *const kBaseMimes[] = { "text/x-moz-url-priv", "chromium/x-source-url" };
+    GdkContentFormats *fmts = gdk_clipboard_get_formats(job->cb);
+    for (gsize i = 0; i < G_N_ELEMENTS(kBaseMimes); i++) {
+        if (gdk_content_formats_contain_mime_type(fmts, kBaseMimes[i])) {
+            const char *mimes[] = { kBaseMimes[i], NULL };
+            job->step = 0;
+            gdk_clipboard_read_async(job->cb, mimes, G_PRIORITY_DEFAULT, NULL,
+                                     on_paste_links_mime, job);
+            return;
+        }
+    }
+    job->step = 1;
+    paste_links_step(job);
 }
 static void action_copy_binary(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
@@ -6943,6 +7103,7 @@ static const GActionEntry kAppActions[] = {
     { "insert-dt-custom",    action_insert_datetime_custom, NULL, NULL, NULL },
     { "paste-html",          action_paste_html,          NULL, NULL, NULL },
     { "paste-rtf",           action_paste_rtf,           NULL, NULL, NULL },
+    { "paste-hyperlinks",    action_paste_hyperlinks,    NULL, NULL, NULL },  /* GAP-171 */
     { "copy-binary",         action_copy_binary,         NULL, NULL, NULL },
     { "paste-binary",        action_paste_binary,        NULL, NULL, NULL },
     { "find-chars-in-range", action_find_chars_in_range, NULL, NULL, NULL },
@@ -7624,6 +7785,14 @@ static GMenuModel *build_menu_model(void)
             g_menu_append(ps2, "Paste RTF Content",    "app.paste-rtf");
             g_menu_append_section(ps, NULL, G_MENU_MODEL(ps2));
             g_object_unref(ps2);
+            /* GAP-171 (macOS 48335e2, issue #299) — readable paste that keeps
+             * the hrefs from HTML/RTF clipboard flavours as Markdown-style
+             * [text](url), so links survive in plain text. No english.xml
+             * key on macOS either — untranslated by design. */
+            GMenu *ps3 = g_menu_new();
+            g_menu_append(ps3, "Paste with Hyperlinks", "app.paste-hyperlinks");
+            g_menu_append_section(ps, NULL, G_MENU_MODEL(ps3));
+            g_object_unref(ps3);
             g_menu_append_submenu(submenus, "Paste Special", G_MENU_MODEL(ps));
             g_object_unref(ps);
         }

@@ -78,7 +78,7 @@ apt_wait
 echo "── Installing toolchain + dependencies"
 sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     build-essential cmake pkg-config \
-    libgtk-4-dev libadwaita-1-dev libglib2.0-dev libuchardet-dev \
+    libgtk-4-dev libadwaita-1-dev libglib2.0-dev libuchardet-dev libxml2-dev \
     git rsync rpm \
     xvfb xdotool imagemagick dbus-x11
 
@@ -87,7 +87,7 @@ echo "── Verifying"
 printf '  %-16s %s\n' gcc "$(gcc -dumpfullversion 2>/dev/null)" \
                       cmake "$(cmake --version | head -1 | awk '{print $3}')" \
                       rpmbuild "$(rpmbuild --version 2>/dev/null | awk '{print $3}')"
-for m in gtk4 libadwaita-1 glib-2.0 uchardet; do
+for m in gtk4 libadwaita-1 glib-2.0 uchardet libxml-2.0; do
     printf '  %-16s %s\n' "$m" "$(pkg-config --modversion "$m" 2>&1)"
 done
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
