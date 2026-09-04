@@ -2377,23 +2377,34 @@ static void action_insert_datetime_custom(GSimpleAction *a, GVariant *p, gpointe
 /* Paste-special (HTML / RTF source). GTK4 clipboard reads are async and
  * mime-typed: read the requested mime as a stream and splat the bytes into
  * Scintilla. */
+static void on_paste_mime_spliced(GObject *src, GAsyncResult *res, gpointer ud) {
+    GInputStream *in = G_INPUT_STREAM(ud);
+    GOutputStream *mem = G_OUTPUT_STREAM(src);
+    g_output_stream_splice_finish(mem, res, NULL);
+    gsize len = g_memory_output_stream_get_data_size(G_MEMORY_OUTPUT_STREAM(mem));
+    if (len) {
+        char *txt = g_strndup(g_memory_output_stream_get_data(
+                                  G_MEMORY_OUTPUT_STREAM(mem)), len);
+        sci_send(SCI_REPLACESEL, 0, (sptr_t)txt);
+        g_free(txt);
+    }
+    g_object_unref(mem);
+    g_object_unref(in);
+}
 static void on_paste_mime_ready(GObject *src, GAsyncResult *res, gpointer ud) {
     (void)ud;
     GInputStream *stream = gdk_clipboard_read_finish(GDK_CLIPBOARD(src),
                                                      res, NULL, NULL);
     if (!stream) return;
-    GByteArray *buf = g_byte_array_new();
-    guchar chunk[4096];
-    gssize n;
-    while ((n = g_input_stream_read(stream, chunk, sizeof chunk, NULL, NULL)) > 0)
-        g_byte_array_append(buf, chunk, (guint)n);
-    g_object_unref(stream);
-    if (buf->len) {
-        char *txt = g_strndup((const char *)buf->data, buf->len);
-        sci_send(SCI_REPLACESEL, 0, (sptr_t)txt);
-        g_free(txt);
-    }
-    g_byte_array_unref(buf);
+    /* Found with GAP-171: a synchronous g_input_stream_read loop here
+     * deadlocked — the X11 selection stream is fed by the same main loop
+     * this callback blocks (reproduced: Paste HTML hung the app with an
+     * xclip owner). Drain asynchronously into a memory stream instead,
+     * exactly like pastelinks' reader. */
+    GOutputStream *mem = g_memory_output_stream_new_resizable();
+    g_output_stream_splice_async(mem, stream,
+        G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE, G_PRIORITY_DEFAULT, NULL,
+        on_paste_mime_spliced, stream);
 }
 static void paste_special_mime(const char *mime) {
     GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
