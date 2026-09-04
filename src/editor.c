@@ -290,6 +290,32 @@ static void update_window_title(void);
  * reload just waits for the next change event (we are event-driven, so
  * no retry cap is needed, unlike macOS's 1 s poll), while a reload the
  * USER asked for reports the failure once. */
+/* G3.9a / GAP-175 (macOS 44d1d24 #312) — EOL mode from the loaded bytes.
+ * Sample the first 4 KB of the decoded UTF-8 (LF/CR are single-byte ASCII
+ * so the source encoding doesn't matter) and count; the dominant line
+ * ending wins, empty / single-line input falls back to the pref. Shared by
+ * open, reload / reload-with-encoding and the session backup restores —
+ * previously only editor_open_path detected, so a file that changed
+ * CRLF→LF on disk kept the stale mode across a Reload. */
+int editor_detect_eol(const char *utf8, gsize utf8_len)
+{
+    gsize sample = utf8_len < 4096 ? utf8_len : 4096;
+    int crlf = 0, cr = 0, lf = 0;
+    for (gsize i = 0; i < sample; i++) {
+        if (utf8[i] == '\r') {
+            if (i + 1 < sample && utf8[i + 1] == '\n') { crlf++; i++; }
+            else                                       { cr++; }
+        } else if (utf8[i] == '\n') {
+            lf++;
+        }
+    }
+    int eol_mode = g_prefs.default_eol;
+    if (crlf > cr && crlf > lf)      eol_mode = SC_EOL_CRLF;
+    else if (cr > lf && cr > crlf)   eol_mode = SC_EOL_CR;
+    else if (lf > 0)                 eol_mode = SC_EOL_LF;
+    return eol_mode;
+}
+
 static gboolean reload_doc_from_disk_with_enc(NppDoc *doc,
                                               const char *forced_enc,
                                               char **err_msg)
@@ -329,6 +355,8 @@ static gboolean reload_doc_from_disk_with_enc(NppDoc *doc,
      * byte count. Caret lands at the end; the restore below re-places it. */
     sci_msg(doc->sci, SCI_CLEARALL, 0, 0);
     sci_msg(doc->sci, SCI_ADDTEXT, (uptr_t)utf8_len, (sptr_t)utf8);
+    /* GAP-175 — the disk copy's line endings may have changed. */
+    sci_msg(doc->sci, SCI_SETEOLMODE, (uptr_t)editor_detect_eol(utf8, utf8_len), 0);
     sci_msg(doc->sci, SCI_SETSAVEPOINT, 0, 0);
     sci_msg(doc->sci, SCI_EMPTYUNDOBUFFER, 0, 0);
     /* The insert above fired SCN_MODIFIED for every line — a reload is
@@ -3008,6 +3036,30 @@ static gboolean save_doc(NppDoc *doc);
  * the dialog then grows a "Don't Save All" button (macOS 7ddc6be,
  * issue #214) which discards this doc AND suppresses the prompt for
  * every remaining doc in the same batch. */
+
+/* GAP-180 — translated button caption with a GTK mnemonic. The English
+ * fallback carries the mnemonic position ("_Don't Save"); a translated
+ * caption gets one on its first character (GTK needs some mnemonic for
+ * Alt+key; the response id — not the label — is what Return/Escape and
+ * the callers key on, so translation can never detach a shortcut). */
+static void save_btn_label(char *out, size_t cap,
+                           const char *english, const char *fallback)
+{
+    const char *t = i18n_translate(english);
+    if (!t || t == english || strcmp(t, english) == 0) {
+        g_strlcpy(out, fallback, cap);
+        return;
+    }
+    /* Escape a literal underscore in the translation, then prefix one. */
+    GString *s = g_string_new("_");
+    for (const char *p = t; *p; p++) {
+        if (*p == '_') g_string_append(s, "__");
+        else           g_string_append_c(s, *p);
+    }
+    g_strlcpy(out, s->str, cap);
+    g_string_free(s, TRUE);
+}
+
 static gboolean ask_save_full(NppDoc *doc, gboolean *dont_save_all)
 {
     if (!doc->modified) return TRUE;
@@ -3023,13 +3075,25 @@ static gboolean ask_save_full(NppDoc *doc, gboolean *dont_save_all)
         GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
         T("msg.Reload.message", "Save changes to \"%s\"?"), name);
 
-    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("msg.DontSave", "_Don't Save"), GTK_RESPONSE_NO);
+    /* GAP-180 — the TM("msg.*") keys never resolved (the catalog only
+     * produces msg.<Elem>.<attr> keys), so these buttons were English in
+     * every locale. Translate the English caption the macOS way
+     * ([loc translate:@"Don't Save"], ec0425c) and keep a mnemonic. */
+    char b_dontsave[128], b_dontsaveall[128], b_cancel[128], b_save[128];
+    save_btn_label(b_dontsave,    sizeof b_dontsave,    "Don't Save",     "_Don't Save");
+    save_btn_label(b_dontsaveall, sizeof b_dontsaveall, "Don't Save All", "D_on't Save All");
+    save_btn_label(b_cancel,      sizeof b_cancel,      "Cancel",         "_Cancel");
+    save_btn_label(b_save,        sizeof b_save,        "Save",           "_Save");
+    if (g_getenv("NPP_I18N_DEBUG"))   /* headless check of the captions */
+        g_message("[i18n] save prompt buttons: %s | %s | %s | %s",
+                  b_dontsave, b_dontsaveall, b_cancel, b_save);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), b_dontsave, GTK_RESPONSE_NO);
     if (dont_save_all)
         gtk_dialog_add_button(GTK_DIALOG(dlg),
-                              TM("msg.DontSaveAll", "D_on't Save All"),
+                              b_dontsaveall,
                               GTK_RESPONSE_REJECT);
-    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("msg.Cancel", "_Cancel"), GTK_RESPONSE_CANCEL);
-    gtk_dialog_add_button(GTK_DIALOG(dlg), TM("msg.Save",   "_Save"),   GTK_RESPONSE_YES);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), b_cancel, GTK_RESPONSE_CANCEL);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), b_save,   GTK_RESPONSE_YES);
     gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_YES);
 
     int resp = gtk_dialog_run(GTK_DIALOG(dlg));
@@ -3620,27 +3684,8 @@ gboolean editor_open_path(const char *path)
      * margin (macOS parity: ChangeHistorySet runs post-load there). */
     changehistory_clear(sci);
 
-    /* G3.9a: EOL auto-detection. Sample the first 4 KB of the decoded UTF-8
-     * (LF/CR are single-byte ASCII so encoding doesn't matter) and count
-     * occurrences. The dominant line ending wins. Empty / single-line files
-     * fall back to g_prefs.default_eol. */
-    {
-        gsize sample = utf8_len < 4096 ? utf8_len : 4096;
-        int crlf = 0, cr = 0, lf = 0;
-        for (gsize i = 0; i < sample; i++) {
-            if (utf8[i] == '\r') {
-                if (i + 1 < sample && utf8[i + 1] == '\n') { crlf++; i++; }
-                else                                       { cr++; }
-            } else if (utf8[i] == '\n') {
-                lf++;
-            }
-        }
-        int eol_mode = g_prefs.default_eol;
-        if (crlf > cr && crlf > lf)      eol_mode = SC_EOL_CRLF;
-        else if (cr > lf && cr > crlf)   eol_mode = SC_EOL_CR;
-        else if (lf > 0)                 eol_mode = SC_EOL_LF;
-        sci_msg(sci, SCI_SETEOLMODE, (uptr_t)eol_mode, 0);
-    }
+    /* G3.9a / GAP-175: EOL auto-detection on every load. */
+    sci_msg(sci, SCI_SETEOLMODE, (uptr_t)editor_detect_eol(utf8, utf8_len), 0);
     sci_msg(sci, SCI_GOTOPOS, 0, 0);
     g_free(utf8);
 

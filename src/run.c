@@ -10,6 +10,7 @@
  * tokens still expand as a compatibility layer for migrated commands.
  */
 #include "run.h"
+#include "shortcutmap.h"   /* GAP-179 — shortcut_vk_to_gdk */
 #include "paths.h"
 #include "gtk_compat.h"
 #include "npp_menu.h"
@@ -357,23 +358,21 @@ static GtkApplication *s_app          = NULL;
 static GMenu          *s_user_section = NULL;
 static GPtrArray      *s_accel_names  = NULL;   /* detailed names we set */
 
-/* Windows-VK-style Key attr → GTK accelerator key name. */
-static const char *key_accel_name(int key, char one[2])
+/* GAP-179 — Windows-VK Key attr → GTK accelerator. Was a 4th, drifted copy
+ * of the VK table (F-keys, A-Z, 0-9 only), so a Run command bound to
+ * Delete / Tab / Enter / Escape / arrows / punctuation got NO accelerator.
+ * Now the Shortcut Mapper's single table (macOS cb03070: one
+ * NppApplyShortcutToMenuItem for every consumer). */
+static gchar *run_accel_for(const RunCmd *c)
 {
-    if (key >= 112 && key <= 123) {
-        static const char *fk[] = { "F1","F2","F3","F4","F5","F6",
-                                    "F7","F8","F9","F10","F11","F12" };
-        return fk[key - 112];
-    }
-    if ((key >= 'A' && key <= 'Z')) {
-        one[0] = (char)(key + 32); one[1] = 0;   /* accel names lowercase */
-        return one;
-    }
-    if (key >= '0' && key <= '9') {
-        one[0] = (char)key; one[1] = 0;
-        return one;
-    }
-    return NULL;
+    guint kv = shortcut_vk_to_gdk((guint)c->key);
+    if (!kv) return NULL;
+    GdkModifierType m = 0;
+    if (c->ctrl)   m |= GDK_CONTROL_MASK;
+    if (c->alt)    m |= GDK_ALT_MASK;
+    if (c->shift)  m |= GDK_SHIFT_MASK;
+    if (c->super_) m |= GDK_SUPER_MASK;
+    return gtk_accelerator_name(kv, m);
 }
 
 void run_menu_set_section(GtkApplication *app, GMenu *section)
@@ -423,12 +422,8 @@ void run_menu_rebuild(void)
         g_menu_append_item(s_user_section, mi);
         g_object_unref(mi);
 
-        char one[2];
-        const char *kn = key_accel_name(c->key, one);
-        if (kn && s_app) {
-            gchar *accel = g_strdup_printf("%s%s%s%s%s",
-                c->ctrl ? "<Control>" : "", c->alt ? "<Alt>" : "",
-                c->shift ? "<Shift>" : "", c->super_ ? "<Super>" : "", kn);
+        gchar *accel = s_app ? run_accel_for(c) : NULL;
+        if (accel) {
             gchar *det = g_action_print_detailed_name("app.run-saved",
                              g_variant_new_string(c->cmd));
             const char *accels[] = { accel, NULL };
@@ -488,16 +483,14 @@ static void save_check_conflict(GtkWidget *w, gpointer ud)
         gtk_widget_set_sensitive(ui->ok_btn, TRUE);
         return;
     }
-    char one[2];
-    const char *kn = key_accel_name(key, one);
-    gchar *accel = g_strdup_printf("%s%s%s%s%s",
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_ctrl))  ? "<Control>" : "",
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_alt))   ? "<Alt>"     : "",
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_shift)) ? "<Shift>"   : "",
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_super)) ? "<Super>"   : "",
-        kn ? kn : "");
-    guint akey; GdkModifierType amods;
-    gtk_accelerator_parse(accel, &akey, &amods);
+    /* GAP-179 — same unified VK table as the live binding above. */
+    GdkModifierType amods = 0;
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_ctrl)))  amods |= GDK_CONTROL_MASK;
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_alt)))   amods |= GDK_ALT_MASK;
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_shift))) amods |= GDK_SHIFT_MASK;
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui->chk_super))) amods |= GDK_SUPER_MASK;
+    guint akey = shortcut_vk_to_gdk((guint)key);
+    gchar *accel = akey ? gtk_accelerator_name(akey, amods) : g_strdup("");
 
     gchar *conflict_with = NULL;
     GtkApplication *app = s_app;

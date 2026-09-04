@@ -103,6 +103,8 @@ void       editor_set_show_eol(gboolean on);
  * toggleIndentGuides: / toggleLineNumbers: write the default and propagate
  * to every editor). */
 void       editor_set_word_wrap(gboolean on);
+/* GAP-175 — EOL mode (SC_EOL_*) detected from loaded text; pref fallback. */
+int        editor_detect_eol(const char *utf8, gsize utf8_len);
 void       editor_set_show_indent_guides(gboolean on);
 void       editor_set_show_line_numbers(gboolean on);
 void       editor_mark_dirty(NppDoc *doc);        /* GAP-88i force-dirty    */

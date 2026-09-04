@@ -99,8 +99,32 @@ static void backup_write(NppDoc *doc)
 
     GError *err = NULL;
     if (!g_file_set_contents(path, buf, len, &err)) {
-        g_warning("backup: cannot write %s: %s", path, err->message);
-        g_error_free(err);
+        /* GAP-177 (macOS 865ba06 _claimBackupFor:) — the failure may be
+         * local to the claimed NAME (a directory squatting it, a stale
+         * unwritable file): release the claim, claim a fresh name and
+         * retry once. If that fails too, re-point the doc at the previous
+         * file so session.xml keeps naming the last GOOD snapshot rather
+         * than an empty claim. */
+        gchar *previous = g_strdup(path);
+        g_warning("backup: cannot write %s: %s — retrying under a fresh name",
+                  path, err->message);
+        g_clear_error(&err);
+        g_free(doc->backup_filepath);
+        doc->backup_filepath = NULL;
+        const char *retry = backup_claim_path(doc);
+        if (g_file_set_contents(retry, buf, len, &err)) {
+            g_free(previous);                 /* current text captured */
+        } else {
+            g_warning("backup: retry %s failed too: %s — %s", retry,
+                      err->message,
+                      g_file_test(previous, G_FILE_TEST_EXISTS)
+                        ? "the session will restore the older snapshot"
+                        : "no earlier backup exists; unsaved changes are "
+                          "not protected");
+            g_clear_error(&err);
+            g_free(doc->backup_filepath);
+            doc->backup_filepath = previous;  /* keep naming the good file */
+        }
     }
     g_free(buf);
 }

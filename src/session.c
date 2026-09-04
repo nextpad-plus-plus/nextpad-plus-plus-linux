@@ -324,8 +324,16 @@ void session_save(void)
 
     GError *err = NULL;
     if (!g_file_set_contents(session_path(), xml->str, -1, &err)) {
-        g_warning("session_save: %s", err->message);
+        /* GAP-177 (macOS 865ba06) — the surviving OLD session.xml still
+         * references the previous backups, and the quarantine below keys
+         * off THIS session's references. Bail before it, or freshly
+         * claimed snapshots would be swept while the old ones are what
+         * the next launch will actually read. */
+        g_warning("session_save: %s — keeping the previous session and "
+                  "skipping the backup quarantine", err->message);
         g_error_free(err);
+        g_string_free(xml, TRUE);
+        return;
     }
     g_string_free(xml, TRUE);
 
@@ -548,6 +556,9 @@ void session_restore_from(const char *path)
                     scintilla_send_message(SCINTILLA(nd->sci), SCI_CLEARALL, 0, 0);
                     scintilla_send_message(SCINTILLA(nd->sci), SCI_ADDTEXT,
                                            (uptr_t)content_len, (sptr_t)content);
+                    /* GAP-175 — snapshots restore with their own EOLs. */
+                    scintilla_send_message(SCINTILLA(nd->sci), SCI_SETEOLMODE,
+                        (uptr_t)editor_detect_eol(content, content_len), 0);
                     scintilla_send_message(SCINTILLA(nd->sci), SCI_GOTOPOS, 0, 0);
                 }
                 /* Restoring is not editing — reset the change-history
@@ -614,6 +625,9 @@ void session_restore_from(const char *path)
                     scintilla_send_message(SCINTILLA(bd->sci),
                                            SCI_ADDTEXT, (uptr_t)backup_len,
                                            (sptr_t)backup_content);
+                    /* GAP-175 — the backup, not the disk copy, sets EOL. */
+                    scintilla_send_message(SCINTILLA(bd->sci), SCI_SETEOLMODE,
+                        (uptr_t)editor_detect_eol(backup_content, backup_len), 0);
                     scintilla_send_message(SCINTILLA(bd->sci),
                                            SCI_GOTOPOS, 0, 0);
                     scintilla_send_message(SCINTILLA(bd->sci),

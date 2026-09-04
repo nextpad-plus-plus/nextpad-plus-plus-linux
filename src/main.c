@@ -2724,6 +2724,7 @@ static void action_udl_collection(GSimpleAction *a, GVariant *p, gpointer u) {
 
 /* Q-align Settings → Import submenu (macOS parity). Both forms open a
  * file picker; the chosen file is copied into the appropriate user dir. */
+static void npp_info_dialog(const char *msg, const char *detail);
 static void import_to_user_dir(const char *subdir, const char *title) {
     GtkWidget *p = gtk_file_chooser_dialog_new(title,
         g_window ? GTK_WINDOW(g_window) : NULL,
@@ -2735,19 +2736,51 @@ static void import_to_user_dir(const char *subdir, const char *title) {
         GSList *files = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(p));
         gchar *dst_dir = npp_user_file(subdir, "");
         g_mkdir_with_parents(dst_dir, 0755);
+        /* GAP-178 (macOS d0ba68b importStyleTheme:) — report failures
+         * instead of silently doing nothing, treat "already lives here"
+         * as installed rather than as a copy, and open the Style
+         * Configurator afterwards so the theme can be picked. The
+         * copy itself was already safe here: the source is read fully
+         * before g_file_set_contents' atomic temp+rename write, so a
+         * failed import never destroys the theme it would replace. */
+        int imported = 0, already = 0;
+        GString *failures = g_string_new(NULL);
+        gchar   *first_reason = NULL;
         for (GSList *it = files; it; it = it->next) {
             gchar *src = it->data;
             gchar *base = g_path_get_basename(src);
             gchar *dst = g_build_filename(dst_dir, base, NULL);
-            gchar *body = NULL; gsize len = 0;
-            if (g_file_get_contents(src, &body, &len, NULL)) {
-                g_file_set_contents(dst, body, len, NULL);
-                g_free(body);
+            GFile *fs = g_file_new_for_path(src), *fd = g_file_new_for_path(dst);
+            gchar *body = NULL; gsize len = 0; GError *err = NULL;
+            if (g_file_equal(fs, fd)) {
+                already++;
+            } else if (g_file_get_contents(src, &body, &len, &err) &&
+                       g_file_set_contents(dst, body, len, &err)) {
+                imported++;
+            } else {
+                if (failures->len) g_string_append(failures, ", ");
+                g_string_append(failures, base);
+                if (!first_reason && err) first_reason = g_strdup(err->message);
             }
+            g_clear_error(&err);
+            g_free(body);
+            g_object_unref(fs); g_object_unref(fd);
             g_free(dst); g_free(base);
         }
         g_slist_free_full(files, g_free);
         g_free(dst_dir);
+        if (failures->len) {
+            gchar *list = g_strdup_printf(i18n_translate("Could not import: %s"),
+                                          failures->str);
+            gchar *detail = first_reason
+                ? g_strdup_printf("%s\n\n%s", list, first_reason) : g_strdup(list);
+            npp_info_dialog(i18n_translate(title), detail);
+            g_free(detail); g_free(list);
+        }
+        g_string_free(failures, TRUE);
+        g_free(first_reason);
+        if ((imported > 0 || already > 0) && g_strcmp0(subdir, "themes") == 0)
+            styleeditor_show(GTK_WIDGET(g_window), on_styles_applied);
     }
     gtk_widget_destroy(p);
 }
@@ -2757,7 +2790,7 @@ static void action_import_plugin(GSimpleAction *a, GVariant *p, gpointer u) {
 }
 static void action_import_style_theme(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    import_to_user_dir("themes", "Import Style Theme XML");
+    import_to_user_dir("themes", "Import Style Theme");
 }
 
 /* Q-align Run menu helpers (macOS parity per 11-run_menu.png).
@@ -9785,7 +9818,20 @@ static void on_open(GtkApplication *app, GFile **files, gint n_files,
     (void)hint; (void)ud;
     if (g_getenv("NPP_CLI_DEBUG"))
         g_message("cli: on_open n=%d", n_files);
+    const gboolean first_launch = (g_window == NULL);
     if (!g_window) build_main_window(app);
+    if (first_launch) {
+        plugin_refresh_handles();
+        /* GAP-176 (macOS AppDelegate: _pendingFilePaths are drained AFTER
+         * restoreLastSession; Windows N++ does the same) — a launch WITH
+         * file arguments restores the remembered session first and opens
+         * the files into it. Only on_activate did this before, so
+         * `nextpad++ file` silently dropped the session. Not when the
+         * argument itself names a session (-openSession) and never for a
+         * forwarded open into an already-running instance. */
+        if (!g_cli_open_session && session_persistence_enabled())
+            session_restore();
+    }
     cli_apply_window_flags();                        /* GAP-109 */
     for (gint i = 0; i < n_files; i++) {
         const char *path = g_file_peek_path(files[i]);
