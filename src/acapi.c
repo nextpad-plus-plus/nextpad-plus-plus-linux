@@ -43,6 +43,7 @@ static void api_free(gpointer p)
     if (api->keywords) g_ptr_array_free(api->keywords, TRUE);
     g_free(api->joined);
     if (api->func_index) g_hash_table_destroy(api->func_index);
+    g_free(api->additional_word_chars);
     g_free(api);
 }
 
@@ -188,6 +189,7 @@ typedef struct {
     gboolean    env_locked;
     gboolean    ignore_case;
     char        start_func, stop_func, param_sep;
+    char       *additional_word_chars;   /* owned; NULL until parsed  */
     gboolean    any_keyword;
 
     /* Per-file walk state. */
@@ -237,6 +239,12 @@ static void ac_start(GMarkupParseContext *ctx, const char *el,
             if ((v = attr(names, vals, "startFunc"))      && v[0]) st->start_func = v[0];
             if ((v = attr(names, vals, "stopFunc"))       && v[0]) st->stop_func  = v[0];
             if ((v = attr(names, vals, "paramSeparator")) && v[0]) st->param_sep  = v[0];
+            /* Windows parity (AutoCompletion.cpp _funcCalltip._additionalWordChar):
+             * extends the CALLTIP name scan only, e.g. "." so Class.Method(
+             * finds its entry. Completion is deliberately unaffected
+             * (GAP-174 / macOS 6b2f981). */
+            v = attr(names, vals, "additionalWordChar");
+            st->additional_word_chars = g_strdup(v ? v : "");
         }
         return;
     }
@@ -367,6 +375,7 @@ static AcLangApi *build_api(GPtrArray *paths)
         g_ptr_array_set_free_func(st.order, entry_free);
         g_ptr_array_free(st.order, TRUE);
         g_hash_table_destroy(st.by_key);
+        g_free(st.additional_word_chars);
         return NULL;
     }
 
@@ -375,6 +384,8 @@ static AcLangApi *build_api(GPtrArray *paths)
     api->start_func  = st.start_func;
     api->stop_func   = st.stop_func;
     api->param_sep   = st.param_sep;
+    api->additional_word_chars = st.additional_word_chars
+                               ? st.additional_word_chars : g_strdup("");
 
     /* Sorted keyword copies. */
     api->keywords = g_ptr_array_new_with_free_func(g_free);

@@ -36,6 +36,13 @@ typedef struct {
     char        start_func;   /* default '('                            */
     char        stop_func;    /* default ')'                            */
     char        param_sep;    /* default ','                            */
+    char       *additional_word_chars;
+                              /* Environment additionalWordChar: extra
+                                 bytes the CALLTIP name scan treats as
+                                 identifier chars (e.g. "." for
+                                 Class.Method). Calltip engine only,
+                                 never completion (Windows scope,
+                                 GAP-174 / macOS 6b2f981). Default ""  */
 } AcLangApi;
 
 /* Merged API for `lang` (the editor's language key, e.g. "cpp"), or NULL

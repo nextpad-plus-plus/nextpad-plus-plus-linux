@@ -7,6 +7,7 @@
  */
 #include "autocomplete.h"
 #include "acapi.h"
+#include "calltip_scan.h"
 #include "gtk_compat.h"
 #include "lexer.h"
 #include "prefs.h"
@@ -271,6 +272,21 @@ static struct {
     char           start_ch, stop_ch, sep_ch;
 } s_ct;
 
+/* SCI_GETCHARAT adapter for calltip_name_start(). */
+static int ct_getch(void *ud, intptr_t pos)
+{
+    return (int)sci_msg((GtkWidget *)ud, SCI_GETCHARAT, (uptr_t)pos, 0);
+}
+
+/* Start of the function name ending at `name_end`, honouring the API's
+ * additionalWordChar (GAP-174 / macOS 6b2f981 NppCalltipNameStart). */
+static sptr_t ct_name_start(GtkWidget *sci, sptr_t name_end,
+                            const char *extra)
+{
+    return (sptr_t)calltip_name_start((intptr_t)name_end, extra,
+                                      ct_getch, sci);
+}
+
 /* Walk back from `pos` to the start-func char enclosing the caret at
  * depth 0, counting separators to find the active parameter. Returns
  * the position of the start-func char, or -1. */
@@ -355,8 +371,8 @@ void autocomplete_show_calltip(GtkWidget *sci)
                                    &param_idx);
     if (name_end < 0) { npp_beep(); return; }
 
-    sptr_t name_start = sci_msg(sci, SCI_WORDSTARTPOSITION,
-                                (uptr_t)name_end, 1);
+    sptr_t name_start = ct_name_start(sci, name_end,
+                                      api ? api->additional_word_chars : "");
     if (name_start >= name_end) { npp_beep(); return; }
     sptr_t name_len = name_end - name_start;
     char *name = g_malloc((gsize)name_len + 1);
@@ -401,8 +417,11 @@ void autocomplete_on_update_ui(GtkWidget *sci)
         s_ct.entry = NULL; s_ct.sci = NULL;
         return;
     }
-    sptr_t name_start = sci_msg(sci, SCI_WORDSTARTPOSITION,
-                                (uptr_t)name_end, 1);
+    const char *lang =
+        (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
+    const AcLangApi *api = acapi_for_language(lang);
+    sptr_t name_start = ct_name_start(sci, name_end,
+                                      api ? api->additional_word_chars : "");
     if (name_start != s_ct.name_start) {      /* different call → drop */
         sci_msg(sci, SCI_CALLTIPCANCEL, 0, 0);
         s_ct.entry = NULL; s_ct.sci = NULL;
