@@ -120,6 +120,7 @@ NppPrefs g_prefs = {
     .caret_blink_rate        = 500,     /* Q-align: macOS default */
     .scroll_beyond_last_line = FALSE,
     .word_wrap               = FALSE,
+    .show_indent_guides      = TRUE,
     .cjk_wrap                = TRUE,    /* GAP-119 (macOS default ON) */
     .ai_parens               = FALSE,
     .ai_brackets             = FALSE,
@@ -482,6 +483,10 @@ static void apply_attr(const char *group, const char *attr, const char *val)
         else if (!strcmp(attr, "bookMarkMargin"))     g_prefs.show_bookmark_margin   = is_show(val);
         else if (!strcmp(attr, "folderMarkStyle"))    g_prefs.fold_style             = fold_str_to_int(val);
         else if (!strcmp(attr, "virtualSpace"))       g_prefs.virtual_space          = is_yes(val);
+        /* GAP-165 — Notepad++'s own attribute names (Wrap / indentGuideLine)
+         * so a config.xml stays readable across the ports. */
+        else if (!strcmp(attr, "Wrap"))               g_prefs.word_wrap              = is_yes(val);
+        else if (!strcmp(attr, "indentGuideLine"))    g_prefs.show_indent_guides     = is_show(val);
         else if (!strcmp(attr, "scrollBeyondLastLine"))g_prefs.scroll_beyond_last_line = is_yes(val);
         else if (!strcmp(attr, "cjkFriendlyWrap"))    g_prefs.cjk_wrap               = is_yes(val);
         else if (!strcmp(attr, "rightClickKeepsSelection")) g_prefs.right_click_keeps_sel = is_yes(val);
@@ -989,6 +994,7 @@ g_prefs.tab_max_label_width,
         "lineNumberMargin=\"%s\" lineNumberDynamicWidth=\"%s\" "
         "bookMarkMargin=\"%s\" folderMarkStyle=\"%s\" "
         "virtualSpace=\"%s\" scrollBeyondLastLine=\"%s\" cjkFriendlyWrap=\"%s\" "
+        "Wrap=\"%s\" indentGuideLine=\"%s\" "
         "rightClickKeepsSelection=\"%s\" lineCopyCutWithoutSelection=\"%s\" "
         "currentLineIndicator=\"%s\" "
         "whiteSpaceShow=\"%s\" eolShow=\"%s\" eolMode=\"%d\" "
@@ -999,6 +1005,7 @@ g_prefs.tab_max_label_width,
         b2sh(g_prefs.show_bookmark_margin), fold_int_to_str(g_prefs.fold_style),
         b2yn(g_prefs.virtual_space), b2yn(g_prefs.scroll_beyond_last_line),
         b2yn(g_prefs.cjk_wrap),
+        b2yn(g_prefs.word_wrap), b2sh(g_prefs.show_indent_guides),
         b2yn(g_prefs.right_click_keeps_sel), b2yn(g_prefs.copy_line_no_selection),
         g_prefs.highlight_current_line ? "1" : "0",
         b2sh(g_prefs.show_whitespace), b2sh(g_prefs.show_eol),
@@ -1242,6 +1249,7 @@ CHK(scroll_past,       scroll_beyond_last_line,    editor_apply_prefs())
 CHK(full_path,         show_full_path_in_title,    main_refresh_title())
 CHK(copy_line,         copy_line_no_selection,     (void)0)
 CHK(word_wrap,         word_wrap,                  editor_apply_prefs())
+CHK(show_indent_guides,show_indent_guides,         editor_apply_prefs())
 CHK(cjk_wrap,          cjk_wrap,                   editor_apply_prefs())
 CHK(ac_brief,          ac_brief,                   (void)0)
 CHK(ac_ignore_numbers, ac_ignore_numbers,          (void)0)
@@ -1881,6 +1889,7 @@ static GtkWidget *page_editor(void)
     /* Top group — view checkboxes (mirrors macOS preferences02.png). */
     make_check(g, r++, "Show line numbers",                     g_prefs.show_line_numbers,      G_CALLBACK(on_show_ln));
     make_check(g, r++, "Word wrap",                             g_prefs.word_wrap,              G_CALLBACK(on_word_wrap));
+    make_check(g, r++, "Show indent guides",                    g_prefs.show_indent_guides,     G_CALLBACK(on_show_indent_guides));
     /* GAP-119 — sits right under Word wrap, as on macOS. */
     make_check(g, r++, "CJK-friendly word wrap",                g_prefs.cjk_wrap,               G_CALLBACK(on_cjk_wrap));
     make_check(g, r++, "Highlight current line",                g_prefs.highlight_current_line, G_CALLBACK(on_hl_line));

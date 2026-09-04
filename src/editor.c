@@ -969,6 +969,17 @@ static void on_sci_focus_enter(GtkEventControllerFocus *fc, gpointer data)
     if (nb) s_active_notebook = GTK_WIDGET(nb);
 }
 
+/* GAP-164 — see setup_sci: veto file drags on Scintilla's own drop target. */
+static gboolean on_sci_drop_accept(GtkDropTarget *t, GdkDrop *drop, gpointer u)
+{
+    (void)t; (void)u;
+    GdkContentFormats *f = gdk_drop_get_formats(drop);
+    return !(f && gdk_content_formats_contain_mime_type(f, "text/uri-list"));
+}
+
+/* GAP-165 — forward decl; body lives next to editor_apply_prefs. */
+static void apply_prefs_to_view(GtkWidget *sci, gboolean cjk_flip);
+
 /* GAP-146 — effective word-character set (macOS
  * applyWordCharsFromDefaults, EditorView.mm:2961). Stock Scintilla
  * list (queried once from a fresh view, before any SETWORDCHARS ran)
@@ -1202,8 +1213,14 @@ static void setup_sci(GtkWidget *sci)
     sci_msg(sci, SCI_INDICSETSTYLE, INCR_INDICATOR, INDIC_ROUNDBOX);
     sci_msg(sci, SCI_INDICSETFORE,  INCR_INDICATOR, 0x00CC44); /* BGR green */
     sci_msg(sci, SCI_INDICSETALPHA, INCR_INDICATOR, 130);
+    /* GAP-166 (GH #5) — rectangular-selection virtual space is always on
+     * (Alt-drag column selections extend past line ends); user-accessible
+     * virtual space only when the pref says so. macOS EditorView.mm
+     * applyPreferencesFromDefaults, verbatim. Was unconditional here, so
+     * every new tab came up with virtual space regardless of the pref. */
     sci_msg(sci, SCI_SETVIRTUALSPACEOPTIONS,
-            SCVS_RECTANGULARSELECTION | SCVS_USERACCESSIBLE, 0);
+            SCVS_RECTANGULARSELECTION |
+            (g_prefs.virtual_space ? SCVS_USERACCESSIBLE : 0), 0);
     sci_msg(sci, SCI_SETMULTIPLESELECTION,         1, 0);
     sci_msg(sci, SCI_SETADDITIONALSELECTIONTYPING, 1, 0);
     sci_msg(sci, SCI_SETMULTIPASTE,  SC_MULTIPASTE_EACH, 0);
@@ -1293,6 +1310,33 @@ static void setup_sci(GtkWidget *sci)
         g_signal_connect(fc, "enter", G_CALLBACK(on_sci_focus_enter), sci);
         gtk_widget_add_controller(sci, fc);
     }
+    {
+        /* GAP-164 (GH #1) — the vendored ScintillaGTK registers its own
+         * GtkDropTarget accepting G_TYPE_STRING, and GDK advertises
+         * text/plain for a GdkFileList drag, so a file dropped on the
+         * editor body was inserted as its path instead of opened. Same
+         * fix as macOS EditorView.mm (strips the file flavours from the
+         * Scintilla content view): refuse any drag that carries
+         * text/uri-list here, so it bubbles to the window's file-list
+         * target (main.c) and no insertion caret is painted meanwhile. */
+        GListModel *ctls = gtk_widget_observe_controllers(sci);
+        guint n = g_list_model_get_n_items(ctls);
+        for (guint k = 0; k < n; k++) {
+            GtkEventController *c = g_list_model_get_item(ctls, k);
+            if (GTK_IS_DROP_TARGET(c))
+                g_signal_connect(c, "accept",
+                                 G_CALLBACK(on_sci_drop_accept), NULL);
+            g_object_unref(c);
+        }
+        g_object_unref(ctls);
+    }
+    /* GAP-165 — every persisted per-view pref is applied to the NEW view
+     * here (macOS applyPreferencesFromDefaults runs at editor creation).
+     * Before this, editor_apply_prefs() ran only from the Preferences
+     * dialog, so word wrap / indent guides / whitespace / line numbers /
+     * virtual space were all dead after a restart until the user opened
+     * Preferences. Not the global pass: no cjk re-layout, no menu sync. */
+    apply_prefs_to_view(sci, FALSE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -4022,6 +4066,35 @@ void editor_set_show_eol(gboolean on)
     editor_apply_prefs();
 }
 
+/* GAP-165 — Word Wrap / Indent Guide / Line Numbers were LIVE per-view
+ * toggles that never touched the pref; now session-wide + persisted +
+ * propagated to every view, like the Show-* family above (macOS
+ * toggleWordWrap: / toggleIndentGuides: / toggleLineNumbers:). */
+void editor_set_word_wrap(gboolean on)
+{
+    g_prefs.word_wrap = on;
+    prefs_save();
+    editor_apply_prefs();
+    NppDoc *doc = editor_current_doc();
+    if (doc) toolbar_sync_toggles(doc->sci);
+}
+
+void editor_set_show_indent_guides(gboolean on)
+{
+    g_prefs.show_indent_guides = on;
+    prefs_save();
+    editor_apply_prefs();
+    NppDoc *doc = editor_current_doc();
+    if (doc) toolbar_sync_toggles(doc->sci);
+}
+
+void editor_set_show_line_numbers(gboolean on)
+{
+    g_prefs.show_line_numbers = on;
+    prefs_save();
+    editor_apply_prefs();
+}
+
 /* GAP-34 — move the current tab within its own notebook (split-aware).
  * dir: -2 = to start, -1 = backward, +1 = forward, +2 = to end. */
 void editor_move_current_tab(int dir)
@@ -4555,6 +4628,127 @@ static void apply_line_spacing(GtkWidget *sci)
     sci_msg(sci, SCI_SETEXTRADESCENT, extra / 2, 0);
 }
 
+/* GAP-165 — the per-view half of editor_apply_prefs(): everything a
+ * single ScintillaView needs to reflect g_prefs. Called for every open
+ * view by editor_apply_prefs() and for each NEW view from setup_sci(). */
+static void apply_prefs_to_view(GtkWidget *sci, gboolean cjk_flip)
+{
+    /* NPP_PREFS_DEBUG=1 — trace what each view ends up with (read back
+     * from Scintilla, so it proves the applied state, not the intent). */
+    static int dbg = -1;
+    if (dbg < 0) dbg = g_getenv("NPP_PREFS_DEBUG") != NULL;
+
+    /* Indentation + caret. P14: per-language override takes precedence. */
+    const char *lang = (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
+    /* GAP-158 — macOS keys the Normal-text override as ""; docs with
+     * no language set must pick it up too. */
+    const TabOverride *ovr = prefs_tab_override_for(lang ? lang : "");
+    int  tab_w  = ovr ? ovr->tab_size : g_prefs.tab_width;
+    int  use_t  = ovr ? ovr->use_tabs : g_prefs.use_tabs;
+    sci_msg(sci, SCI_SETTABWIDTH,         (uptr_t)tab_w, 0);
+    sci_msg(sci, SCI_SETUSETABS,          (uptr_t)use_t, 0);
+    apply_word_chars(sci);   /* GAP-146 */
+    sci_msg(sci, SCI_SETCARETLINEVISIBLE, (uptr_t)g_prefs.highlight_current_line, 0);
+    sci_msg(sci, SCI_SETCARETWIDTH,       (uptr_t)g_prefs.caret_width, 0);
+    sci_msg(sci, SCI_SETCARETPERIOD,      (uptr_t)g_prefs.caret_blink_rate, 0);
+    sci_msg(sci, SCI_SETENDATLASTLINE,    g_prefs.scroll_beyond_last_line ? 0 : 1, 0);
+    sci_msg(sci, SCI_SETZOOM,             (uptr_t)g_prefs.zoom_level, 0);
+
+    /* Wrap + virtual space + drag/drop */
+    /* GAP-148 — a large-file tab with no-wrap active must not be
+     * re-wrapped by a global pref pass (macOS keeps the per-view
+     * _wordWrapEnabled=NO). */
+    gboolean lf_nowrap =
+        g_object_get_data(G_OBJECT(sci), "npp-is-large") &&
+        g_prefs.large_file_no_wrap;
+    if (cjk_flip && !lf_nowrap)  /* GAP-119 — force re-layout */
+        sci_msg(sci, SCI_SETWRAPMODE, 0, 0);
+    /* GAP-165/153 — an RTL view keeps forced wrap when the pref goes off
+     * (macOS _propagateWordWrap skips RTL editors on the way down). */
+    if (!lf_nowrap && !(!g_prefs.word_wrap && editor_text_direction_rtl(sci)))
+        sci_msg(sci, SCI_SETWRAPMODE,     g_prefs.word_wrap ? 1 : 0, 0);
+    /* GAP-166 — rectangular-selection virtual space always on (macOS). */
+    sci_msg(sci, SCI_SETVIRTUALSPACEOPTIONS,
+            SCVS_RECTANGULARSELECTION |
+            (g_prefs.virtual_space ? SCVS_USERACCESSIBLE : 0), 0);
+    /* GAP-165 — indent guides are a persisted pref now (macOS default ON). */
+    sci_msg(sci, SCI_SETINDENTATIONGUIDES,
+            g_prefs.show_indent_guides ? SC_IV_LOOKBOTH : SC_IV_NONE, 0);
+    /* Drag/drop disable not exposed by Scintilla as a single message;
+     * setting would require GTK widget-level drag-source unset. Skip. */
+    (void)0;
+
+    /* Margins: line-number, bookmark, fold */
+    sci_msg(sci, SCI_SETMARGINWIDTHN, 0,
+            g_prefs.show_line_numbers ? 44 : 0);
+    sci_msg(sci, SCI_SETMARGINWIDTHN, 1,
+            g_prefs.show_bookmark_margin ? 9 : 0);
+
+    /* Whitespace + EOL display */
+    sci_msg(sci, SCI_SETVIEWWS,    g_prefs.show_whitespace ? SCWS_VISIBLEALWAYS : SCWS_INVISIBLE, 0);
+    sci_msg(sci, SCI_SETVIEWEOL,   g_prefs.show_eol ? 1 : 0, 0);
+
+    /* Edge marker */
+    sci_msg(sci, SCI_SETEDGEMODE,   (uptr_t)g_prefs.edge_mode, 0);
+    sci_msg(sci, SCI_SETEDGECOLUMN, (uptr_t)g_prefs.edge_column, 0);
+
+    /* Margin padding (Scintilla calls this "margin left/right" inside the view) */
+    sci_msg(sci, SCI_SETMARGINLEFT,  0, g_prefs.padding_left);
+    sci_msg(sci, SCI_SETMARGINRIGHT, 0, g_prefs.padding_right);
+
+    /* P3 — newly-wired prefs. */
+    sci_msg(sci, SCI_SETBACKSPACEUNINDENTS, g_prefs.backspace_unindent ? 1 : 0, 0);
+    /* GAP-39 — Tab/Shift+Tab indent/outdent line content. Scintilla's
+     * default is already 1; set explicitly so it can't regress (the
+     * macOS port lost Shift+Tab outdent by tying this to the
+     * backspace-unindent pref — af62a97 #201). */
+    sci_msg(sci, SCI_SETTABINDENTS, 1, 0);
+    /* GAP-52 — user Scintilla-command key overrides (shortcuts.xml
+     * ScintillaKeys) land in this editor's live keymap. */
+    {
+        extern void shortcutmap_apply_sci_overrides(GtkWidget *sci);
+        shortcutmap_apply_sci_overrides(sci);
+    }
+    /* GAP-153 — the override pass rebuilds the keymap; re-assert
+     * the RTL arrow mirrors for views currently in RTL mode. */
+    if (editor_text_direction_rtl(sci))
+        apply_rtl_keys(sci, TRUE);
+    sci_msg(sci, SCI_SETFONTQUALITY,        (uptr_t)g_prefs.font_quality, 0);
+    /* Copy/cut whole line when nothing is selected. SCI_COPYALLOWLINE
+     * is a per-call message in Scintilla, not a setter — we rebind the
+     * Cmd+C/Cmd+X behavior in the keypress handler instead. */
+    (void)0;
+
+    /* Fold marker style. SC_MARKNUM_FOLDER/FOLDEROPEN markers
+     * determine the visual style of the fold margin. */
+    int fopen, fclose;
+    switch (g_prefs.fold_style) {
+    case 1:  fopen = SC_MARK_CIRCLEMINUS; fclose = SC_MARK_CIRCLEPLUS;  break;
+    case 2:  fopen = SC_MARK_ARROWDOWN;   fclose = SC_MARK_ARROW;       break;
+    case 3:  fopen = SC_MARK_MINUS;       fclose = SC_MARK_PLUS;        break;
+    case 4:  fopen = SC_MARK_EMPTY;       fclose = SC_MARK_EMPTY;       break;
+    default: fopen = SC_MARK_BOXMINUS;    fclose = SC_MARK_BOXPLUS;     break;
+    }
+    sci_msg(sci, SCI_MARKERDEFINE, SC_MARKNUM_FOLDER,     fclose);
+    sci_msg(sci, SCI_MARKERDEFINE, SC_MARKNUM_FOLDEROPEN, fopen);
+    /* GAP-149 — measured dynamic width (replaces digits×10
+     * guesswork; no-ops when the dyn pref is off). */
+    recompute_line_margin(sci);
+
+    apply_line_spacing(sci);
+    if (dbg)
+        g_message("[prefs] view %p wrap=%d indent=%d vspace=%d ws=%d eol=%d "
+                  "lnmargin=%d zoom=%d",
+                  (void *)sci,
+                  (int)sci_msg(sci, SCI_GETWRAPMODE, 0, 0),
+                  (int)sci_msg(sci, SCI_GETINDENTATIONGUIDES, 0, 0),
+                  (int)sci_msg(sci, SCI_GETVIRTUALSPACEOPTIONS, 0, 0),
+                  (int)sci_msg(sci, SCI_GETVIEWWS, 0, 0),
+                  (int)sci_msg(sci, SCI_GETVIEWEOL, 0, 0),
+                  (int)sci_msg(sci, SCI_GETMARGINWIDTHN, 0, 0),
+                  (int)sci_msg(sci, SCI_GETZOOM, 0, 0));
+}
+
 void editor_apply_prefs(void)
 {
     /* Hide-tab-bar pref (macOS #183) — all notebooks. */
@@ -4576,100 +4770,7 @@ void editor_apply_prefs(void)
     GPtrArray *docs = editor_all_docs();
     for (guint di = 0; di < docs->len; di++) {
         NppDoc *dref = g_ptr_array_index(docs, di);
-        GtkWidget *sci = dref->sci;
-        if (!sci) continue;
-
-        /* Indentation + caret. P14: per-language override takes precedence. */
-        const char *lang = (const char *)g_object_get_data(G_OBJECT(sci), "npp-lang");
-        /* GAP-158 — macOS keys the Normal-text override as ""; docs with
-         * no language set must pick it up too. */
-        const TabOverride *ovr = prefs_tab_override_for(lang ? lang : "");
-        int  tab_w  = ovr ? ovr->tab_size : g_prefs.tab_width;
-        int  use_t  = ovr ? ovr->use_tabs : g_prefs.use_tabs;
-        sci_msg(sci, SCI_SETTABWIDTH,         (uptr_t)tab_w, 0);
-        sci_msg(sci, SCI_SETUSETABS,          (uptr_t)use_t, 0);
-        apply_word_chars(sci);   /* GAP-146 */
-        sci_msg(sci, SCI_SETCARETLINEVISIBLE, (uptr_t)g_prefs.highlight_current_line, 0);
-        sci_msg(sci, SCI_SETCARETWIDTH,       (uptr_t)g_prefs.caret_width, 0);
-        sci_msg(sci, SCI_SETCARETPERIOD,      (uptr_t)g_prefs.caret_blink_rate, 0);
-        sci_msg(sci, SCI_SETENDATLASTLINE,    g_prefs.scroll_beyond_last_line ? 0 : 1, 0);
-        sci_msg(sci, SCI_SETZOOM,             (uptr_t)g_prefs.zoom_level, 0);
-
-        /* Wrap + virtual space + drag/drop */
-        /* GAP-148 — a large-file tab with no-wrap active must not be
-         * re-wrapped by a global pref pass (macOS keeps the per-view
-         * _wordWrapEnabled=NO). */
-        gboolean lf_nowrap =
-            g_object_get_data(G_OBJECT(sci), "npp-is-large") &&
-            g_prefs.large_file_no_wrap;
-        if (cjk_flip && !lf_nowrap)  /* GAP-119 — force re-layout */
-            sci_msg(sci, SCI_SETWRAPMODE, 0, 0);
-        if (!lf_nowrap)
-            sci_msg(sci, SCI_SETWRAPMODE,     g_prefs.word_wrap ? 1 : 0, 0);
-        sci_msg(sci, SCI_SETVIRTUALSPACEOPTIONS,
-                g_prefs.virtual_space ? (SCVS_RECTANGULARSELECTION | SCVS_USERACCESSIBLE) : 0, 0);
-        /* Drag/drop disable not exposed by Scintilla as a single message;
-         * setting would require GTK widget-level drag-source unset. Skip. */
-        (void)0;
-
-        /* Margins: line-number, bookmark, fold */
-        sci_msg(sci, SCI_SETMARGINWIDTHN, 0,
-                g_prefs.show_line_numbers ? 44 : 0);
-        sci_msg(sci, SCI_SETMARGINWIDTHN, 1,
-                g_prefs.show_bookmark_margin ? 9 : 0);
-
-        /* Whitespace + EOL display */
-        sci_msg(sci, SCI_SETVIEWWS,    g_prefs.show_whitespace ? SCWS_VISIBLEALWAYS : SCWS_INVISIBLE, 0);
-        sci_msg(sci, SCI_SETVIEWEOL,   g_prefs.show_eol ? 1 : 0, 0);
-
-        /* Edge marker */
-        sci_msg(sci, SCI_SETEDGEMODE,   (uptr_t)g_prefs.edge_mode, 0);
-        sci_msg(sci, SCI_SETEDGECOLUMN, (uptr_t)g_prefs.edge_column, 0);
-
-        /* Margin padding (Scintilla calls this "margin left/right" inside the view) */
-        sci_msg(sci, SCI_SETMARGINLEFT,  0, g_prefs.padding_left);
-        sci_msg(sci, SCI_SETMARGINRIGHT, 0, g_prefs.padding_right);
-
-        /* P3 — newly-wired prefs. */
-        sci_msg(sci, SCI_SETBACKSPACEUNINDENTS, g_prefs.backspace_unindent ? 1 : 0, 0);
-        /* GAP-39 — Tab/Shift+Tab indent/outdent line content. Scintilla's
-         * default is already 1; set explicitly so it can't regress (the
-         * macOS port lost Shift+Tab outdent by tying this to the
-         * backspace-unindent pref — af62a97 #201). */
-        sci_msg(sci, SCI_SETTABINDENTS, 1, 0);
-        /* GAP-52 — user Scintilla-command key overrides (shortcuts.xml
-         * ScintillaKeys) land in this editor's live keymap. */
-        {
-            extern void shortcutmap_apply_sci_overrides(GtkWidget *sci);
-            shortcutmap_apply_sci_overrides(sci);
-        }
-        /* GAP-153 — the override pass rebuilds the keymap; re-assert
-         * the RTL arrow mirrors for views currently in RTL mode. */
-        if (editor_text_direction_rtl(sci))
-            apply_rtl_keys(sci, TRUE);
-        sci_msg(sci, SCI_SETFONTQUALITY,        (uptr_t)g_prefs.font_quality, 0);
-        /* Copy/cut whole line when nothing is selected. SCI_COPYALLOWLINE
-         * is a per-call message in Scintilla, not a setter — we rebind the
-         * Cmd+C/Cmd+X behavior in the keypress handler instead. */
-        (void)0;
-
-        /* Fold marker style. SC_MARKNUM_FOLDER/FOLDEROPEN markers
-         * determine the visual style of the fold margin. */
-        int fopen, fclose;
-        switch (g_prefs.fold_style) {
-        case 1:  fopen = SC_MARK_CIRCLEMINUS; fclose = SC_MARK_CIRCLEPLUS;  break;
-        case 2:  fopen = SC_MARK_ARROWDOWN;   fclose = SC_MARK_ARROW;       break;
-        case 3:  fopen = SC_MARK_MINUS;       fclose = SC_MARK_PLUS;        break;
-        case 4:  fopen = SC_MARK_EMPTY;       fclose = SC_MARK_EMPTY;       break;
-        default: fopen = SC_MARK_BOXMINUS;    fclose = SC_MARK_BOXPLUS;     break;
-        }
-        sci_msg(sci, SCI_MARKERDEFINE, SC_MARKNUM_FOLDER,     fclose);
-        sci_msg(sci, SCI_MARKERDEFINE, SC_MARKNUM_FOLDEROPEN, fopen);
-        /* GAP-149 — measured dynamic width (replaces digits×10
-         * guesswork; no-ops when the dyn pref is off). */
-        recompute_line_margin(sci);
-
-        apply_line_spacing(sci);
+        if (dref->sci) apply_prefs_to_view(dref->sci, cjk_flip);
     }
     g_ptr_array_free(docs, TRUE);
     statusbar_update_from_sci(

@@ -57,7 +57,9 @@ typedef struct {
     gboolean ac_ignore_numbers;       /* no completion for digit prefix */
     int      caret_blink_rate;        /* ms, 0 = no blink, default 600 */
     gboolean scroll_beyond_last_line; /* default FALSE */
-    gboolean word_wrap;               /* default FALSE */
+    gboolean word_wrap;               /* default FALSE; persisted (GAP-165) */
+    gboolean show_indent_guides;      /* GAP-165 — default TRUE (macOS
+                                       * kPrefShowIndentGuides); persisted */
     gboolean cjk_wrap;                /* GAP-119 — CJK-friendly word wrap
                                        * (macOS c020d4b #275), default TRUE;
                                        * gates the scintilla-patches/0012

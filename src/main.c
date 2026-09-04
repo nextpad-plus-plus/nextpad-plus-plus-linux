@@ -941,16 +941,14 @@ static void action_show_all_chars(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     editor_set_show_all_chars(!g_prefs.show_whitespace);
 }
+/* GAP-165 — persisted, session-wide (were live per-view flips). */
 static void action_show_indent_guide(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    int cur = (int)sci_send(SCI_GETINDENTATIONGUIDES, 0, 0);
-    sci_send(SCI_SETINDENTATIONGUIDES, cur ? SC_IV_NONE : SC_IV_LOOKBOTH, 0);
+    editor_set_show_indent_guides(!g_prefs.show_indent_guides);
 }
 static void action_show_line_numbers(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    GtkWidget *s = current_sci(); if (!s) return;
-    int w = (int)scintilla_send_message(SCINTILLA(s), SCI_GETMARGINWIDTHN, 0, 0);
-    scintilla_send_message(SCINTILLA(s), SCI_SETMARGINWIDTHN, 0, w > 0 ? 0 : 40);
+    editor_set_show_line_numbers(!g_prefs.show_line_numbers);
 }
 static void action_show_wrap_symbol(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
@@ -1115,8 +1113,7 @@ static void action_ms_skip(GSimpleAction *a, GVariant *p, gpointer u) {
 /* G11.6 View → Word Wrap / Always on Top / Full Screen */
 static void action_word_wrap(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
-    int cur = (int)sci_send(SCI_GETWRAPMODE, 0, 0);
-    sci_send(SCI_SETWRAPMODE, cur ? SC_WRAP_NONE : SC_WRAP_WORD, 0);
+    editor_set_word_wrap(!g_prefs.word_wrap);   /* GAP-165 — persisted */
 }
 static void action_always_on_top(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
@@ -3031,19 +3028,14 @@ void main_menu_state_sync(void)
     gboolean split = editor_split_active();
 
     /* ── checkmarks ── */
-    /* Word wrap + line numbers are LIVE per-view toggles (their actions
-     * flip the widget, not the pref) — read the view (macOS reads
-     * ed.wordWrapEnabled the same way). */
-    menu_sync_state(am, "word-wrap",
-        sci && scintilla_send_message(SCINTILLA(sci),
-                                      SCI_GETWRAPMODE, 0, 0) != 0);
+    /* GAP-165 — word wrap / line numbers / indent guides are persisted
+     * prefs now; the checks read g_prefs like the Show-* family. */
+    menu_sync_state(am, "word-wrap",        g_prefs.word_wrap);
     menu_sync_state(am, "show-ws",          g_prefs.show_whitespace);
     menu_sync_state(am, "show-eol",         g_prefs.show_eol);
     menu_sync_state(am, "show-all-chars",
                     g_prefs.show_whitespace && g_prefs.show_eol);
-    menu_sync_state(am, "show-line-numbers",
-        sci && scintilla_send_message(SCINTILLA(sci),
-                                      SCI_GETMARGINWIDTHN, 0, 0) > 0);
+    menu_sync_state(am, "show-line-numbers", g_prefs.show_line_numbers);
     menu_sync_state(am, "toggle-tab-bar-wrap", g_prefs.tab_bar_wrap);
     menu_sync_state(am, "spell-toggle",     spell_is_enabled());
 
@@ -3078,7 +3070,8 @@ void main_menu_state_sync(void)
          * real on this backend). */
         rtl      = editor_text_direction_rtl(sci);
     }
-    menu_sync_state(am, "show-indent-guide", indent_g);
+    (void)indent_g;
+    menu_sync_state(am, "show-indent-guide", g_prefs.show_indent_guides);
     menu_sync_state(am, "show-wrap-symbol",  wrapsym);
     menu_sync_state(am, "hide-line-marks",   marks_hidden);
     menu_sync_state(am, "toggle-readonly",   ro);
@@ -9424,6 +9417,16 @@ static void build_main_window(GtkApplication *app)
         GtkDropTarget *dt = gtk_drop_target_new(GDK_TYPE_FILE_LIST,
                                                 GDK_ACTION_COPY);
         g_signal_connect(dt, "drop", G_CALLBACK(on_files_dropped), NULL);
+        /* GAP-164 (GH #1) — CAPTURE phase: GtkDropTarget claims
+         * GDK_DROP_START on the first target reached, and in the bubble
+         * phase that is the innermost widget — the vendored ScintillaGTK's
+         * string target, which then pasted the file's PATH. Running the
+         * window target in the capture pass makes file drops ours
+         * everywhere; text drags still fall through to Scintilla (the
+         * GType filter here is GdkFileList only). Belt-and-braces with
+         * the per-view "accept" veto in editor.c setup_sci. */
+        gtk_event_controller_set_propagation_phase(
+            GTK_EVENT_CONTROLLER(dt), GTK_PHASE_CAPTURE);
         gtk_widget_add_controller(GTK_WIDGET(g_window),
                                   GTK_EVENT_CONTROLLER(dt));
     }

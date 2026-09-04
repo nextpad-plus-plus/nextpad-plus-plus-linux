@@ -396,7 +396,7 @@ static void on_wrap(GtkToggleButton *item, gpointer d)
 {
     (void)d;
     gboolean on = gtk_toggle_button_get_active(item);
-    editor_send(SCI_SETWRAPMODE, on ? SC_WRAP_WORD : SC_WRAP_NONE, 0);
+    editor_set_word_wrap(on);   /* GAP-165 — persisted, all views */
 }
 
 /* AllChars dropdown menu items (5, per macOS _buildAllCharsMenu).
@@ -500,7 +500,7 @@ static void on_indent(GtkToggleButton *item, gpointer d)
 {
     (void)d;
     gboolean on = gtk_toggle_button_get_active(item);
-    editor_send(SCI_SETINDENTATIONGUIDES, on ? SC_IV_LOOKBOTH : SC_IV_NONE, 0);
+    editor_set_show_indent_guides(on);   /* GAP-165 — persisted, all views */
 }
 
 static void on_print(GtkButton *i, gpointer d)
