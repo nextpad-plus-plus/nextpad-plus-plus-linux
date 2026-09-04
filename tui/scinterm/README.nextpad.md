@@ -4,7 +4,7 @@
 - **Taken verbatim from the tag:** `PlatCurses.cxx/.h`, `ScintillaCurses.cxx/.h`, `wcwidth.c`, `LICENSE`, `Makefile` (reference only — we build via `tui/CMakeLists.txt`), `jinx/` (demo host app, our event-loop reference), `docs/` (README/api/changelog).
 - **Local modifications** (marked `Nextpad++ deviation` in-source; re-apply on upgrade):
   - `PlatCurses.cxx` `DrawLineMarker`: a highlighted fold chain (`SCI_MARKERENABLEHIGHLIGHT` + caret inside the block) draws the glyph in the marker's `backSelected` color + bold — GUI fold-margin parity ("Fold active") — instead of upstream's bold-only, which many terminals render with no visible change.
-- **Why 5.5, not 6.0:** Scinterm 5.x pairs with Scintilla 5.4.2–5.x (`docs/README.md`); our vendored Scintilla is **5.6.0** (`scintilla/version.txt`). Scinterm 6.0 requires Scintilla ≥ 5.6.2.
+- **Why 5.5, not 6.0:** Scinterm 5.x pairs with Scintilla 5.4.2–5.x (`docs/README.md`); our vendored Scintilla is **5.5.8** on Linux (`scintilla/version.txt`; the bugaevc gtk4 fork + local patches — macOS vendors 5.6.0). Scinterm 6.0 requires Scintilla ≥ 5.6.2.
 - **No Scintilla source patches required:** the Makefile's `patch` target is an empty-wildcard no-op (the tag ships no `patches/` directory). Scinterm coexists with our locally patched `scintilla/` tree untouched.
 - **Build contract** (from the upstream Makefile, reproduced in `tui/CMakeLists.txt`): compile these sources plus Scintilla's own `src/*.cxx` with `-std=c++17 -DCURSES -DSCI_LEXER -D_XOPEN_SOURCE_EXTENDED -I scintilla/include -I scintilla/src` against a **wide-character** curses.
 
