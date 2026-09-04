@@ -6,6 +6,7 @@
 static GtkWidget *s_lbl_pos;
 static GtkWidget *s_lbl_docstat;  /* "length : N    lines : N" (macOS parity) */
 static GtkWidget *s_lbl_sel;      /* "Sel : chars | lines" (#234) */
+static GtkWidget *s_lbl_zoom;     /* "Zoom: N%" (GAP-173, macOS 6c86f11) */
 static GtkWidget *s_lbl_plugin;   /* middle field, NPPM_SETSTATUSBAR */
 static GtkWidget *s_lbl_enc;
 static GtkWidget *s_lbl_eol;
@@ -14,21 +15,39 @@ static GtkWidget *s_lbl_ovr;
 static GtkWidget *s_lbl_indent;
 static GtkWidget *s_lbl_git;      /* "⎇ branch" (GAP-92, macOS parity) */
 
-/* Registered by main.c — opens the Language menu on double-click of
- * the language token (macOS issue #174). */
-static void (*s_lang_dblclick_cb)(GtkWidget *anchor);
+/* Per-token double-click handlers, registered by main.c (macOS
+ * _statusBarDoubleClicked: — #174 language menu; GAP-172 encoding /
+ * EOL menus + INS/OVR overtype toggle; GAP-173 zoom reset). The
+ * gesture's user-data is the token id; the label to anchor at is
+ * looked up at fire time since the labels outlive every callback. */
+static void (*s_dblclick_cb[STATUSBAR_TOKEN_COUNT])(GtkWidget *anchor);
 
-static void on_lang_label_pressed(GtkGestureClick *g, int n_press,
-                                  double x, double y, gpointer ud)
+static GtkWidget *token_label(StatusbarToken token)
 {
-    (void)g; (void)x; (void)y; (void)ud;
-    if (n_press == 2 && s_lang_dblclick_cb)
-        s_lang_dblclick_cb(s_lbl_lang);
+    switch (token) {
+    case STATUSBAR_TOKEN_LANG: return s_lbl_lang;
+    case STATUSBAR_TOKEN_ENC:  return s_lbl_enc;
+    case STATUSBAR_TOKEN_EOL:  return s_lbl_eol;
+    case STATUSBAR_TOKEN_OVR:  return s_lbl_ovr;
+    case STATUSBAR_TOKEN_ZOOM: return s_lbl_zoom;
+    default:                   return NULL;
+    }
 }
 
-void statusbar_set_language_dblclick(void (*cb)(GtkWidget *anchor))
+static void on_token_label_pressed(GtkGestureClick *g, int n_press,
+                                   double x, double y, gpointer ud)
 {
-    s_lang_dblclick_cb = cb;
+    (void)g; (void)x; (void)y;
+    StatusbarToken token = (StatusbarToken)GPOINTER_TO_INT(ud);
+    if (n_press == 2 && token < STATUSBAR_TOKEN_COUNT && s_dblclick_cb[token])
+        s_dblclick_cb[token](token_label(token));
+}
+
+void statusbar_set_token_dblclick(StatusbarToken token,
+                                  void (*cb)(GtkWidget *anchor))
+{
+    if (token < STATUSBAR_TOKEN_COUNT)
+        s_dblclick_cb[token] = cb;
 }
 
 static GtkWidget *vsep(void)
@@ -74,6 +93,10 @@ GtkWidget *statusbar_init(void)
     npp_box_pack(GTK_BOX(box), (s_lbl_docstat = rlabel("length : 0    lines : 1")), FALSE, 0);
     npp_box_pack(GTK_BOX(box), vsep(), FALSE, 0);
     npp_box_pack(GTK_BOX(box), (s_lbl_sel = rlabel("Sel : 0 | 0")), FALSE, 0);
+    /* GAP-173 — live zoom percentage (macOS 6c86f11: "Zoom: N%" closes
+     * the left block; N = 100 + SCI_GETZOOM * 10). */
+    npp_box_pack(GTK_BOX(box), vsep(), FALSE, 0);
+    npp_box_pack(GTK_BOX(box), (s_lbl_zoom = rlabel("Zoom: 100%")), FALSE, 0);
 
     /* Middle: plugin-addressable field (NPPM_SETSTATUSBAR). Expands to
      * absorb the leftover width so left/right blocks stay put. */
@@ -102,13 +125,16 @@ GtkWidget *statusbar_init(void)
     gtk_widget_set_visible(s_lbl_git, FALSE);
     npp_box_pack_end(GTK_BOX(box), s_lbl_git, FALSE, 0);
 
-    /* Double-click on the language token opens the Language menu
-     * (macOS issue #174) — main.c registers the callback. */
-    {
+    /* Double-click on the language / encoding / EOL / INS-OVR / zoom
+     * tokens (macOS #174, GAP-172, GAP-173) — main.c registers the
+     * callbacks; one primary-button gesture per token label. */
+    for (int t = 0; t < STATUSBAR_TOKEN_COUNT; t++) {
         GtkGesture *gc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), GDK_BUTTON_PRIMARY);
-        g_signal_connect(gc, "pressed", G_CALLBACK(on_lang_label_pressed), NULL);
-        gtk_widget_add_controller(s_lbl_lang, GTK_EVENT_CONTROLLER(gc));
+        g_signal_connect(gc, "pressed", G_CALLBACK(on_token_label_pressed),
+                         GINT_TO_POINTER(t));
+        gtk_widget_add_controller(token_label((StatusbarToken)t),
+                                  GTK_EVENT_CONTROLLER(gc));
     }
 
     /* top border */
@@ -134,6 +160,11 @@ void statusbar_update_from_sci(GtkWidget *sci)
 
     int ovr = (int)scintilla_send_message(SCINTILLA(sci), SCI_GETOVERTYPE, 0, 0);
     gtk_label_set_text(GTK_LABEL(s_lbl_ovr), ovr ? "OVR" : "INS");
+
+    /* GAP-173 — macOS zoomPercentage: 100 + SCI_GETZOOM * 10. */
+    int zoom = (int)scintilla_send_message(SCINTILLA(sci), SCI_GETZOOM, 0, 0);
+    snprintf(buf, sizeof(buf), "Zoom: %d%%", 100 + zoom * 10);
+    gtk_label_set_text(GTK_LABEL(s_lbl_zoom), buf);
 
     int use_tabs = (int)scintilla_send_message(SCINTILLA(sci), SCI_GETUSETABS, 0, 0);
     int tab_w    = (int)scintilla_send_message(SCINTILLA(sci), SCI_GETTABWIDTH, 0, 0);

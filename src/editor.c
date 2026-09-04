@@ -2879,6 +2879,15 @@ brace_done:;
         /* GAP-31 — tabs follow the editor zoom when the pref is on. */
         if (g_prefs.tab_follow_zoom)
             editor_refresh_all_tab_labels();
+        /* GAP-173 — the status bar's Zoom token tracks every zoom path
+         * immediately (a Ctrl+wheel zoom raises no SCN_UPDATEUI, so the
+         * bar would otherwise show stale until the next caret move).
+         * Same visible-tab gate as SCN_UPDATEUI; the propagation above
+         * re-raises SCN_ZOOM on the visible view when another one
+         * notified first, so that view lands here too. */
+        if (sci_of_page(gtk_notebook_get_current_page(
+                            GTK_NOTEBOOK(s_notebook))) == sci)
+            statusbar_update_from_sci(sci);
     } else if (code == SCN_DOUBLECLICK) {
         /* GAP-37 — plain double-click on a marked link opens it;
          * otherwise the Ctrl+double-click delimiter handler gets a look

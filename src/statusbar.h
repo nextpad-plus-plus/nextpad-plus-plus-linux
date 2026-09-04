@@ -21,9 +21,21 @@ void       statusbar_set_git_branch(const char *branch);
  * the built-in left/right blocks are never overwritten by plugins. */
 void       statusbar_set_plugin_text(const char *text);
 
-/* Register the double-click handler for the language token (macOS
- * issue #174 — opens the Language menu). main.c owns the menu model,
- * so it registers a callback receiving the label to anchor at. */
-void       statusbar_set_language_dblclick(void (*cb)(GtkWidget *anchor));
+/* Double-clickable tokens (macOS _statusBarDoubleClicked:). Language
+ * opens the Language menu (#174); Encoding / EOL open their menus and
+ * INS/OVR toggles overtype (GAP-172, macOS a5959dd #313); Zoom resets
+ * the zoom (GAP-173, macOS 6c86f11 PR #325). main.c owns the menu
+ * models and the zoom routing, so it registers one callback per token,
+ * each receiving the token's label to anchor a popup at. */
+typedef enum {
+    STATUSBAR_TOKEN_LANG = 0,
+    STATUSBAR_TOKEN_ENC,
+    STATUSBAR_TOKEN_EOL,
+    STATUSBAR_TOKEN_OVR,
+    STATUSBAR_TOKEN_ZOOM,
+    STATUSBAR_TOKEN_COUNT
+} StatusbarToken;
+void       statusbar_set_token_dblclick(StatusbarToken token,
+                                        void (*cb)(GtkWidget *anchor));
 
 #endif /* STATUSBAR_H */

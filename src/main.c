@@ -440,6 +440,11 @@ static void populate_language_menu(GMenu *lang, const char *current_key);
 static char main_lang_letter_for_key(const char *key);
 void main_retranslate_menu(void);            /* defined later in this file */
 static GMenu *g_language_menu;   /* shared: menubar + status-bar popup */
+/* GAP-172 (macOS a5959dd #313) — the Encoding and EOL Conversion models
+ * are retained the same way so the status-bar tokens can pop the LIVE
+ * menus (checkmarks / enabling come from the shared actions). */
+static GMenu *g_encoding_menu;
+static GMenu *g_eol_menu;
 
 void main_sync_language_menu(const char *key) {
     if (!g_lang_action) return;
@@ -7578,6 +7583,9 @@ static GMenuModel *build_menu_model(void)
             g_menu_append(eol, "Unix (LF)",       "app.eol-lf");
             g_menu_append(eol, "Old Mac (CR)",    "app.eol-cr");
             g_menu_append_submenu(submenus, "EOL Conversion", G_MENU_MODEL(eol));
+            /* GAP-172 — keep a ref for the status bar's EOL token popup. */
+            if (g_eol_menu) g_object_unref(g_eol_menu);
+            g_eol_menu = g_object_ref(eol);
             g_object_unref(eol);
         }
         /* Blank Operations */
@@ -8115,6 +8123,9 @@ static GMenuModel *build_menu_model(void)
         g_object_unref(cv);
     }
     g_menu_append_submenu(bar, "_Encoding", G_MENU_MODEL(enc_menu));
+    /* GAP-172 — keep a ref for the status bar's encoding token popup. */
+    if (g_encoding_menu) g_object_unref(g_encoding_menu);
+    g_encoding_menu = g_object_ref(enc_menu);
     g_object_unref(enc_menu);
 
     /* Language — alphabetical letter-grouped submenus; populated by
@@ -8975,29 +8986,59 @@ static void sresults_panel_close(GtkWidget *frame, gpointer user)
     searchresults_set_visible(FALSE);
 }
 
-/* macOS #174 — double-click on the status bar's language token pops the
- * live Language menu at the label. One-shot GtkPopoverMenu; teardown is
+/* macOS #174 / GAP-172 (a5959dd #313) — double-click on a status-bar
+ * token pops the matching LIVE menu-bar model at the label (Language,
+ * Encoding, EOL Conversion). One-shot GtkPopoverMenu; teardown is
  * deferred out of the closed emission (same pattern as npp_menu.c). */
-static gboolean lang_popup_teardown_idle(gpointer w)
+static gboolean statusbar_popup_teardown_idle(gpointer w)
 {
     gtk_widget_unparent(GTK_WIDGET(w));
     return G_SOURCE_REMOVE;
 }
-static void on_lang_popup_closed(GtkPopover *p, gpointer ud)
+static void on_statusbar_popup_closed(GtkPopover *p, gpointer ud)
 {
     (void)ud;
-    g_idle_add_full(G_PRIORITY_HIGH, lang_popup_teardown_idle, p, NULL);
+    g_idle_add_full(G_PRIORITY_HIGH, statusbar_popup_teardown_idle, p, NULL);
 }
-static void statusbar_open_language_menu(GtkWidget *anchor)
+static void statusbar_open_menu(GMenu *model, GtkWidget *anchor)
 {
-    if (!g_language_menu) return;
-    GtkWidget *pop =
-        gtk_popover_menu_new_from_model(G_MENU_MODEL(g_language_menu));
+    if (!model || !anchor) return;
+    GtkWidget *pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));
     gtk_popover_set_has_arrow(GTK_POPOVER(pop), FALSE);
     gtk_popover_set_position(GTK_POPOVER(pop), GTK_POS_TOP);
     gtk_widget_set_parent(pop, anchor);
-    g_signal_connect(pop, "closed", G_CALLBACK(on_lang_popup_closed), NULL);
+    g_signal_connect(pop, "closed", G_CALLBACK(on_statusbar_popup_closed), NULL);
     gtk_popover_popup(GTK_POPOVER(pop));
+}
+static void statusbar_open_language_menu(GtkWidget *anchor)
+{
+    statusbar_open_menu(g_language_menu, anchor);
+}
+static void statusbar_open_encoding_menu(GtkWidget *anchor)
+{
+    statusbar_open_menu(g_encoding_menu, anchor);
+}
+static void statusbar_open_eol_menu(GtkWidget *anchor)
+{
+    statusbar_open_menu(g_eol_menu, anchor);
+}
+/* GAP-172 — INS/OVR has no menu (Windows parity either): toggle overtype
+ * on the current editor and refresh the token right away (SCN_UPDATEUI
+ * would only catch it on the next caret move). */
+static void statusbar_toggle_overtype(GtkWidget *anchor)
+{
+    (void)anchor;
+    if (!current_sci()) return;
+    sci_send(SCI_EDITTOGGLEOVERTYPE, 0, 0);
+    statusbar_set_overtype(sci_send(SCI_GETOVERTYPE, 0, 0) != 0);
+}
+/* GAP-173 — the Zoom token resets through the same resetZoom: routing
+ * as View ▸ Zoom (GAP-115: a focused zoomable panel wins, else the
+ * editor); SCN_ZOOM then refreshes the token. */
+static void statusbar_zoom_reset(GtkWidget *anchor)
+{
+    (void)anchor;
+    action_zoom_reset(NULL, NULL, NULL);
 }
 
 #if !GLIB_CHECK_VERSION(2, 74, 0)
@@ -9069,7 +9110,11 @@ static void build_main_window(GtkApplication *app)
     GtkWidget *mdpanel   = mdpreview_init(GTK_WIDGET(g_window));
     GtkWidget *statusbar = statusbar_init();
     g_statusbar_widget = statusbar;  /* GAP-154 — chrome-hiding handle */
-    statusbar_set_language_dblclick(statusbar_open_language_menu);
+    statusbar_set_token_dblclick(STATUSBAR_TOKEN_LANG, statusbar_open_language_menu);
+    statusbar_set_token_dblclick(STATUSBAR_TOKEN_ENC,  statusbar_open_encoding_menu);
+    statusbar_set_token_dblclick(STATUSBAR_TOKEN_EOL,  statusbar_open_eol_menu);
+    statusbar_set_token_dblclick(STATUSBAR_TOKEN_OVR,  statusbar_toggle_overtype);
+    statusbar_set_token_dblclick(STATUSBAR_TOKEN_ZOOM, statusbar_zoom_reset);
 
     /* Q1 — match macOS: editor on LEFT, all side panels packed to RIGHT
      * inside a single side-panel host. macOS: MainWindowController.mm:2665
