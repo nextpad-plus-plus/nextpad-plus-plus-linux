@@ -7,6 +7,21 @@
 #ifndef GTK_COMPAT_H
 #define GTK_COMPAT_H
 
+#ifdef NPP_TUI
+/* ════════════════════════════════════════════════════════════════════════
+ * Headless seam — the terminal editor (tui/, -DNPP_TUI) compiles a subset
+ * of src/ (stylestore.c, udl.c, lexer.c, langsmgr.c, encoding.c, paths.c,
+ * funclist_xml.c) with NO GTK. Those modules use GLib/GIO for real and
+ * name `GtkWidget *` only as the opaque Scintilla handle they pass to
+ * scintilla_send_message(); sci_backend.h's SCI_BACKEND_CURSES block maps
+ * that call onto Scinterm's `void *sci` entry point, so GtkWidget = void
+ * here. Nothing else in this header applies without a toolkit.
+ * ════════════════════════════════════════════════════════════════════════ */
+#include <glib.h>
+#include <gio/gio.h>
+typedef void GtkWidget;
+#else /* !NPP_TUI — the GTK4 application */
+
 #include <gtk/gtk.h>
 
 /*
@@ -376,6 +391,8 @@ static inline void npp_fc_set_filename(GtkFileChooser *c, const char *path)
         ((void)(err), gtk_show_uri((parent), (uri), (ts)))
 #define gtk_label_set_line_wrap(l, w)            gtk_label_set_wrap((l), (w))
 
+#endif /* !NPP_TUI */
+
 /* ── glib < 2.74 legacy-build shim (Jammy tier — docs/08) ───────────────
  * G_MARKUP_DEFAULT_FLAGS is an ENUMERATOR added in glib 2.74, documented
  * as "no special behaviour" and defined as 0. Ubuntu 22.04 ships glib
@@ -390,6 +407,7 @@ static inline void npp_fc_set_filename(GtkFileChooser *c, const char *path)
  * Compiled ONLY against pre-4.10 GTK headers; the primary 24.04+ builds
  * (GTK 4.14) discard this whole block in the preprocessor, so it cannot
  * affect them. */
+#ifndef NPP_TUI
 #if !GTK_CHECK_VERSION(4, 10, 0)
 /* gtk_search_entry_set_placeholder_text() is 4.10 — set it on the
  * entry's internal GtkText child (NOT the first child: that can be the
@@ -405,5 +423,6 @@ static inline void npp_search_entry_placeholder(GtkWidget *entry,
         }
 }
 #endif
+#endif /* !NPP_TUI */
 
 #endif /* GTK_COMPAT_H */

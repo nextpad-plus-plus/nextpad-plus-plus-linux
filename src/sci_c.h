@@ -20,7 +20,11 @@
 #ifndef SCI_C_H
 #define SCI_C_H
 
+#ifdef NPP_TUI
+#include "gtk_compat.h"   /* headless seam: GtkWidget is an opaque void */
+#else
 #include <gtk/gtk.h>
+#endif
 #include "sci_messages.h"
 #include "sci_backend.h"
 

@@ -1,7 +1,11 @@
 #ifndef PREFS_H
 #define PREFS_H
 
+#ifdef NPP_TUI
+#include "gtk_compat.h"   /* headless seam: GtkWidget is an opaque void */
+#else
 #include <gtk/gtk.h>
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Auto-indent modes — values match macOS kPrefAutoIndent so the same

@@ -319,3 +319,16 @@ install(FILES packaging/apparmor/nextpad-plus-plus
 install(DIRECTORY resources/icons/hicolor/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor
         FILES_MATCHING PATTERN "nextpad-plus-plus.*")
+
+# -----------------------------------------------------------------------------
+# Terminal editor (`npp`) — opt-in. Off by default so this configure produces
+# exactly the GUI's targets; ON builds tui/ (scintilla_curses, the ported
+# chrome, the headless npp_core through src/sci_backend.h's CURSES seam) and
+# registers the first ctest entries. See tui/CMakeLists.txt and docs/12 §8.
+# -----------------------------------------------------------------------------
+option(NPP_BUILD_TUI "Build the terminal editor (npp)" OFF)
+if(NPP_BUILD_TUI)
+    pkg_check_modules(NCURSESW REQUIRED ncursesw)   # Debian: adds -ltinfo
+    enable_testing()
+    add_subdirectory(tui)
+endif()

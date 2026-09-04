@@ -1,7 +1,11 @@
 #ifndef UDL_H
 #define UDL_H
 
+#ifdef NPP_TUI
+#include "gtk_compat.h"   /* headless seam: GtkWidget is an opaque void */
+#else
 #include <gtk/gtk.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

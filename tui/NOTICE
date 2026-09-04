@@ -1,0 +1,22 @@
+Nextpad++ terminal frontend (tui/) — third-party notices
+=========================================================
+
+Scinterm 5.5 (tui/scinterm/)
+  Copyright (c) Mitchell. MIT license (tui/scinterm/LICENSE).
+  https://github.com/orbitalquark/scinterm
+
+Fresh (reference and ported code)
+  Copyright (c) Noam Lewis. GPL-2.0 with a Nextpad++-specific provision in
+  Fresh's LICENSE ("PROVISIONS / 01. NEXTPAD++"):
+    "Permission explicitly granted to Nextpad++ to read and adapt the Fresh
+     notepad code to work with Nextpad++."
+  https://github.com/sinelaw/fresh
+  Modules ported (to C++/ObjC++; no Fresh code is linked) are listed in
+  docs/tui/fresh-port-inventory.md and each ported file carries the header
+  below.
+
+Header template for every file ported from Fresh:
+  // Adapted from Fresh (<path in the Fresh repo>, v0.4.10) by <author of this
+  // port>, under the Nextpad++ provision in Fresh's LICENSE ("Permission
+  // explicitly granted to Nextpad++ to read and adapt the Fresh notepad code
+  // to work with Nextpad++"). Original copyright (c) Noam Lewis.
