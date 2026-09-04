@@ -1134,8 +1134,21 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
     /* UI visibility queries / setters — all stub-OK */
     case NPPM_HIDETABBAR:        return 1;
     case NPPM_ISTABBARHIDDEN:    return 0;
-    case NPPM_HIDETOOLBAR:       return 1;
-    case NPPM_ISTOOLBARHIDDEN:   return 0;
+    /* GAP-170 — toolbar visibility (macOS 5c876f1). Backed by
+     * g_prefs.show_toolbar — the same pref Preferences ▸ Toolbar ▸ Hide
+     * drives, so plugin and user changes stay in sync and persist.
+     * Returns the OLD visible state, matching NppBigSwitch. */
+    case NPPM_HIDETOOLBAR: {
+        gboolean was_visible = g_prefs.show_toolbar;
+        gboolean hide = (lParam != 0);
+        if (hide == was_visible) {          /* state actually changes */
+            g_prefs.show_toolbar = !hide;
+            main_chrome_update();
+            prefs_save();
+        }
+        return was_visible;
+    }
+    case NPPM_ISTOOLBARHIDDEN:   return !g_prefs.show_toolbar;
     case NPPM_HIDESTATUSBAR:     return 1;
     case NPPM_ISSTATUSBARHIDDEN: return 0;
     /* Plugin-writable status-bar text. macOS b5b73b2 gives plugins one

@@ -206,6 +206,7 @@ void main_apply_view_symbols(GtkWidget *sci); /* apply margin widths to one sci 
 void main_doclist_refresh(void);              /* rebuild Document List panel */
 void main_do_print(void);                     /* straight to default printer (Print Now) */
 void main_do_print_dialog(void);              /* show the system print dialog */
+void main_chrome_update(void);                /* GAP-170 — recompute toolbar/status/tab/menu chrome */
 
 /* Open a file (or switch to it if already open) then jump to a 1-based line. */
 void   editor_open_and_goto(const char *path, int line);

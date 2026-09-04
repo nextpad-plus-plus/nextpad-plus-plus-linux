@@ -2570,8 +2570,13 @@ static void chrome_update(void) {
     gboolean postit = GPOINTER_TO_INT(g_object_get_data(w, "npp-postit"));
     gboolean dfree  = GPOINTER_TO_INT(g_object_get_data(w, "npp-dfree"));
     gboolean hide = postit || dfree;
+    /* GAP-170 — Preferences ▸ Toolbar ▸ Hide: the modes hide, and the
+     * restore follows the pref (macOS 5c876f1 replaced its captured
+     * snapshots with kPrefShowToolbar so a change made while in a mode
+     * wins on exit). */
     if (g_toolbar_widget)
-        gtk_widget_set_visible(g_toolbar_widget, !hide);
+        gtk_widget_set_visible(g_toolbar_widget,
+                               !hide && g_prefs.show_toolbar);
     if (g_statusbar_widget)
         gtk_widget_set_visible(g_statusbar_widget,
                                hide ? FALSE : g_prefs.show_status_bar);
@@ -2579,6 +2584,10 @@ static void chrome_update(void) {
     if (g_menubar_hide_ref)
         gtk_widget_set_visible(g_menubar_hide_ref, !dfree);
 }
+
+/* GAP-170 — prefs.c (Toolbar ▸ Hide) and plugin.c (NPPM_HIDETOOLBAR)
+ * apply a toolbar-visibility change through the same chrome recompute. */
+void main_chrome_update(void) { chrome_update(); }
 
 /* View → Distraction Free (macOS toggleDistractionFreeMode): fullscreen
  * + toolbar/status/tab/menu chrome hidden; restore honours prefs. */
@@ -9332,6 +9341,10 @@ static void build_main_window(GtkApplication *app)
     /* P3 — initial status bar visibility from pref. */
     if (statusbar && !g_prefs.show_status_bar)
         gtk_widget_hide(statusbar);
+    /* GAP-170 — initial toolbar visibility from Preferences ▸ Toolbar ▸
+     * Hide (macOS applies kPrefShowToolbar in buildToolbar). */
+    if (g_toolbar_widget && !g_prefs.show_toolbar)
+        gtk_widget_hide(g_toolbar_widget);
 
     /* P10 — apply persisted workspace roots. Reveal the panel if any
      * roots were loaded so the user can see their workspace immediately. */

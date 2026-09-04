@@ -159,6 +159,7 @@ NppPrefs g_prefs = {
     .show_status_bar         = TRUE,
     .copy_line_no_selection  = TRUE,
     .toolbar_icon_scale      = 3,    /* 100 % — matches macOS default */
+    .show_toolbar            = TRUE, /* GAP-170 — Toolbar ▸ Hide off */
     .remember_session        = TRUE,
     .keep_absent_session     = FALSE,
     .panel_keep_state        = TRUE,
@@ -551,6 +552,7 @@ static void apply_attr(const char *group, const char *attr, const char *val)
     }
     else if (!strcmp(group, "NppToolbar")) {
         if      (!strcmp(attr, "iconSetSize"))        g_prefs.toolbar_icon_scale     = atoi(val);
+        else if (!strcmp(attr, "hide"))               g_prefs.show_toolbar           = !is_yes(val);   /* GAP-170 */
     }
     else if (!strcmp(group, "SearchEngine")) {
         if      (!strcmp(attr, "url")) {
@@ -1042,8 +1044,8 @@ g_prefs.tab_max_label_width,
         b2yn(g_prefs.large_file_allow_url_click));
 
     g_string_append_printf(b,
-        "        <GUIConfig name=\"NppToolbar\" iconSetSize=\"%d\" />\n",
-        g_prefs.toolbar_icon_scale);
+        "        <GUIConfig name=\"NppToolbar\" iconSetSize=\"%d\" hide=\"%s\" />\n",
+        g_prefs.toolbar_icon_scale, b2yn(!g_prefs.show_toolbar));   /* GAP-170 */
 
     gchar *se_esc = g_markup_escape_text(g_prefs.search_engine_url, -1);
     g_string_append_printf(b,
@@ -1148,12 +1150,14 @@ void main_refresh_title(void);
 void statusbar_set_visible(gboolean v);   /* defined in statusbar.c */
 void toolbar_apply_icon_scale(int scale); /* may be stubbed */
 void toolbar_refresh_icon_sizes(void);    /* may be stubbed */
+void main_chrome_update(void);            /* GAP-170 — main.c chrome_update */
 
 /* Weak/optional hooks — provide stubs so the .c builds even when the
  * matching subsystem is not linked yet. */
 __attribute__((weak)) void statusbar_set_visible(gboolean v)   { (void)v; }
 __attribute__((weak)) void toolbar_apply_icon_scale(int scale) { (void)scale; }
 __attribute__((weak)) void toolbar_refresh_icon_sizes(void)    {}
+__attribute__((weak)) void main_chrome_update(void)            {}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -2209,6 +2213,18 @@ static void on_tbc_standard(GtkToggleButton *b, gpointer u)
     toolbar_live_apply();
 }
 
+/* GAP-170 — Preferences ▸ Toolbar ▸ Hide (macOS 5c876f1, tag 905).
+ * The checkbox reads "Hide", so checked means NOT shown; the live apply
+ * goes through main.c's chrome_update so Post-It / Distraction Free
+ * keep precedence and restore from the pref on exit. */
+static void on_toolbar_hide(GtkToggleButton *b, gpointer u)
+{
+    (void)u;
+    g_prefs.show_toolbar = !gtk_toggle_button_get_active(b);
+    main_chrome_update();
+    prefs_save();
+}
+
 static GtkWidget *page_toolbar(void)
 {
     GtkWidget *g = make_grid();
@@ -2269,6 +2285,10 @@ static GtkWidget *page_toolbar(void)
                g_prefs.toolbar_color_plugins, G_CALLBACK(on_tbc_plugins));
     make_check(g, r++, "Standard icons (mode-agnostic classic set)",
                g_prefs.toolbar_standard_icons, G_CALLBACK(on_tbc_standard));
+    /* GAP-170 — same "Hide" as Windows Preferences ▸ Toolbar (string id
+     * 6102, so every shipped localization translates it). Last row. */
+    make_check(g, r++, "Hide", !g_prefs.show_toolbar,
+               G_CALLBACK(on_toolbar_hide));
     return g;
 }
 

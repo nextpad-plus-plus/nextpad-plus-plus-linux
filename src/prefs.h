@@ -180,6 +180,10 @@ typedef struct {
     char     toolbar_color_custom[8];/* "#RRGGBB" */
     gboolean toolbar_color_plugins;
     gboolean toolbar_standard_icons;
+    /* GAP-170 — Preferences ▸ Toolbar "Hide" (macOS 5c876f1
+     * kPrefShowToolbar, upstream string id 6102). Default TRUE;
+     * persisted as hide="yes|no" on the NppToolbar GUIConfig. */
+    gboolean show_toolbar;
 
     /* GAP-43 — Style Configurator Global override "Force ..." flags. */
     gboolean gov_fg, gov_bg, gov_font, gov_font_size;
