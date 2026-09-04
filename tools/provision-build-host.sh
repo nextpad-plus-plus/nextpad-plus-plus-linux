@@ -79,6 +79,7 @@ echo "── Installing toolchain + dependencies"
 sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     build-essential cmake pkg-config \
     libgtk-4-dev libadwaita-1-dev libglib2.0-dev libuchardet-dev libxml2-dev \
+    libncurses-dev \
     git rsync rpm \
     xvfb xdotool imagemagick dbus-x11
 

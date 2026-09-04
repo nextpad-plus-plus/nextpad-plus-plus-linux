@@ -1,0 +1,123 @@
+.TH NPP 1 "2026-09-04" "1.1.1" "User Commands"
+.SH NAME
+npp \- Nextpad++ terminal editor
+.SH SYNOPSIS
+.B npp
+.RI [ FILE ...]
+.br
+.B npp \-
+.br
+.B npp \-g
+.RI [ FILE ...]
+.br
+.B npp \-\-cmd config
+.RB { show | paths }
+.br
+.B npp \-\-list\-commands
+.br
+.B npp \-\-version
+|
+.B \-\-help
+.SH DESCRIPTION
+.B npp
+is the terminal face of Nextpad++: the same Scintilla/Lexilla engine, the
+same syntax highlighting (built-in languages and User Defined Languages),
+the same themes, and the same settings directory as the graphical
+.BR nextpad-plus-plus (1),
+rendered as cells in a terminal so it works over SSH and inside tmux.
+It shares nothing with the GUI at run time except files: themes,
+langs, UDLs, function-list parsers and
+.I config.xml
+are read from the common settings directory, and editor preferences
+(tab width, word wrap, indent guides, whitespace/EOL display, edge column,
+the active theme) are mirrored live whenever the GUI saves them.
+.SH OPTIONS
+.TP
+.I FILE ...
+Open the files. A trailing
+.BI : LINE [: COL ]
+positions the caret; classic
+.BI \-n LINE
+and
+.BI \-c COL
+flags are accepted as well.
+.TP
+.B \-
+Read the initial buffer from standard input.
+.TP
+.BR \-g ", " \-\-gui
+Hand the files to the graphical Nextpad++ instead (no effect over SSH).
+.TP
+.BI \-settingsDir= DIR
+Use
+.I DIR
+as the settings directory instead of the default.
+.TP
+.B \-\-list\-commands
+Print the command table (name and key binding) and exit.
+.TP
+.B \-\-cmd config show
+Print the resolved configuration; 
+.B \-\-cmd config paths
+prints the directories in use.
+.SH KEYS
+.TP
+.B ^P
+Command palette (fuzzy search over every command).
+.TP
+.B F10
+Menu bar (File, Edit, Search, View, Encoding, Language).
+.TP
+.B ^L
+Buffers list; 
+.B F1
+key-bindings card.
+.TP
+.BR ^S ", " ^Q
+Save; quit. Unsaved changes survive a quit (hot exit) and are restored on
+the next launch.
+.TP
+.BR ^C ", " ^X ", " ^V
+Copy, cut, paste. Copies go to the terminal via OSC 52 (works over SSH in
+kitty, foot, WezTerm, Ghostty and others); locally
+.BR wl-copy / wl-paste
+or
+.B xclip
+are used when present.
+.SH ENVIRONMENT
+.TP
+.B NPP_TUI_COLOR_MODE
+Force
+.BR truecolor ", " 256 " or " 16
+colours instead of detecting from
+.BR COLORTERM / TERM .
+.TP
+.B NPP_TUI_THEME
+Path of a stylers.xml to use instead of the GUI's active theme.
+.TP
+.B NPP_TUI_GUI_CONFIG
+Path of the GUI
+.I config.xml
+to mirror (default: the shared settings directory).
+.TP
+.B NPP_TUI_NO_CLIPBOARD
+Disable the system clipboard bridge (OSC 52 and local tools).
+.SH REMOTE USE
+Run
+.B ssh \-t host npp FILE
+for a one-shot session. Set
+.B TERM=xterm-256color
+if the remote terminfo lacks your terminal's entry, and forward
+.B COLORTERM
+(ssh
+.BR SendEnv / AcceptEnv )
+for truecolor. Inside tmux truecolor needs tmux's own RGB passthrough.
+.SH FILES
+.TP
+.I ~/.local/share/nextpad++/config.xml
+GUI preferences, mirrored live.
+.TP
+.I ~/.local/share/nextpad++/tui-session.xml
+The terminal editor's own session (never shared with the GUI).
+.SH SEE ALSO
+.BR nextpad-plus-plus (1)

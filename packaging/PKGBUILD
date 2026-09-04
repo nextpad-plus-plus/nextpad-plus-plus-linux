@@ -37,14 +37,16 @@ license=('GPL-3.0-or-later')
 #
 # hicolor-icon-theme owns the /usr/share/icons/hicolor tree this package
 # installs its app icons into (standard Arch practice for that reason).
-depends=('gtk4' 'glib2' 'uchardet' 'libxml2' 'libx11' 'curl' 'gcc-libs' 'glibc'
+depends=('gtk4' 'glib2' 'uchardet' 'libxml2' 'libx11' 'curl' 'gcc-libs' 'glibc' 'ncurses'
          'hicolor-icon-theme')
 # glib2-devel supplies glib-genmarshal and glib-mkenums, which Scintilla's
 # GTK4 makefile runs to generate its marshallers and enum tables. Arch splits
 # those tools out of glib2; Debian ships them inside libglib2.0-dev, which is
 # why nothing in the .deb recipe names them.
 makedepends=('cmake' 'pkgconf' 'libadwaita' 'glib2-devel')
-optdepends=('unzip: Plugins Admin archive extraction'
+optdepends=('wl-clipboard: npp terminal editor clipboard on Wayland'
+            'xclip: npp terminal editor clipboard on X11'
+            'unzip: Plugins Admin archive extraction'
             'git: Git side panel')
 
 # Admin-editable AppArmor profile — keep local edits across upgrades.
@@ -91,7 +93,8 @@ build() {
     cmake -B build-arch -S . \
         -DCMAKE_BUILD_TYPE=Release \
         -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
-        -DCMAKE_INSTALL_PREFIX=/usr
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DNPP_BUILD_TUI=ON
     cmake --build build-arch -j"$jobs"
 }
 

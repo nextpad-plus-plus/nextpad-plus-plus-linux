@@ -79,12 +79,16 @@ parts:
       - pkg-config
       - libuchardet-dev
       - libxml2-dev        # Paste with Hyperlinks (offline HTML parse)
+      - libncurses-dev     # npp terminal editor
     stage-packages:
       - curl               # pluginsadmin/updatecheck/udladmin spawn `curl`
       - unzip              # Plugins Admin archive extraction
       - git                # Git side panel
       - libuchardet0
       - libxml2
+      - libncursesw6
+      - libtinfo6
+      - xclip              # npp clipboard bridge on X11 (OSC 52 elsewhere)
     override-build: |
       craftctl set version="$(sed -n 's/#define APP_VERSION *"\(.*\)"/\1/p' src/branding.h)"
       # Memory-aware job cap (same 500 MB/job rule as tools/make-*.sh).
@@ -102,7 +106,8 @@ parts:
       cmake -B build-snap -S . \
             -DCMAKE_BUILD_TYPE=Release \
             -DNPP_RES_DIR=/snap/nextpad/current/usr/share/nextpad-plus-plus \
-            -DCMAKE_INSTALL_PREFIX=/usr
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DNPP_BUILD_TUI=ON
       cmake --build build-snap -j"$JOBS"
       DESTDIR="$CRAFT_PART_INSTALL" cmake --install build-snap
       # Snap app commands may not contain '+' — expose the binary under a
@@ -116,6 +121,12 @@ parts:
       - -etc/apparmor.d    # deb-only: WebKit userns profile, meaningless in a snap
 
 apps:
+  npp:
+    # The terminal editor — same config dir as the GUI (home plug).
+    command: usr/bin/npp
+    plugs:
+      - home
+      - removable-media
   nextpad:
     command: usr/bin/nextpad
     common-id: org.nextpad.NextpadPP

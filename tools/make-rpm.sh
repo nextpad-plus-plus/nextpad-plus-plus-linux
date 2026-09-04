@@ -51,7 +51,8 @@ echo "── Building Nextpad++ $VER ($ARCH, -j$JOBS)"
 cmake -B build-pkg -S . \
       -DCMAKE_BUILD_TYPE=Release \
       -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
-      -DCMAKE_INSTALL_PREFIX=/usr
+      -DCMAKE_INSTALL_PREFIX=/usr \
+      -DNPP_BUILD_TUI=ON
 cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null
 

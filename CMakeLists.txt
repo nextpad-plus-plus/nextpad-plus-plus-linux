@@ -331,4 +331,6 @@ if(NPP_BUILD_TUI)
     pkg_check_modules(NCURSESW REQUIRED ncursesw)   # Debian: adds -ltinfo
     enable_testing()
     add_subdirectory(tui)
+    install(FILES packaging/npp.1
+            DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 endif()
