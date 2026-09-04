@@ -13,6 +13,16 @@
 //   wordWrap/showIndentGuides/showWhitespace/showEOL/edgeColumn/edgeMode
 //                      ← <GUIConfig name="ScintillaPrimaryView" …>
 // FileWatch is pure POSIX and ports verbatim (st_mtimespec → st_mtim).
+// Phase 2a ADDITION (Linux-only, no macOS counterpart — main.mm's
+// Preferences popup wrote the defaults domain through CFPreferences):
+// SetGuiConfigAttr(configPath, guiConfigName, attr, value) is the config.xml
+// writer for the Preferences popup — read-modify-write of ONE attribute on
+// <GUIConfig name="guiConfigName" …/> (set if present, appended if not; the
+// group itself is created before </GUIConfigs> when missing, and a missing
+// file becomes a minimal <NotepadPlus><GUIConfigs/> document). Every other
+// byte of the file is preserved. Atomic via g_file_set_contents; false on
+// write failure. The value is XML-escaped; pass the file's own spellings
+// (size="8", replaceBySpace="no", Wrap="yes", whiteSpaceShow="show").
 
 // GUI↔TUI interop (Phase 4 "companion mode"): the two frontends share the
 // Nextpad++ user data dir and its config.xml, so the terminal editor can be
@@ -73,6 +83,11 @@ GuiEditorPrefs ParseGuiEditorPrefs(const GuiDefaults &defaults);
 // Read the GUI's config.xml at `configPath` (a fresh parse on every call, so
 // a long-running TUI sees values the GUI wrote after we launched).
 GuiEditorPrefs LoadGuiEditorPrefs(const std::string &configPath);
+
+// Set one attribute on <GUIConfig name="guiConfigName"> in the GUI's
+// config.xml (see the header comment). Additive Linux declaration, phase 2a.
+bool SetGuiConfigAttr(const std::string &configPath, const std::string &guiConfigName,
+                      const std::string &attr, const std::string &value);
 
 // Polls a fixed set of files by modification time. poll() returns the
 // indices whose mtime changed since construction / the previous poll —

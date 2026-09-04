@@ -156,21 +156,33 @@ target_link_libraries(npp_core PUBLIC
 )
 
 # -----------------------------------------------------------------------------
-# nextpad-tui (`npp`) — PHASE 2. Intended shape, from the macOS target with
-# the Linux replacements of docs/12 §8.3; enable once main.cpp and the five
-# shim/*.cpp bodies exist (their headers are the contract, see shim/*.h).
+# npp_tui_shim — PHASE 2a: the five Linux shim bodies behind shim/*.h
+# (docs/12 §8.3): theme (stylestore.c getters, Option B), session
+# (tui-session.xml via GMarkup), workspace (GMarkup + GDir), interop
+# (config.xml SAX + writer + FileWatch), funclist (flxml_scan adapter +
+# the hardcoded-regex fallback). Links npp_core; stylestore.o's Scintilla
+# apply paths resolve against scintilla_curses. No curses calls of its own.
 # -----------------------------------------------------------------------------
-# add_executable(nextpad-tui
-#     main.cpp
-#     shim/funclist.cpp      # adapter over src/funclist_xml.c flxml_scan
-#     shim/interop.cpp       # config.xml SAX + FileWatch (st_mtim)
-#     shim/session.cpp       # tui-session.xml via GMarkup, same keys
-#     shim/workspace.cpp     # GMarkup .workspace + GDir listing
-#     shim/theme.cpp         # GMarkup stylers.xml, or stylestore.c getters
-# )
+add_library(npp_tui_shim STATIC
+    shim/funclist.cpp      # adapter over src/funclist_xml.c flxml_scan (+ fallback)
+    shim/interop.cpp       # config.xml SAX + SetGuiConfigAttr + FileWatch (st_mtim)
+    shim/session.cpp       # tui-session.xml via GMarkup, same keys as the plist
+    shim/workspace.cpp     # GMarkup .workspace + GDir listing
+    shim/theme.cpp         # stylestore.c getters, theme.mm palette math verbatim
+)
+target_include_directories(npp_tui_shim PUBLIC "${TUI_DIR}")
+target_link_libraries(npp_tui_shim PUBLIC npp_core scintilla_curses)
+
+# -----------------------------------------------------------------------------
+# nextpad-tui (`npp`) — PHASE 2b. Intended shape, from the macOS target with
+# the Linux replacements of docs/12 §8.3; enable once main.cpp exists (the
+# shim bodies are npp_tui_shim above; their headers are the contract).
+# -----------------------------------------------------------------------------
+# add_executable(nextpad-tui main.cpp)
 # set_target_properties(nextpad-tui PROPERTIES OUTPUT_NAME npp)
 # target_compile_definitions(nextpad-tui PRIVATE _XOPEN_SOURCE_EXTENDED=1)
 # target_link_libraries(nextpad-tui PRIVATE
+#     npp_tui_shim        # shim/ funclist interop session workspace theme
 #     npp_tui_chrome      # chrome/ input/ scene/ term/ (+ npp_fuzzy)
 #     npp_core            # langsmgr encoding paths funclist_xml stylestore udl lexer
 #     scintilla_curses    # + ncursesw/tinfo
@@ -189,6 +201,15 @@ target_link_libraries(npp_core PUBLIC
 foreach(_t colorcaps modes palette panel popup scene screen vtparser)
     add_executable(${_t}-test tests/${_t}_test.cpp)
     target_link_libraries(${_t}-test PRIVATE npp_tui_chrome)
+    add_test(NAME tui.${_t} COMMAND ${_t}-test)
+endforeach()
+
+# Phase 2a — the shim suites (ports of the macOS theme/session/workspace/
+# interop/funclist tests, assertions preserved) over npp_tui_shim. The
+# theme and funclist suites also sweep this repo's resources/ (RESOURCES_DIR).
+foreach(_t theme session workspace interop funclist)
+    add_executable(${_t}-test tests/${_t}_test.cpp)
+    target_link_libraries(${_t}-test PRIVATE npp_tui_shim)
     add_test(NAME tui.${_t} COMMAND ${_t}-test)
 endforeach()
 
