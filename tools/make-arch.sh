@@ -5,7 +5,7 @@
 #   tools/make-arch.sh                 # build for THIS machine's architecture
 #   NPP_ARCH_REFRESH=1 tools/make-arch.sh   # re-pull Arch, rebuild builder image
 #
-# Output: Nextpad++v<VER>_<debarch>.pkg.tar.zst in the repo root, named like
+# Output: dist/Nextpad++v<VER>_<debarch>.pkg.tar.zst, named like
 # the .deb/.rpm so the download listing stays uniform. The metadata inside
 # keeps the canonical Arch identity (nextpad-plus-plus, x86_64/aarch64).
 #
@@ -64,8 +64,13 @@ if [ -n "${NPP_ARCH_REFRESH:-}" ] || ! "$OCI" image exists "$BUILDER_IMAGE" 2>/d
     # Empty build context on purpose: the Containerfile copies nothing, and
     # handing podman the repo root would upload the whole tree for nothing.
     CTX=$(mktemp -d /tmp/npp-arch-ctx-XXXXXX)
+    trap 'rm -rf "$CTX"' EXIT
     printf '%s\n' \
       "FROM $BASE_IMAGE" \
+      "# pacman >= 7 sandboxes downloads (Landlock + an unprivileged alpm" \
+      "# user). Rootless podman cannot grant either inside the container, so" \
+      "# -Syu dies with 'Landlock ruleset could not be applied'. Disable it." \
+      "RUN sed -i '/^\\[options\\]/a DisableSandbox' /etc/pacman.conf" \
       "RUN pacman -Syu --noconfirm && \\" \
       "    pacman -S --needed --noconfirm base-devel cmake pkgconf \\" \
       "        gtk4 libadwaita glib2 glib2-devel uchardet libx11 && \\" \
@@ -73,7 +78,7 @@ if [ -n "${NPP_ARCH_REFRESH:-}" ] || ! "$OCI" image exists "$BUILDER_IMAGE" 2>/d
       "# makepkg refuses to run as root, by design." \
       "RUN useradd -m builder" \
     | "$OCI" build -t "$BUILDER_IMAGE" -f - "$CTX" >/dev/null
-    rm -rf "$CTX"
+    rm -rf "$CTX"; trap - EXIT
     NEW_IMG=$("$OCI" image inspect --format '{{.Id}}' "$BUILDER_IMAGE")
     if [ -n "$OLD_IMG" ] && [ "$OLD_IMG" != "$NEW_IMG" ]; then
         "$OCI" rmi "$OLD_IMG" >/dev/null 2>&1 || true
@@ -114,7 +119,10 @@ echo "── Building Nextpad++ $VER in $BASE_IMAGE"
     chown -R builder:builder /work
     # --nodeps: dependencies are baked into the builder image, and makepkg
     # would otherwise try to install them as an unprivileged user.
-    su builder -c "cd /work && makepkg -f --noconfirm --nodeps --noprogressbar"
+    # PKGEXT: Arch proper defaults to .pkg.tar.zst but Arch Linux ARM still
+    # ships makepkg.conf with .pkg.tar.xz — pin it so both architectures
+    # produce the same format and the glob below finds the result.
+    su builder -c "cd /work && PKGEXT=.pkg.tar.zst makepkg -f --noconfirm --nodeps --noprogressbar"
     rc=$?
     # Hand the tree back to the invoking user, on the failure path too.
     # Under ROOTLESS podman the host user maps to container root, so
@@ -132,7 +140,8 @@ echo "── Building Nextpad++ $VER in $BASE_IMAGE"
 PKG=$(ls -t "$STAGE"/*.pkg.tar.zst 2>/dev/null | grep -v -- '-debug-' | head -1 || true)
 [ -n "$PKG" ] || { echo "makepkg produced no package" >&2; exit 1; }
 
-OUT="Nextpad++v${VER}_${DEBARCH}.pkg.tar.zst"
+mkdir -p "$ROOT/dist"   # all packaging scripts write to dist/ (see make-deb.sh)
+OUT="dist/Nextpad++v${VER}_${DEBARCH}.pkg.tar.zst"
 cp "$PKG" "$ROOT/$OUT"
 echo "── Built $OUT"
 

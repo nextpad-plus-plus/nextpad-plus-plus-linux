@@ -152,7 +152,8 @@ case "$ARCH" in
   x86_64)  DEBARCH=amd64 ;;
   *)       DEBARCH="$ARCH" ;;
 esac
-OUT="Nextpad++v${VER}_${DEBARCH}.rpm"
+mkdir -p dist   # all packaging scripts write to dist/ (see make-deb.sh)
+OUT="dist/Nextpad++v${VER}_${DEBARCH}.rpm"
 cp "$TOP/RPMS/$ARCH/"*.rpm "./$OUT"
 echo "── Built $OUT"
 rpm -qp --info "./$OUT" 2>/dev/null | sed -n '1,9p'

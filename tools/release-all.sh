@@ -46,19 +46,17 @@ echo
 echo "══ LOCAL ($(uname -m))"
 ./tools/make-deb.sh > /tmp/npp-rel-deb.log 2>&1 \
     || { echo "  deb FAILED — see /tmp/npp-rel-deb.log"; tail -15 /tmp/npp-rel-deb.log; exit 1; }
-echo "  ✓ $(ls -t Nextpad++v${VER}_*.deb | head -1)"
+echo "  ✓ $(ls -t "$DIST"/Nextpad++v${VER}_*.deb | head -1)"
 ./tools/make-rpm.sh > /tmp/npp-rel-rpm.log 2>&1 \
     || { echo "  rpm FAILED — see /tmp/npp-rel-rpm.log"; tail -15 /tmp/npp-rel-rpm.log; exit 1; }
-echo "  ✓ $(ls -t Nextpad++v${VER}_*.rpm | head -1)"
+echo "  ✓ $(ls -t "$DIST"/Nextpad++v${VER}_*.rpm | head -1)"
 if command -v podman >/dev/null 2>&1; then
     ./tools/make-arch.sh > /tmp/npp-rel-arch.log 2>&1 \
         || { echo "  arch FAILED — see /tmp/npp-rel-arch.log"; tail -15 /tmp/npp-rel-arch.log; exit 1; }
-    echo "  ✓ $(ls -t Nextpad++v${VER}_*.pkg.tar.zst | head -1)"
+    echo "  ✓ $(ls -t "$DIST"/Nextpad++v${VER}_*.pkg.tar.zst | head -1)"
 else
     echo "  – arch skipped (no podman on this host)"
 fi
-mv -f Nextpad++v${VER}_*.deb Nextpad++v${VER}_*.rpm "$DIST/" 2>/dev/null || true
-mv -f Nextpad++v${VER}_*.pkg.tar.zst "$DIST/" 2>/dev/null || true
 
 # ── remote architectures ────────────────────────────────────────────────
 REMOTE_PATH=/home/ubuntu/development/npp/nextpad-plus-plus-gtk4
@@ -90,11 +88,12 @@ for H in $REMOTES; do
            continue; }
 
     echo "  → fetching artifacts"
-    scp -q "$H:$REMOTE_PATH/Nextpad++v${VER}_*.deb" \
-           "$H:$REMOTE_PATH/Nextpad++v${VER}_*.rpm" "$DIST/" 2>/dev/null || true
-    scp -q "$H:$REMOTE_PATH/Nextpad++v${VER}_*.pkg.tar.zst" "$DIST/" 2>/dev/null || true
+    # The make-*.sh scripts write to dist/ on the remote too.
+    scp -q "$H:$REMOTE_PATH/dist/Nextpad++v${VER}_*.deb" \
+           "$H:$REMOTE_PATH/dist/Nextpad++v${VER}_*.rpm" "$DIST/" 2>/dev/null || true
+    scp -q "$H:$REMOTE_PATH/dist/Nextpad++v${VER}_*.pkg.tar.zst" "$DIST/" 2>/dev/null || true
     ssh -o BatchMode=yes "$H" \
-        "rm -f $REMOTE_PATH/*.deb $REMOTE_PATH/*.rpm $REMOTE_PATH/*.pkg.tar.zst" 2>/dev/null || true
+        "rm -f $REMOTE_PATH/dist/*.deb $REMOTE_PATH/dist/*.rpm $REMOTE_PATH/dist/*.pkg.tar.zst" 2>/dev/null || true
     echo "  ✓ done"
 done
 

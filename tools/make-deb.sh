@@ -133,7 +133,10 @@ EOF
 chmod 755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/prerm" "$STAGE/DEBIAN/postrm"
 chmod 644 "$STAGE/DEBIAN/conffiles"
 
-OUT="Nextpad++v${VER}_${ARCH}.deb"
+# Every packaging script writes to dist/ — the one place release artifacts
+# live, and what release-all.sh and the apt-repo kit read from.
+mkdir -p dist
+OUT="dist/Nextpad++v${VER}_${ARCH}.deb"
 dpkg-deb --root-owner-group --build "$STAGE" "$OUT"
 echo "── Built $OUT"
 dpkg-deb -I "$OUT" | sed -n '1,12p'
