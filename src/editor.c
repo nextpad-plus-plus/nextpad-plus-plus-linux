@@ -273,7 +273,8 @@ static int sci_page_num(GtkWidget *sci)
     return (nb && sw) ? gtk_notebook_page_num(nb, sw) : -1;
 }
 
-static void refresh_tab_label(int page);
+/* GAP-168 — keyed by the view, not by a primary-notebook page index. */
+static void refresh_tab_label_for(GtkWidget *sci);
 static void update_window_title(void);
 
 /* ------------------------------------------------------------------ */
@@ -349,8 +350,7 @@ static gboolean reload_doc_from_disk_with_enc(NppDoc *doc,
     lexer_apply_from_path(doc->sci, doc->filepath);
     gitgutter_update(doc->sci, doc->filepath);
 
-    int page = sci_page_num(doc->sci);
-    refresh_tab_label(page);
+    refresh_tab_label_for(doc->sci);
     statusbar_update_from_sci(doc->sci);
     return TRUE;
 }
@@ -590,7 +590,28 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
     int n = ctxmenu_append_scintilla(menu, app);
     if (s_rc_debug)
         g_message("[rc] built %d items", n);
-    npp_menu_popup_at(menu, w, x, y);
+    /* GAP-169 (GH #3, Fedora 44 / GTK 4.22) — parent the popover to the
+     * TOPLEVEL, exactly like the tab context menu below. ScintillaView is
+     * a custom GtkScrollable that never calls gtk_popover_present() for
+     * foreign popovers; GTK ≥ 4.19 documents that a popover's parent
+     * "must support popover children" and 4.21/4.22 reworked gesture
+     * denial across phases — a popover hung off the editor widget is the
+     * one thing here that violates the documented contract. Translate the
+     * click into window space so it anchors at the same point. */
+    GtkWidget *popover_parent = w;
+    double px = x, py = y;
+    {
+        GtkRoot *root_widget = gtk_widget_get_root(w);
+        if (root_widget) {
+            graphene_point_t in = GRAPHENE_POINT_INIT((float)x, (float)y);
+            graphene_point_t out;
+            if (gtk_widget_compute_point(w, GTK_WIDGET(root_widget), &in, &out)) {
+                popover_parent = GTK_WIDGET(root_widget);
+                px = out.x; py = out.y;
+            }
+        }
+    }
+    npp_menu_popup_at(menu, popover_parent, px, py);
 }
 
 /* Editor zoom — Ctrl +/-/0 on the focused editor. A key controller (not a
@@ -1908,10 +1929,7 @@ void editor_refresh_all_tab_labels(void)
     GPtrArray *docs = editor_all_docs();
     for (guint i = 0; i < docs->len; i++) {
         NppDoc *d = g_ptr_array_index(docs, i);
-        if (d && d->sci) {
-            int page = sci_page_num(d->sci);
-            if (page >= 0) refresh_tab_label(page);
-        }
+        if (d && d->sci) refresh_tab_label_for(d->sci);
     }
     g_ptr_array_free(docs, TRUE);
 }
@@ -2034,9 +2052,15 @@ static GtkWidget *make_tab_label(NppDoc *doc, GtkWidget *sci)
     return box;
 }
 
-static void refresh_tab_label(int page)
+/* GAP-168 (macOS 7d72ca2 #321) — refresh THIS view's tab label. The old
+ * page-indexed version resolved the index against the PRIMARY notebook,
+ * while every caller passed the index inside the view's OWN notebook, so
+ * a doc in a split view repainted the primary's tab at the same index
+ * (wrong doc, or nothing) and its own label stayed stale — the modified
+ * floppy after Save/edit, Save-As names, renames. The label widgets are
+ * stored per-sci, so no notebook lookup is needed at all. */
+static void refresh_tab_label_for(GtkWidget *sci)
 {
-    GtkWidget *sci = sci_of_page(page);
     if (!sci) return;
     NppDoc *doc = doc_of_sci(sci);
     GtkWidget *label = g_object_get_data(G_OBJECT(sci), "tab-label");
@@ -2722,16 +2746,14 @@ static void on_sci_notify(GtkWidget *sci, SCNotification *n, gpointer data)
         backup_clean(doc);
         /* GAP-42: native change history converts modified→saved on the
          * savepoint itself — no manual marker conversion needed. */
-        int page = sci_page_num(sci);
-        refresh_tab_label(page);
+        refresh_tab_label_for(sci);
         update_window_title();
         /* The Document List panel mirrors the tab's saved/modified
          * floppy — refresh it from the same trigger. */
         main_doclist_refresh();
     } else if (code == SCN_SAVEPOINTLEFT) {
         doc->modified = TRUE;
-        int page = sci_page_num(sci);
-        refresh_tab_label(page);
+        refresh_tab_label_for(sci);
         update_window_title();
         main_doclist_refresh();
     } else if (code == SCN_UPDATEUI) {
@@ -3649,7 +3671,7 @@ gboolean editor_open_path(const char *path)
         main_sync_language_menu(nl ? nl : "");
     }
 
-    refresh_tab_label(page);
+    refresh_tab_label_for(sci);
     gtk_notebook_set_current_page(GTK_NOTEBOOK(s_notebook), page);
     update_window_title();
     statusbar_update_from_sci(sci);
@@ -3739,6 +3761,22 @@ static gboolean save_doc_to_path(NppDoc *doc, const char *path)
         gchar *adopted = g_strdup(path);
         g_free(doc->filepath);
         doc->filepath = adopted;
+        /* GAP-168 — clone siblings (views sharing this Scintilla document,
+         * editor_clone_to_view) copied the path at clone time; macOS
+         * saveToPath: pushes the new path to cloneSibling, so its tab and
+         * title follow the Save-As instead of keeping the old name. */
+        sptr_t mine = sci_msg(doc->sci, SCI_GETDOCPOINTER, 0, 0);
+        GPtrArray *all = editor_all_docs();
+        for (guint i = 0; i < all->len; i++) {
+            NppDoc *o = g_ptr_array_index(all, i);
+            if (!o || o == doc || !o->sci) continue;
+            if (sci_msg(o->sci, SCI_GETDOCPOINTER, 0, 0) != mine) continue;
+            g_free(o->filepath);
+            o->filepath  = g_strdup(path);
+            o->new_index = 0;
+            refresh_tab_label_for(o->sci);
+        }
+        g_ptr_array_free(all, TRUE);
     }
     sci_msg(doc->sci, SCI_SETSAVEPOINT, 0, 0);
     /* GAP-93 — re-detect the language when the extension changed (Save
@@ -3826,7 +3864,7 @@ static gboolean save_as_dialog_for(NppDoc *doc)
              * NPPN_FILESAVED fires — macOS ordering). */
             doc->new_index = 0;
             filewatch_start(doc);
-            refresh_tab_label(sci_page_num(doc->sci));
+            refresh_tab_label_for(doc->sci);
             update_window_title();
             main_recent_file_add(path);
             main_doclist_refresh();
@@ -3855,7 +3893,7 @@ void editor_mark_dirty(NppDoc *doc)
 {
     if (!doc) return;
     doc->modified = TRUE;
-    if (doc->sci) refresh_tab_label(sci_page_num(doc->sci));
+    if (doc->sci) refresh_tab_label_for(doc->sci);
     update_window_title();
     main_doclist_refresh();
 }
@@ -5084,7 +5122,7 @@ gboolean editor_rename(void)
             if (nn && *nn && g_strcmp0(nn, cur) != 0) {
                 g_free(doc->custom_name);
                 doc->custom_name = g_strdup(nn);
-                refresh_tab_label(editor_current_page());
+                refresh_tab_label_for(doc->sci);
                 update_window_title();
                 main_doclist_refresh();
                 renamed = TRUE;
@@ -5132,7 +5170,7 @@ gboolean editor_rename(void)
                 g_free(doc->filepath);
                 doc->filepath = new_path;
                 filewatch_start(doc);
-                refresh_tab_label(editor_current_page());
+                refresh_tab_label_for(doc->sci);
                 update_window_title();
                 main_recent_file_add(new_path);
                 main_doclist_refresh();

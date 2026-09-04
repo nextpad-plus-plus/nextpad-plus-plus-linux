@@ -292,7 +292,8 @@ static gboolean teardown_idle(gpointer ud)
 
 static void on_popover_closed(GtkPopover *p, gpointer ud)
 {
-    (void)p;
+    if (g_getenv("NPP_RC_DEBUG"))
+        g_message("[rc] popover closed (%s)", G_OBJECT_TYPE_NAME(p));
     /* Defer to idle so we don't tear down inside the closed-signal
      * emission — GTK's per-window popover list walks during cleanup
      * would otherwise hit a stale entry. Priority HIGH keeps the
@@ -385,6 +386,14 @@ void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
     gtk_widget_set_parent(root->popover, anchor);
     popover_fix_height(root->popover, root);
     gtk_popover_popup(GTK_POPOVER(root->popover));
+    /* GAP-169 — NPP_RC_DEBUG=1: did the surface actually come up? A
+     * "popup ... mapped=0" line, or a "closed" line right after it, is
+     * the signature of a compositor refusing the popup grab. */
+    if (g_getenv("NPP_RC_DEBUG"))
+        g_message("[rc] popup on %s at (%g,%g) mapped=%d visible=%d",
+                  G_OBJECT_TYPE_NAME(anchor), x, y,
+                  gtk_widget_get_mapped(root->popover),
+                  gtk_widget_get_visible(root->popover));
 }
 
 void npp_menu_popup_at_widget(NppMenu *m, GtkWidget *anchor)

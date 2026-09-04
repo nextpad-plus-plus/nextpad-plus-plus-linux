@@ -27,6 +27,9 @@ void shortcutmap_apply_sci_overrides(GtkWidget *sci);
  * app.plugin-check-<cmdID> actions — call once at startup, after
  * plugin_load_all(). */
 void shortcutmap_apply_plugin_accels(void);
+/* GAP-167 — replay stored <InternalCommands> overrides; call AFTER the
+ * default accels are installed. */
+void shortcutmap_apply_main_accels(void);
 
 /* ── Legacy API kept for ABI compatibility ─────────────────────────────── */
 

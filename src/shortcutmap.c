@@ -657,6 +657,48 @@ void shortcutmap_apply_plugin_accels(void)
     g_free(x.current_cmd_name);
 }
 
+/* GAP-167 — bind the stored <InternalCommands> (main-menu) overrides at
+ * startup. The mapper's Save pushed them live (push_live_accels) and wrote
+ * them to shortcuts.xml, but nothing replayed them on the next launch —
+ * only macros and plugin keys were — so a remapped main-menu shortcut
+ * silently reverted to the default after a restart (the inverse of macOS
+ * #265, fixed by NppApplyShortcutToMenuItem applying one table at launch
+ * and on save). Call AFTER the default set_accel() block in main.c, since
+ * an override must win over the default. Key="0" rows unbind. */
+void shortcutmap_apply_main_accels(void)
+{
+    GApplication *gapp = g_application_get_default();
+    if (!GTK_IS_APPLICATION(gapp)) return;
+    GtkApplication *app = GTK_APPLICATION(gapp);
+
+    XmlCtx x = {0};
+    x.macros  = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.runcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.plugins = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.intcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x.sci_over = g_hash_table_new_full(g_direct_hash, g_direct_equal,
+                                       NULL, shortcut_row_free);
+    load_shortcuts_xml(&x);
+
+    for (guint i = 0; i < x.intcmds->len; i++) {
+        ShortcutRow *r = g_ptr_array_index(x.intcmds, i);
+        if (!r->action_id || !*r->action_id) continue;
+        gchar *acc = gtk_accel_string_for_row(r);   /* NULL when Key=0 */
+        const gchar *accels[2] = { acc, NULL };
+        gtk_application_set_accels_for_action(app, r->action_id,
+            acc ? accels : (const gchar *[]){ NULL });
+        g_free(acc);
+    }
+
+    g_ptr_array_free(x.macros,  TRUE);
+    g_ptr_array_free(x.runcmds, TRUE);
+    g_ptr_array_free(x.plugins, TRUE);
+    g_ptr_array_free(x.intcmds, TRUE);
+    g_hash_table_destroy(x.sci_over);
+    if (x.current_cmd_text) g_string_free(x.current_cmd_text, TRUE);
+    g_free(x.current_cmd_name);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════ */
 /*  Loaders for each tab                                                   */
 /* ═══════════════════════════════════════════════════════════════════════ */

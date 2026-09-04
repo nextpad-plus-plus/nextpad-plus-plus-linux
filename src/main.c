@@ -9629,6 +9629,10 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.wikipedia-search",     "<Alt>F3");
     set_accel(app, "app.open-in-new-instance", "<Alt>F6");
     set_accel(app, "app.new-window",           "<Primary><Shift>n");
+    /* GAP-167 — user overrides from shortcuts.xml <InternalCommands> win
+     * over the defaults above (they were pushed live by the mapper but
+     * never replayed at launch). */
+    shortcutmap_apply_main_accels();
 
     /* Menu bar — keep the English model (g_menu_english) for the context-
      * menu index and for live retranslation; the app menubar itself uses a
