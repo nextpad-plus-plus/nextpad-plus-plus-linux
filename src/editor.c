@@ -590,6 +590,16 @@ static void filewatch_stop(NppDoc *doc)
  * Resolved once at process start; cost when off is one int compare. */
 static gboolean s_rc_debug = FALSE;
 
+static void editor_show_context_menu(GtkWidget *w, double x, double y);
+
+/* GH #3 — reopen hook: an outside right-click that dismissed the menu
+ * lands back in this view; show a fresh menu there (spell suggestions
+ * are position-dependent, so it is rebuilt, not re-shown). */
+static void ctx_menu_reopen(double x, double y, gpointer user)
+{
+    editor_show_context_menu(user, x, y);
+}
+
 static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
                                 double x, double y, gpointer d)
 {
@@ -608,7 +618,11 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
         g_message("[rc] press btn=%u npress=%d @(%g,%g) on %s",
                   btn, n_press, x, y, G_OBJECT_TYPE_NAME(w));
     }
+    editor_show_context_menu(w, x, y);
+}
 
+static void editor_show_context_menu(GtkWidget *w, double x, double y)
+{
     /* P5 — editor context menu from contextMenu.xml + spell suggestions.
      * NppMenu is now backed by GtkPopoverMenu, which handles xdg-popup
      * grab semantics correctly. Pop synchronously — no defer needed. */
@@ -618,6 +632,7 @@ static void on_sci_button_press(GtkGestureClick *gesture, int n_press,
     int n = ctxmenu_append_scintilla(menu, app);
     if (s_rc_debug)
         g_message("[rc] built %d items", n);
+    npp_menu_set_reopen(menu, w, ctx_menu_reopen, w);
     /* GAP-169 (GH #3, Fedora 44 / GTK 4.22) — parent the popover to the
      * TOPLEVEL, exactly like the tab context menu below. ScintillaView is
      * a custom GtkScrollable that never calls gtk_popover_present() for

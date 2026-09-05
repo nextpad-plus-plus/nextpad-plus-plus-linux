@@ -33,6 +33,20 @@ struct NppMenu {
     int                 next_id;     /* generates unique action names      */
     GSList             *subs;        /* every sub NppMenu, for free()      */
     GtkWidget          *popover;     /* GtkPopoverMenu, NULL until popup  */
+
+    /* GH #3 / macOS parity — reopen-on-outside-right-click. A right
+     * click while the menu is open is consumed by the popover's
+     * autohide (GTK closes the menu and swallows the press), so every
+     * other right-click "did nothing". macOS/Windows context menus
+     * dismiss AND reopen at the new spot. A capture-phase gesture on
+     * the popover spots the outside press, translates it into the
+     * anchor's coordinates, and the teardown idle calls the hook. */
+    GtkWidget          *anchor;      /* popup anchor (borrowed)           */
+    GtkWidget          *reopen_target; /* coords + bounds for the hook     */
+    void (*reopen_cb)(double x, double y, gpointer user);
+    gpointer            reopen_data;
+    double              reopen_x, reopen_y;
+    gboolean            reopen_pending;
 };
 
 /* ------------------------------------------------------------------ */
@@ -286,14 +300,64 @@ static void teardown_root(NppMenu *root)
 
 static gboolean teardown_idle(gpointer ud)
 {
-    teardown_root((NppMenu *)ud);
+    NppMenu *root = ud;
+    gboolean reopen = root->reopen_pending && root->reopen_cb;
+    void (*cb)(double, double, gpointer) = root->reopen_cb;
+    gpointer cbd = root->reopen_data;
+    double rx = root->reopen_x, ry = root->reopen_y;
+    teardown_root(root);
+    /* After the old menu is fully gone, open the new one where the
+     * dismissing right-click landed (macOS NSMenu behaviour). */
+    if (reopen) cb(rx, ry, cbd);
     return G_SOURCE_REMOVE;
+}
+
+/* GH #3 / macOS parity — decide at close time whether the dismissal was
+ * an outside RIGHT-click on the target widget. GTK consumes that press
+ * before any widget controller sees it (the popup grab dismissal is
+ * handled ahead of propagation — verified: a capture gesture on the
+ * popover never fires for it), so the only trace left is the live
+ * pointer state: at the moment "closed" is emitted the dismissing
+ * button is still physically down. Query the seat: button 3 held and
+ * the pointer inside the target ⇒ reopen there after teardown. */
+static void reopen_check(NppMenu *root)
+{
+    if (!root->reopen_cb || !root->reopen_target) return;
+    GtkNative *nat = gtk_widget_get_native(root->reopen_target);
+    if (!nat) return;
+    GdkSurface *surf = gtk_native_get_surface(nat);
+    GdkDisplay *dpy  = gtk_widget_get_display(root->reopen_target);
+    GdkSeat    *seat = dpy ? gdk_display_get_default_seat(dpy) : NULL;
+    GdkDevice  *ptr  = seat ? gdk_seat_get_pointer(seat) : NULL;
+    if (!surf || !ptr) return;
+    double sx = 0, sy = 0;
+    GdkModifierType mask = 0;
+    if (!gdk_surface_get_device_position(surf, ptr, &sx, &sy, &mask)) return;
+    if (!(mask & GDK_BUTTON3_MASK)) return;   /* Escape / item / left click */
+    /* Surface → native-widget coords (CSD shadow offset), then into the
+     * target widget. */
+    double ox = 0, oy = 0;
+    gtk_native_get_surface_transform(nat, &ox, &oy);
+    graphene_point_t in = GRAPHENE_POINT_INIT((float)(sx - ox), (float)(sy - oy));
+    graphene_point_t out;
+    if (!gtk_widget_compute_point(GTK_WIDGET(gtk_widget_get_root(root->reopen_target)),
+                                  root->reopen_target, &in, &out)) return;
+    if (out.x < 0 || out.y < 0 ||
+        out.x >= gtk_widget_get_width(root->reopen_target) ||
+        out.y >= gtk_widget_get_height(root->reopen_target)) return;
+    root->reopen_x = out.x;
+    root->reopen_y = out.y;
+    root->reopen_pending = TRUE;
+    if (g_getenv("NPP_RC_DEBUG"))
+        g_message("[rc] closed by outside right-click at (%g,%g) — reopening",
+                  out.x, out.y);
 }
 
 static void on_popover_closed(GtkPopover *p, gpointer ud)
 {
     if (g_getenv("NPP_RC_DEBUG"))
         g_message("[rc] popover closed (%s)", G_OBJECT_TYPE_NAME(p));
+    reopen_check((NppMenu *)ud);
     /* Defer to idle so we don't tear down inside the closed-signal
      * emission — GTK's per-window popover list walks during cleanup
      * would otherwise hit a stale entry. Priority HIGH keeps the
@@ -332,9 +396,56 @@ static void popover_fix_height(GtkWidget *pop, NppMenu *root)
                 if (rw && GTK_IS_WIDGET(rw)) {
                     int wh = gtk_widget_get_height(GTK_WIDGET(rw));
                     if (wh > 120 && want > wh - 60) want = wh - 60;
+                    /* GH #3 — this value becomes the popover's MINIMUM
+                     * height, and GDK constrains popups by flip-then-
+                     * RESIZE: when the minimum fits neither below nor
+                     * above the anchor, the popup surface is resized
+                     * BELOW the widget's minimum and GTK dismisses the
+                     * popover on map (traced: surface 445px vs min
+                     * 554px → closed 4ms after mapping). That killed
+                     * every tall context menu opened in a mid-window
+                     * band whose height depends on screen, window
+                     * position and menu length — the "right-click menu
+                     * randomly doesn't open" reports. Clamp the pin to
+                     * the space on the BEST side of the anchor so one
+                     * placement always fits; the menu scrolls there
+                     * instead of dying. */
+                    GtkWidget *par = gtk_widget_get_parent(pop);
+                    GdkRectangle pt;
+                    if (par && wh > 120) {
+                        if (!gtk_popover_get_pointing_to(GTK_POPOVER(pop), &pt)) {
+                            pt.x = 0; pt.y = 0;
+                            pt.width  = gtk_widget_get_width(par);
+                            pt.height = gtk_widget_get_height(par);
+                        }
+                        graphene_point_t tp, bp;
+                        graphene_point_t t_in = GRAPHENE_POINT_INIT(
+                            (float)pt.x, (float)pt.y);
+                        graphene_point_t b_in = GRAPHENE_POINT_INIT(
+                            (float)pt.x, (float)(pt.y + pt.height));
+                        if (gtk_widget_compute_point(par, GTK_WIDGET(rw), &t_in, &tp) &&
+                            gtk_widget_compute_point(par, GTK_WIDGET(rw), &b_in, &bp)) {
+                            int above = (int)tp.y;
+                            int below = wh - (int)bp.y;
+                            int avail = (above > below ? above : below) - 30;
+                            if (avail > 120 && want > avail) want = avail;
+                        }
+                    }
                 }
+                if (g_getenv("NPP_RC_DEBUG"))
+                    g_message("[rc] fix_height nat=%d want=%d rootH=%d", nat, want,
+                              rw ? gtk_widget_get_height(GTK_WIDGET(rw)) : -1);
+                /* Pin min AND max: min alone still let the popover
+                 * REQUEST its natural height, and GDK's flip/resize can
+                 * under-allocate that request → dismissed on map. With
+                 * both pinned the popup asks for exactly `want` and the
+                 * chosen side always accommodates it. */
                 gtk_scrolled_window_set_min_content_height(
                     GTK_SCROLLED_WINDOW(w), want);
+                gtk_scrolled_window_set_max_content_height(
+                    GTK_SCROLLED_WINDOW(w), want);
+                gtk_scrolled_window_set_propagate_natural_height(
+                    GTK_SCROLLED_WINDOW(w), TRUE);
             }
             g_queue_clear(&q);
             return;   /* main page only — submenu pages are shorter */
@@ -366,6 +477,16 @@ static GtkWidget *build_popover(NppMenu *root)
     return pop;
 }
 
+static gboolean rc_debug_late_report(gpointer ud)
+{
+    GtkWidget *pop = ud;   /* NPP_RC_DEBUG diagnostics only */
+    g_message("[rc] +200ms mapped=%d visible=%d w=%d h=%d",
+              gtk_widget_get_mapped(pop), gtk_widget_get_visible(pop),
+              gtk_widget_get_width(pop), gtk_widget_get_height(pop));
+    g_object_unref(pop);
+    return G_SOURCE_REMOVE;
+}
+
 void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
 {
     NppMenu *root = m->root;
@@ -381,6 +502,7 @@ void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
         }
     }
     root->popover = build_popover(root);
+    root->anchor  = anchor;
     GdkRectangle r = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(root->popover), &r);
     gtk_widget_set_parent(root->popover, anchor);
@@ -389,11 +511,14 @@ void npp_menu_popup_at(NppMenu *m, GtkWidget *anchor, double x, double y)
     /* GAP-169 — NPP_RC_DEBUG=1: did the surface actually come up? A
      * "popup ... mapped=0" line, or a "closed" line right after it, is
      * the signature of a compositor refusing the popup grab. */
-    if (g_getenv("NPP_RC_DEBUG"))
+    if (g_getenv("NPP_RC_DEBUG")) {
         g_message("[rc] popup on %s at (%g,%g) mapped=%d visible=%d",
                   G_OBJECT_TYPE_NAME(anchor), x, y,
                   gtk_widget_get_mapped(root->popover),
                   gtk_widget_get_visible(root->popover));
+        g_object_ref(root->popover);
+        g_timeout_add(200, rc_debug_late_report, root->popover);
+    }
 }
 
 void npp_menu_popup_at_widget(NppMenu *m, GtkWidget *anchor)
@@ -402,4 +527,16 @@ void npp_menu_popup_at_widget(NppMenu *m, GtkWidget *anchor)
     root->popover = build_popover(root);
     gtk_widget_set_parent(root->popover, anchor);
     gtk_popover_popup(GTK_POPOVER(root->popover));
+}
+
+/* GH #3 — see struct: reopen the menu when an outside right-click on the
+ * open popover lands back inside the anchor widget. */
+void npp_menu_set_reopen(NppMenu *m, GtkWidget *target,
+                         void (*cb)(double x, double y, gpointer user),
+                         gpointer user)
+{
+    NppMenu *root = m->root;
+    root->reopen_target = target;
+    root->reopen_cb     = cb;
+    root->reopen_data   = user;
 }

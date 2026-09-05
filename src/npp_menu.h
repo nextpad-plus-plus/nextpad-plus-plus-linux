@@ -81,6 +81,14 @@ NppMenu   *npp_menu_add_submenu(NppMenu *m, const char *label);
 /* Pop the menu up. `_at` points at (x,y) in `anchor`'s coordinates;
  * `_at_widget` points at the whole anchor widget. The NppMenu and its
  * widget tree are freed automatically once the popup closes. */
+/* GH #3 / macOS parity — a right-click OUTSIDE the open popover (which
+ * GTK consumes while dismissing) reopens via `cb(x, y, user)` with the
+ * press translated into the popup anchor's coordinates, when it lands
+ * inside that anchor. Set before npp_menu_popup_at. */
+void       npp_menu_set_reopen(NppMenu *m, GtkWidget *target,
+                               void (*cb)(double x, double y, gpointer user),
+                               gpointer user);
+
 void       npp_menu_popup_at(NppMenu *m, GtkWidget *anchor,
                              double x, double y);
 void       npp_menu_popup_at_widget(NppMenu *m, GtkWidget *anchor);
