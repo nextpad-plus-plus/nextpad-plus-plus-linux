@@ -10,6 +10,14 @@
 #define RESOURCES_DIR "../resources"
 #endif
 
+/* GAP-182 — catalog directory, overridable for the test harness only
+ * (NPP_I18N_DIR); production always uses the bundled resources. */
+static const char *loc_dir(void)
+{
+    return g_getenv("NPP_I18N_DIR") && *g_getenv("NPP_I18N_DIR")
+        ? g_getenv("NPP_I18N_DIR") : RESOURCES_DIR "/localization";
+}
+
 /* Two hash tables: plain text (& stripped) and mnemonic (& → _). */
 static GHashTable *s_plain    = NULL;
 static GHashTable *s_mnemonic = NULL;
@@ -45,6 +53,10 @@ static char *conv_plain(const char *s)
 static void store(const char *key, const char *raw_val)
 {
     if (!key || !raw_val || !*key) return;
+    /* GAP-182 — lazy-create: i18n_set_language may run before i18n_init
+     * (the headless test harness does; belt-and-braces for the app). */
+    if (!s_plain)    s_plain    = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    if (!s_mnemonic) s_mnemonic = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     g_hash_table_insert(s_plain,    g_strdup(key), conv_plain(raw_val));
     g_hash_table_insert(s_mnemonic, g_strdup(key), conv_mnemonic(raw_val));
 }
@@ -426,15 +438,14 @@ void i18n_init(void)
     /* 0. GAP-62: -LXX CLI override — resolved like a saved choice but
      * never persisted. Falls through when no such catalog exists. */
     if (s_cli_locale[0]) {
-        snprintf(path, sizeof(path), RESOURCES_DIR "/localization/%s.xml",
-                 s_cli_locale);
+        snprintf(path, sizeof(path), "%s/%s.xml", loc_dir(), s_cli_locale);
         if (!g_file_test(path, G_FILE_TEST_EXISTS))
             path[0] = '\0';
     }
 
     /* 1. An explicit choice from Preferences > General > Language. */
     if (!path[0] && g_prefs.ui_language[0]) {
-        snprintf(path, sizeof(path), RESOURCES_DIR "/localization/%s.xml",
+        snprintf(path, sizeof(path), "%s/%s.xml", loc_dir(),
                  g_prefs.ui_language);
         if (!g_file_test(path, G_FILE_TEST_EXISTS))
             path[0] = '\0';
@@ -446,8 +457,7 @@ void i18n_init(void)
         for (int i = 0; langs[i] && !path[0]; i++) {
             const char *stem = locale_to_stem(langs[i]);
             if (!stem) continue;
-            snprintf(path, sizeof(path),
-                     RESOURCES_DIR "/localization/%s.xml", stem);
+            snprintf(path, sizeof(path), "%s/%s.xml", loc_dir(), stem);
             if (!g_file_test(path, G_FILE_TEST_EXISTS))
                 path[0] = '\0';
         }
@@ -455,7 +465,7 @@ void i18n_init(void)
 
     /* 3. Fall back to English. */
     if (!path[0])
-        snprintf(path, sizeof(path), RESOURCES_DIR "/localization/english.xml");
+        snprintf(path, sizeof(path), "%s/english.xml", loc_dir());
 
     parse_file(path);
 
@@ -509,7 +519,7 @@ static void build_lang_list(void)
 {
     if (s_langs) return;
     s_langs = g_array_new(FALSE, FALSE, sizeof(I18nLang));
-    GDir *d = g_dir_open(RESOURCES_DIR "/localization", 0, NULL);
+    GDir *d = g_dir_open(loc_dir(), 0, NULL);
     if (!d) return;
     const char *fn;
     while ((fn = g_dir_read_name(d))) {
@@ -519,8 +529,7 @@ static void build_lang_list(void)
         char *dot = strrchr(L.stem, '.');
         if (dot) *dot = '\0';
         char fpath[1024];
-        snprintf(fpath, sizeof(fpath),
-                 RESOURCES_DIR "/localization/%s", fn);
+        snprintf(fpath, sizeof(fpath), "%s/%s", loc_dir(), fn);
         read_native_name(fpath, L.name, sizeof(L.name));
         if (!L.name[0]) {            /* fall back to the capitalised stem */
             g_strlcpy(L.name, L.stem, sizeof(L.name));
@@ -557,13 +566,11 @@ void i18n_set_language(const char *stem)
     if (s_mnemonic) g_hash_table_remove_all(s_mnemonic);
     char path[1024];
     if (stem && stem[0])
-        snprintf(path, sizeof(path),
-                 RESOURCES_DIR "/localization/%s.xml", stem);
+        snprintf(path, sizeof(path), "%s/%s.xml", loc_dir(), stem);
     else
         path[0] = '\0';
     if (!path[0] || !g_file_test(path, G_FILE_TEST_EXISTS))
-        snprintf(path, sizeof(path),
-                 RESOURCES_DIR "/localization/english.xml");
+        snprintf(path, sizeof(path), "%s/english.xml", loc_dir());
     parse_file(path);
     i18n_build_translation(stem);
 }
@@ -642,12 +649,33 @@ static char *xl_normalize(const char *s)
     g_string_free(b, TRUE);
     char *low = g_ascii_strdown(trimmed, -1);
     g_free(trimmed);
+    /* GAP-182 — the shared catalogs carry macOS format strings (%@ where
+     * Linux callers write %s: MacStrings 90256 "Could not import: %@").
+     * Fold the KEY side so both ports' English resolves to one entry;
+     * the value side is converted at insert time (xl_insert). */
+    if (strstr(low, "%@")) {
+        GString *f = g_string_new(NULL);
+        for (const char *p = low; *p; p++) {
+            if (p[0] == '%' && p[1] == '@') { g_string_append(f, "%s"); p++; }
+            else g_string_append_c(f, *p);
+        }
+        g_free(low);
+        low = g_string_free(f, FALSE);
+    }
     return low;
 }
 
 /* ---- XML parse: one localization file -> { macOS-scheme key: value } */
 
 typedef struct { GHashTable *out; GPtrArray *stack; } XLParse;
+
+/* Is `name` anywhere on the open-element stack? */
+static gboolean xl_in(const XLParse *p, const char *name)
+{
+    for (guint i = 0; i < p->stack->len; i++)
+        if (strcmp(g_ptr_array_index(p->stack, i), name) == 0) return TRUE;
+    return FALSE;
+}
 
 static const char *xl_attr(const char **names, const char **values,
                            const char *key)
@@ -673,6 +701,31 @@ static void xl_elem_start(GMarkupParseContext *ctx, const char *elem,
                                      g_strdup(nm));
         if (rtl) g_hash_table_insert(p->out, g_strdup("__rtl__"),
                                      g_ascii_strdown(rtl, -1));
+    } else if (strcmp(parent, "MessageBox") == 0 && strcmp(elem, "Item") != 0) {
+        /* GAP-182 (macOS 74d0595 Phase 2) — alert titles AND messages,
+         * as harvest-only keys (they join the map in the fill-gaps pass,
+         * never shadowing a Menu/Dialog entry). Previously the generic
+         * title-attr branch below swallowed these into pass-1 keys. */
+        const char *t = xl_attr(anames, avalues, "title");
+        const char *m = xl_attr(anames, avalues, "message");
+        if (t) g_hash_table_insert(p->out,
+                   g_strconcat("mb:", elem, ":title", NULL), g_strdup(t));
+        if (m) g_hash_table_insert(p->out,
+                   g_strconcat("mb:", elem, ":message", NULL), g_strdup(m));
+    } else if (strcmp(elem, "ColumnExt") == 0) {
+        /* GAP-182 — panel column captions (Document List "Ext."). */
+        const char *nm = xl_attr(anames, avalues, "name");
+        if (nm) g_hash_table_insert(p->out,
+                    g_strconcat("colext:", parent, NULL), g_strdup(nm));
+    } else if (xl_in(p, "ProjectManager") && strcmp(elem, "Item") != 0 &&
+               xl_attr(anames, avalues, "name") != NULL &&
+               (strcmp(elem, "WorkspaceRootName") == 0 ||
+                strcmp(elem, "NewProjectName") == 0 ||
+                strcmp(elem, "NewFolderName") == 0)) {
+        /* GAP-182 — the three fixed ProjectManager names (macOS parses
+         * exactly these; PanelTitle is deliberately excluded there). */
+        g_hash_table_insert(p->out, g_strconcat("pm:", elem, NULL),
+                            g_strdup(xl_attr(anames, avalues, "name")));
     } else if (xl_attr(anames, avalues, "title") != NULL &&
                strcmp(elem, "Item") != 0) {
         /* GAP-i18n — section elements carry their display text in a
@@ -700,11 +753,23 @@ static void xl_elem_start(GMarkupParseContext *ctx, const char *elem,
             else if (!strcmp(parent, "TabBar") &&
                      (id = xl_attr(anames, avalues, "CMDID")))
                 key = g_strconcat("tabbar:", id, NULL);
+            else if (xl_in(p, "ProjectManager") &&
+                     (id = xl_attr(anames, avalues, "id")))
+                /* GAP-182 — panel context menus, harvest-only. */
+                key = g_strconcat("pm:", parent, ":", id, NULL);
             else if ((id = xl_attr(anames, avalues, "id")))
                 key = g_strconcat("dlg:", parent, ":", id, NULL);
         }
         if (key)
             g_hash_table_insert(p->out, key, g_strdup(name));
+        /* Tab context menu "Unpin Tab" alternative caption. */
+        if (!strcmp(parent, "TabBar")) {
+            const char *aid = xl_attr(anames, avalues, "CMDID");
+            const char *alt = xl_attr(anames, avalues, "alternativeName");
+            if (aid && alt)
+                g_hash_table_insert(p->out,
+                    g_strconcat("tabbar_alt:", aid, NULL), g_strdup(alt));
+        }
     } else if (strcmp(parent, "MiscStrings") == 0) {
         const char *val = xl_attr(anames, avalues, "value");
         if (val)
@@ -742,6 +807,278 @@ static GHashTable *xl_parse_file(const char *path)
     return p.out;
 }
 
+/* GAP-182 (macOS 1cd560b) — ordered printf specifiers of a format string
+ * ("%s", "%ld", …), "%%" skipped. translate() results feed NON-LITERAL
+ * g_strdup_printf calls (main.c "Could not import: %s"), where a missing,
+ * extra or reordered specifier reads a garbage vararg — catalog values are
+ * not trusted input. */
+static GPtrArray *xl_specs(const char *str)
+{
+    GPtrArray *out = g_ptr_array_new_with_free_func(g_free);
+    const char *p = str;
+    while (*p) {
+        if (*p != '%') { p++; continue; }
+        if (p[1] == '%') { p += 2; continue; }
+        const char *q = p + 1;
+        while (*q && (g_ascii_isdigit(*q) || strchr(".-+ #$hlqztL", *q)))
+            q++;
+        if (*q) {
+            g_ptr_array_add(out, g_strndup(p + 1, (gsize)(q - p)));
+            p = q + 1;
+        } else {
+            p = q;
+        }
+    }
+    return out;
+}
+
+static gboolean xl_specs_match(const char *a, const char *b)
+{
+    GPtrArray *sa = xl_specs(a), *sb = xl_specs(b);
+    gboolean ok = sa->len == sb->len;
+    for (guint i = 0; ok && i < sa->len; i++)
+        ok = strcmp(g_ptr_array_index(sa, i), g_ptr_array_index(sb, i)) == 0;
+    g_ptr_array_free(sa, TRUE);
+    g_ptr_array_free(sb, TRUE);
+    return ok;
+}
+
+/* Replace every occurrence of `tok` with `to` (returns a new string). */
+static char *xl_replace(const char *str, const char *tok, const char *to)
+{
+    GString *o = g_string_new(NULL);
+    const char *p = str;
+    gsize tl = strlen(tok);
+    while (*p) {
+        if (strncmp(p, tok, tl) == 0) { g_string_append(o, to); p += tl; }
+        else                          { g_string_append_c(o, *p); p++; }
+    }
+    return g_string_free(o, FALSE);
+}
+
+/* The one insertion path for every pass (macOS 74d0595+1cd560b semantics,
+ * with Linux %s/%ld targets):
+ *  - value is accel-stripped + trimmed;
+ *  - when the normalized ENGLISH key is a format string:
+ *      Windows placeholder tokens (spaced variants included — odia.xml
+ *      ships "$ STR_REPLACE $") convert to %s / %ld, macOS %@ folds to %s,
+ *      and the result must carry the SAME ordered specifiers as the key or
+ *      the entry is dropped (English fallback instead of a crash);
+ *  - overwrite=FALSE gives the harvest/alias fill-gaps behaviour. */
+static void xl_insert(GHashTable *map, char *norm_key /* owned */,
+                      const char *raw_val, gboolean overwrite)
+{
+    if (!norm_key || !norm_key[0] || !raw_val || !raw_val[0]) {
+        g_free(norm_key);
+        return;
+    }
+    if (!overwrite && g_hash_table_contains(map, norm_key)) {
+        g_free(norm_key);
+        return;
+    }
+    char *val = xl_strip_accel(raw_val);
+    g_strstrip(val);
+    if (!val[0]) { g_free(norm_key); g_free(val); return; }
+
+    if (strchr(norm_key, '%')) {
+        static const struct { const char *tok; const char *to; } kTok[] = {
+            { "$STR_REPLACE$",   "%s"  }, { "$ STR_REPLACE $", "%s"  },
+            { "$INT_REPLACE$",   "%ld" }, { "$ INT_REPLACE $", "%ld" },
+            { "%@",              "%s"  },
+        };
+        for (gsize i = 0; i < G_N_ELEMENTS(kTok); i++) {
+            if (!strstr(val, kTok[i].tok)) continue;
+            char *n = xl_replace(val, kTok[i].tok, kTok[i].to);
+            g_free(val);
+            val = n;
+        }
+        if (!xl_specs_match(norm_key, val)) {
+            /* g_debug: junk single-token keys ("%s", "100%") trip this
+             * on every load; G_MESSAGES_DEBUG=all surfaces it when a
+             * genuinely bad catalog value needs chasing (macOS NSLogs
+             * unconditionally — deliberate deviation to keep startup
+             * quiet). */
+            g_debug("i18n: specifier mismatch for \"%s\" — keeping English",
+                    norm_key);
+            g_free(norm_key); g_free(val);
+            return;
+        }
+    }
+    g_hash_table_insert(map, norm_key, val);   /* takes both */
+}
+
+/* GAP-182 — macOS wording → catalog-key aliases (NppLocalizer
+ * _addPlatformAliasesTo:, ported with the Linux key shapes: our parser
+ * keys section titles as title:<Elem> where macOS uses dlgattr:<X>:title,
+ * StyleConfig's SubDialog items as dlg:SubDialog:<id>, and the format
+ * strings carry %s (the ObjC table says %@). "save & close" is written
+ * post-normalization here — the macOS row "save && close" can never match
+ * a normalized key and is dead there. Fill-gaps only: a language whose
+ * catalog already pairs the plain English wins. */
+static const struct { const char *key; const char *xml; } kAliases[] = {
+    /* File menu */
+    { "close all but current",          "cmd:41005" },
+    { "close all but pinned",           "cmd:41026" },
+    { "move to trash",                  "cmd:41016" },
+    { "open containing folder",         "submenu:file-openFolder" },
+    { "close multiple documents",       "submenu:file-closeMore" },
+    /* Edit menu */
+    { "indent",                         "submenu:edit-indent" },
+    { "comment/uncomment",              "submenu:edit-comment" },
+    { "auto-completion",                "submenu:edit-autoCompletion" },
+    { "eol conversion",                 "submenu:edit-eolConversion" },
+    { "blank operations",               "submenu:edit-blankOperations" },
+    { "paste special",                  "submenu:edit-pasteSpecial" },
+    { "on selection",                   "submenu:edit-onSelection" },
+    { "convert case to",                "submenu:edit-convertCaseTo" },
+    { "line operations",                "submenu:edit-lineOperations" },
+    { "read-only in notepad++",         "submenu:edit-readonlyInNextpad++" },
+    { "insert",                         "submenu:edit-insert" },
+    { "copy to clipboard",              "submenu:edit-copyToClipboard" },
+    { "multi-select all",               "submenu:edit-multiSelectALL" },
+    { "multi-select next",              "submenu:edit-multiSelectNext" },
+    { "duplicate line",                 "cmd:42010" },
+    { "delete line",                    "cmd:42015" },
+    { "move line up",                   "cmd:42014" },
+    { "move line down",                 "cmd:42015" },
+    { "single line comment",            "cmd:42035" },
+    { "single line uncomment",          "cmd:42036" },
+    { "toggle single line comment",     "cmd:42022" },
+    { "block comment",                  "cmd:42023" },
+    { "block uncomment",                "cmd:42047" },
+    /* Search menu */
+    { "change history",                 "submenu:search-changeHistory" },
+    { "style all occurrences of token", "submenu:search-markAll" },
+    { "style one token",                "submenu:search-markOne" },
+    { "clear style",                    "submenu:search-unmarkAll" },
+    { "jump up",                        "submenu:search-jumpUp" },
+    { "jump down",                      "submenu:search-jumpDown" },
+    { "copy styled text",               "submenu:search-copyStyledText" },
+    { "bookmark",                       "submenu:search-bookmark" },
+    { "clear all changes",              "cmd:43069" },
+    /* View menu */
+    { "view current file in",           "submenu:view-currentFileIn" },
+    { "show symbol",                    "submenu:view-showSymbol" },
+    { "zoom",                           "submenu:view-zoom" },
+    { "move/clone current document",    "submenu:view-moveCloneDocument" },
+    { "tab",                            "submenu:view-tab" },
+    { "fold level",                     "submenu:view-collapseLevel" },
+    { "unfold level",                   "submenu:view-uncollapseLevel" },
+    { "project",                        "submenu:view-project" },
+    { "zoom in",                        "cmd:44023" },
+    { "zoom out",                       "cmd:44024" },
+    { "restore default zoom",           "cmd:44033" },
+    { "select next tab",                "cmd:44095" },
+    { "select previous tab",            "cmd:44096" },
+    { "synchronize vertical scrolling", "cmd:44035" },
+    { "synchronize horizontal scrolling", "cmd:44036" },
+    /* Encoding menu */
+    { "character set",                  "submenu:encoding-characterSets" },
+    { "western european",               "submenu:encoding-westernEuropean" },
+    { "central european",               "submenu:encoding-centralEuropean" },
+    { "cyrillic",                       "submenu:encoding-cyrillic" },
+    { "greek",                          "submenu:encoding-greek" },
+    { "baltic",                         "submenu:encoding-baltic" },
+    { "turkish",                        "submenu:encoding-turkish" },
+    { "chinese",                        "submenu:encoding-chinese" },
+    { "japanese",                       "submenu:encoding-japanese" },
+    { "korean",                         "submenu:encoding-korean" },
+    { "old mac (cr)",                   "cmd:45003" },
+    /* Language / Settings / Tools menus */
+    { "user defined language",          "submenu:language-userDefinedLanguage" },
+    { "import",                         "submenu:settings-import" },
+    { "md5",                            "submenu:tools-md5" },
+    { "sha-1",                          "submenu:tools-sha1" },
+    { "sha-256",                        "submenu:tools-sha256" },
+    { "sha-512",                        "submenu:tools-sha512" },
+    { "generate",                       "cmd:48501" },
+    { "generate from files…",           "cmd:48502" },
+    { "generate from selection into clipboard", "cmd:48503" },
+    /* Find/Replace + incremental bar */
+    { "whole word",                     "dlg:Find:1603" },
+    { "wrap",                           "dlg:Find:1606" },
+    { "replace:",                       "dlg:Find:1611" },
+    { "find previous",                  "cmd:43010" },
+    { "find next",                      "cmd:43002" },
+    { "replace all",                    "dlg:Find:1609" },
+    { "replace",                        "dlg:Find:1608" },
+    { "match case",                     "dlg:IncrementalFind:1685" },
+    { "find in files",                  "cmd:43013" },
+    { "directory:",                     "dlg:Find:1655" },
+    { "filter:",                        "dlg:Find:1654" },
+    /* ColumnEditor (fallback-only; pass 1 usually pre-empts) */
+    { "column / multi-selection editor", "title:ColumnEditor" },
+    { "initial number:",                "dlg:ColumnEditor:2030" },
+    { "increase by:",                   "dlg:ColumnEditor:2031" },
+    { "repeat:",                        "dlg:ColumnEditor:2036" },
+    { "leading:",                       "dlg:ColumnEditor:2038" },
+    { "text to insert",                 "dlg:ColumnEditor:2023" },
+    { "number to insert",               "dlg:ColumnEditor:2033" },
+    /* Save prompts — every wording reuses Windows DoSaveOrNot (1761);
+     * $STR_REPLACE$ becomes %s via xl_insert. Deliberately NO alias for
+     * "Don't Save All" → DoSaveOrNot:5 (macOS 1cd560b withdrew it: "No
+     * to all" next to a "Don't Save" sibling reads as a different
+     * question) — it keeps its MacStrings id. */
+    { "save changes to \"%s\"?",        "dlg:DoSaveOrNot:1761" },
+    { "save changes to '%s'?",          "dlg:DoSaveOrNot:1761" },
+    { "save '%s' before closing?",      "dlg:DoSaveOrNot:1761" },
+    /* Phase 3 dialog bodies (multi-line; ":message" keeps newlines) */
+    { "\"%s\"\n\nthis file has been modified by another program.\ndo you want to reload it?",
+                                        "mb:DoReloadOrNot:message" },
+    { "\"%s\"\n\nthis file has been modified by another program.\ndo you want to reload it and lose the changes made in nextpad++?",
+                                        "mb:DoReloadOrNotAndLooseChange:message" },
+    { "move '%s' to the trash?",        "mb:DoDeleteOrNot:message" },
+    { "move '%s' to trash?",            "mb:DoDeleteOrNot:message" },
+    { "large file warning",             "mb:WantToOpenHugeFile:title" },
+    /* Find window scope buttons + status */
+    { "find in current document",       "dlg:Find:1641" },
+    { "find in all documents",          "dlg:Find:1636" },
+    { "replace in all documents",       "dlg:Find:1635" },
+    { "find: can't find the text \"%s\"", "misc:find-status-cannot-find" },
+    { "rename current tab",             "misc:tabrename-title" },
+    /* StyleConfigurator */
+    { "style configurator",             "title:StyleConfig" },
+    { "select theme:",                  "dlg:StyleConfig:2306" },
+    { "cancel",                         "dlg:StyleConfig:2" },
+    { "save & close",                   "dlg:StyleConfig:2301" },
+    { "bold",                           "dlg:SubDialog:2204" },
+    { "italic",                         "dlg:SubDialog:2205" },
+    { "underline",                      "dlg:SubDialog:2218" },
+    { "font name:",                     "dlg:SubDialog:2208" },
+    { "font size:",                     "dlg:SubDialog:2209" },
+    { "foreground colour",              "dlg:SubDialog:2206" },
+    { "background colour",              "dlg:SubDialog:2207" },
+    /* GoToLine */
+    { "go to…",                         "title:GoToLine" },
+    { "line",                           "dlg:GoToLine:2007" },
+    { "offset",                         "dlg:GoToLine:2008" },
+    { "go",                             "dlg:GoToLine:1" },
+    /* Preferences panes */
+    { "preferences",                    "title:Preference" },
+    { "general",                        "title:Global" },
+    { "new document",                   "title:NewDoc" },
+    { "backup",                         "title:Backup" },
+    { "cloud and link",                 "title:Cloud" },
+    /* Window menu */
+    { "sort by",                        "submenu:window-sortby" },
+    { "file name a to z",               "cmd:11002" },
+    { "file name z to a",               "cmd:11003" },
+    { "file type a to z",               "cmd:11006" },
+    { "file type z to a",               "cmd:11007" },
+    { "full path a to z",               "cmd:11004" },
+    { "full path z to a",               "cmd:11005" },
+    { "windows…",                       "cmd:11001" },
+};
+
+/* The reuse-harvest prefixes (macOS isReuseHarvestKey) — one predicate
+ * shared by the pass-1 skip and the pass-3 include, so a future prefix
+ * cannot join one loop and miss the other. */
+static gboolean xl_is_harvest(const char *key)
+{
+    return g_str_has_prefix(key, "mb:") || g_str_has_prefix(key, "pm:") ||
+           g_str_has_prefix(key, "colext:") || g_str_has_prefix(key, "misc:");
+}
+
 void i18n_build_translation(const char *stem)
 {
     if (s_xlate) g_hash_table_destroy(s_xlate);
@@ -752,29 +1089,74 @@ void i18n_build_translation(const char *stem)
         return;
 
     char ep[1024], tp[1024];
-    snprintf(ep, sizeof(ep), RESOURCES_DIR "/localization/english.xml");
-    snprintf(tp, sizeof(tp), RESOURCES_DIR "/localization/%s.xml", stem);
+    snprintf(ep, sizeof(ep), "%s/english.xml", loc_dir());
+    snprintf(tp, sizeof(tp), "%s/%s.xml", loc_dir(), stem);
     GHashTable *eng = xl_parse_file(ep);
     GHashTable *tgt = xl_parse_file(tp);
 
     if (eng && tgt) {
-        GHashTableIter it; gpointer k, v;
-        g_hash_table_iter_init(&it, eng);
-        while (g_hash_table_iter_next(&it, &k, &v)) {
-            const char *key = k;
+        /* GAP-182 (macOS 74d0595 + 1cd560b, ported as one final shape).
+         * Sorted keys everywhere: with colliding normalized English the
+         * winner must never depend on hash order (the nondeterminism
+         * macOS Phase 2 fixed). */
+        GList *keys = g_list_sort(g_hash_table_get_keys(eng),
+                                  (GCompareFunc)strcmp);
+
+        /* Pass 1 — Menu / Dialog / TabBar entries (overwrite, sorted). */
+        for (GList *l = keys; l; l = l->next) {
+            const char *key = l->data;
             if (key[0] == '_' && key[1] == '_') continue;   /* metadata */
+            if (xl_is_harvest(key)) continue;               /* pass 3 */
+            const char *eval = g_hash_table_lookup(eng, key);
             const char *tval = g_hash_table_lookup(tgt, key);
             if (!tval || !tval[0]) continue;
-            char *norm  = xl_normalize((const char *)v);
-            char *trans = xl_strip_accel(tval);
-            g_strstrip(trans);
-            if (norm[0] && trans[0])
-                g_hash_table_insert(s_xlate, norm, trans);   /* takes both */
-            else { g_free(norm); g_free(trans); }
+            xl_insert(s_xlate, xl_normalize(eval), tval, TRUE);
+        }
+
+        /* Pass 3 — reuse-harvest sections, fill-gaps only, in fixed
+         * prefix priority (menu/label sections before alert titles:
+         * "Open Workspace" is both a pm: verb and an mb: title noun). */
+        static const char *kHarvestOrder[] = { "misc:", "pm:", "colext:", "mb:" };
+        for (gsize hp = 0; hp < G_N_ELEMENTS(kHarvestOrder); hp++) {
+            for (GList *l = keys; l; l = l->next) {
+                const char *key = l->data;
+                if (!g_str_has_prefix(key, kHarvestOrder[hp])) continue;
+                const char *eval = g_hash_table_lookup(eng, key);
+                /* An English value that IS a raw Windows placeholder
+                 * token is reachable only through explicit aliases. */
+                if (strchr(eval, '$')) continue;
+                const char *tval = g_hash_table_lookup(tgt, key);
+                if (!tval || !tval[0]) continue;
+                xl_insert(s_xlate, xl_normalize(eval), tval, FALSE);
+            }
+        }
+        g_list_free(keys);
+
+        /* Aliases — macOS wording → catalog key, fill-gaps only. Captions
+         * for single-line controls collapse embedded newlines (russian
+         * Find:1641 wraps mid-caption); ":message" bodies keep theirs. */
+        for (gsize a = 0; a < G_N_ELEMENTS(kAliases); a++) {
+            if (g_hash_table_contains(s_xlate, kAliases[a].key)) continue;
+            const char *tval = g_hash_table_lookup(tgt, kAliases[a].xml);
+            if (!tval || !tval[0]) continue;
+            char *v = xl_replace(tval, "\r", "");
+            if (!g_str_has_suffix(kAliases[a].xml, ":message")) {
+                char *n = xl_replace(v, "\n", " ");
+                g_free(v);
+                v = n;
+            }
+            xl_insert(s_xlate, g_strdup(kAliases[a].key), v, FALSE);
+            g_free(v);
         }
     }
     if (eng) g_hash_table_destroy(eng);
     if (tgt) g_hash_table_destroy(tgt);
+}
+
+/* GAP-182 — test/debug visibility into the built map. */
+int i18n_translation_count(void)
+{
+    return s_xlate ? (int)g_hash_table_size(s_xlate) : 0;
 }
 
 const char *i18n_translate(const char *english)

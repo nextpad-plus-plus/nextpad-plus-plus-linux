@@ -37,6 +37,8 @@ void        i18n_set_language(const char *stem);  /* reload translations */
  *  - i18n_translate_menu:    a translated deep-copy of a GMenuModel        */
 void        i18n_build_translation(const char *stem);
 const char *i18n_translate(const char *english);
+/* GAP-182 — number of entries in the live translation map (0 = English). */
+int         i18n_translation_count(void);
 GMenuModel *i18n_translate_menu(GMenuModel *src);
 
 /* Convenience macros */

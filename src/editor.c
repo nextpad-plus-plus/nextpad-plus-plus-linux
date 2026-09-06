@@ -3093,11 +3093,18 @@ static gboolean ask_save_full(NppDoc *doc, gboolean *dont_save_all)
         ? g_path_get_basename(doc->filepath)
         : "this document";
 
+    /* GAP-182 (macOS 74d0595) — the message reuses the Windows
+     * DoSaveOrNot translation via the engine's alias table; the old
+     * T("msg.Reload.message") key never resolved, so this line was
+     * English in every locale. The engine validated the %s specifier at
+     * map build, making the non-literal printf safe. */
+    gchar *save_msg = g_strdup_printf(
+        i18n_translate("Save changes to \"%s\"?"), name);
     GtkWidget *dlg = gtk_message_dialog_new(
         GTK_WINDOW(s_window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-        GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
-        T("msg.Reload.message", "Save changes to \"%s\"?"), name);
+        GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE, "%s", save_msg);
+    g_free(save_msg);
 
     /* GAP-180 — the TM("msg.*") keys never resolved (the catalog only
      * produces msg.<Elem>.<attr> keys), so these buttons were English in
@@ -3109,7 +3116,8 @@ static gboolean ask_save_full(NppDoc *doc, gboolean *dont_save_all)
     save_btn_label(b_cancel,      sizeof b_cancel,      "Cancel",         "_Cancel");
     save_btn_label(b_save,        sizeof b_save,        "Save",           "_Save");
     if (g_getenv("NPP_I18N_DEBUG"))   /* headless check of the captions */
-        g_message("[i18n] save prompt buttons: %s | %s | %s | %s",
+        g_message("[i18n] save prompt msg=[%s] buttons: %s | %s | %s | %s",
+                  i18n_translate("Save changes to \"%s\"?"),
                   b_dontsave, b_dontsaveall, b_cancel, b_save);
     gtk_dialog_add_button(GTK_DIALOG(dlg), b_dontsave, GTK_RESPONSE_NO);
     if (dont_save_all)
