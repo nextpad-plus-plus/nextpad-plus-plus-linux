@@ -32,6 +32,7 @@
  * the existing mark-all action infrastructure.
  */
 #include "find_window.h"
+#include "i18n.h"
 #include "gtk_compat.h"
 #include "findreplace.h"
 #include "findinfiles.h"
@@ -868,8 +869,12 @@ static GtkWidget *build_find_tab(FW *w) {
     GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     GtkWidget *b_next  = gtk_button_new_with_label("Find Next");
     GtkWidget *b_cnt   = gtk_button_new_with_label("Count");
-    GtkWidget *b_all_c = gtk_button_new_with_label("Find in Current Document");
-    GtkWidget *b_all_a = gtk_button_new_with_label("Find in All Documents");
+    /* GAP-183 — the GAP-182 aliases map these onto the Windows Find
+     * dialog's own captions (dlg:Find:1641/1636). */
+    GtkWidget *b_all_c = gtk_button_new_with_label(
+        i18n_translate("Find in Current Document"));
+    GtkWidget *b_all_a = gtk_button_new_with_label(
+        i18n_translate("Find in All Documents"));
     GtkWidget *b_close = gtk_button_new_with_label("Close");
     gtk_widget_set_size_request(b_next,  180, -1);
     g_signal_connect(b_next,  "clicked", G_CALLBACK(on_find_next),       NULL);

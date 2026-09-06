@@ -39,6 +39,9 @@ void        i18n_build_translation(const char *stem);
 const char *i18n_translate(const char *english);
 /* GAP-182 — number of entries in the live translation map (0 = English). */
 int         i18n_translation_count(void);
+/* GAP-183 — direct MiscStrings lookup (macOS miscString:), e.g.
+ * i18n_misc("common-ok", "OK"). Falls back when absent or English. */
+const char *i18n_misc(const char *key, const char *fallback);
 GMenuModel *i18n_translate_menu(GMenuModel *src);
 
 /* Convenience macros */

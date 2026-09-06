@@ -391,11 +391,16 @@ static gboolean reload_doc_from_disk(NppDoc *doc, char **err_msg) {
  * so once, instead of silently doing nothing (macOS ee43ced). */
 static void reload_failed_alert(NppDoc *doc, const char *why)
 {
+    /* GAP-183 (macOS 25ff5dd) — MacStrings 90455/90456 translations. */
     char *base = g_path_get_basename(doc->filepath);
+    gchar *rf_title = g_strdup_printf(
+        i18n_translate("Could not reload \"%s\""), base);
     GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(s_window),
         GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
-        "Could not reload \"%s\".\n%s", base,
-        why ? why : "The file could not be read.");
+        "%s", rf_title);
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg), "%s",
+        why && *why ? why : i18n_translate("The file could not be read."));
+    g_free(rf_title);
     g_free(base);
     gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
@@ -479,15 +484,46 @@ static void on_file_changed(GFileMonitor *mon, GFile *file, GFile *other,
 
 /* The actual "changed on disk" question — split out so the deferred
  * re-check path (GAP-120) shows the identical dialog. */
+static void save_btn_label(char *out, size_t cap,
+                           const char *english, const char *fallback);
+
 static void file_changed_prompt(NppDoc *doc)
 {
+    /* GAP-183 (macOS 25ff5dd) — the bodies reuse the Windows
+     * DoReloadOrNot(AndLooseChange) messages via the GAP-182 aliases:
+     * human translations in ~95 languages. The English literals are
+     * those messages verbatim (english.xml), so English users see the
+     * same wording the fallback produces. A dirty buffer gets the
+     * lose-changes body and a "Keep My Version" button, clean buffers
+     * "Ignore" — the macOS split. */
     char *basename = g_path_get_basename(doc->filepath);
+    gchar *title = g_strdup_printf(
+        i18n_translate("\"%s\" changed on disk"), basename);
+    gchar *body = g_strdup_printf(
+        i18n_translate(doc->modified
+            ? "\"%s\"\n\nThis file has been modified by another program.\n"
+              "Do you want to reload it and lose the changes made in Nextpad++?"
+            : "\"%s\"\n\nThis file has been modified by another program.\n"
+              "Do you want to reload it?"),
+        basename);
     GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(s_window),
         GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
-        "The file \"%s\" has been changed externally.\nReload it?", basename);
+        "%s", title);
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
+                                             "%s", body);
+    char b_reload[128], b_keep[128];
+    save_btn_label(b_reload, sizeof b_reload, "Reload", "_Reload");
+    save_btn_label(b_keep, sizeof b_keep,
+                   doc->modified ? "Keep My Version" : "Ignore",
+                   doc->modified ? "_Keep My Version" : "_Ignore");
+    if (g_getenv("NPP_I18N_DEBUG"))
+        g_message("[i18n] changed-on-disk title=[%s] body=[%.60s] "
+                  "buttons: %s | %s", title, body, b_reload, b_keep);
     g_free(basename);
-    gtk_dialog_add_button(GTK_DIALOG(dlg), "_Reload", GTK_RESPONSE_YES);
-    gtk_dialog_add_button(GTK_DIALOG(dlg), "_Keep current", GTK_RESPONSE_NO);
+    g_free(title);
+    g_free(body);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), b_reload, GTK_RESPONSE_YES);
+    gtk_dialog_add_button(GTK_DIALOG(dlg), b_keep,   GTK_RESPONSE_NO);
     gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_YES);
 
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_YES) {
@@ -3623,16 +3659,33 @@ gboolean editor_open_path(const char *path)
         len >= (gsize)g_prefs.large_file_size_mb * 1024u * 1024u;
     if (large && !g_prefs.large_file_suppress) {
         gint64 mb = (gint64)(len / (1024 * 1024));
+        /* GAP-183 (macOS 25ff5dd) — the title reuses the Windows
+         * WantToOpenHugeFile alert (via the "Large File Warning" alias)
+         * and the body is the shared MacStrings 90450 text, so both
+         * translate in 137 languages. Buttons Open Anyway / Cancel
+         * replace the old YES_NO-vs-OK_CANCEL split (macOS shape). */
+        gchar *lf_size = g_strdup_printf("%lld MB", (long long)mb);
+        gchar *lf_body = g_strdup_printf(
+            i18n_translate("This file is %s. Opening it will disable "
+                           "syntax highlighting and undo history to keep "
+                           "the app responsive.\n\nDo you want to continue?"),
+            lf_size);
         GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(s_window),
-            GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING,
-            mb >= NPP_LARGE_FILE_HARD_MB ? GTK_BUTTONS_OK_CANCEL
-                                         : GTK_BUTTONS_YES_NO,
-            "Open %s?", g_path_get_basename(path));
+            GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING, GTK_BUTTONS_NONE,
+            "%s", i18n_translate("Large File Warning"));
         gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
-            "This file is %lld MB. Files this large may cause Nextpad++ to\n"
-            "use a lot of memory and disable some features (syntax highlighting,\n"
-            "wrap, autocomplete, smart highlight, brace match).\n\nProceed?",
-            (long long)mb);
+                                                 "%s", lf_body);
+        char b_open[128], b_cancel2[128];
+        save_btn_label(b_open, sizeof b_open, "Open Anyway", "_Open Anyway");
+        save_btn_label(b_cancel2, sizeof b_cancel2, "Cancel", "_Cancel");
+        gtk_dialog_add_button(GTK_DIALOG(dlg), b_cancel2, GTK_RESPONSE_CANCEL);
+        gtk_dialog_add_button(GTK_DIALOG(dlg), b_open, GTK_RESPONSE_OK);
+        gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
+        if (g_getenv("NPP_I18N_DEBUG"))
+            g_message("[i18n] large-file title=[%s] body=[%.60s] open=[%s]",
+                      i18n_translate("Large File Warning"), lf_body, b_open);
+        g_free(lf_size);
+        g_free(lf_body);
         int resp = gtk_dialog_run(GTK_DIALOG(dlg));
         gtk_widget_destroy(dlg);
         if (resp != GTK_RESPONSE_YES && resp != GTK_RESPONSE_OK) {

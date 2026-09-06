@@ -5572,9 +5572,28 @@ static void action_page_setup(GSimpleAction *a, GVariant *p, gpointer u) {
 static void action_move_to_trash(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     NppDoc *d = editor_current_doc(); if (!d || !d->filepath) return;
+    /* GAP-183 (macOS parity) — the message reuses the Windows
+     * DoDeleteOrNot alert via the GAP-182 alias ("will be moved to your
+     * Recycle Bin…" in the user's language); English keeps this wording.
+     * Buttons go through the engine too — GTK's stock pair follows the
+     * SYSTEM locale, not the app's chosen language. */
+    char *tr_base = g_path_get_basename(d->filepath);
+    gchar *tr_msg = g_strdup_printf(
+        i18n_translate("Move '%s' to Trash?"), tr_base);
     GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(g_window),
-        GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL,
-        "Move '%s' to Trash?", g_path_get_basename(d->filepath));
+        GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
+        "%s", tr_msg);
+    gtk_dialog_add_button(GTK_DIALOG(dlg),
+                          i18n_misc("common-cancel",
+                                    i18n_translate("Cancel")),
+                          GTK_RESPONSE_CANCEL);
+    gtk_dialog_add_button(GTK_DIALOG(dlg),
+                          i18n_misc("common-ok", "OK"), GTK_RESPONSE_OK);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
+    if (g_getenv("NPP_I18N_DEBUG"))
+        g_message("[i18n] trash msg=[%.70s]", tr_msg);
+    g_free(tr_msg);
+    g_free(tr_base);
     int resp = gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
     if (resp != GTK_RESPONSE_OK) return;

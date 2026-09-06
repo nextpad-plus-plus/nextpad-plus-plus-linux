@@ -629,8 +629,21 @@ static char *xl_normalize(const char *s)
 {
     char *a = xl_strip_accel(s);
     GString *b = g_string_new(NULL);
+    gboolean in_ws = FALSE;
     for (const char *p = a; *p; p++) {           /* drop GTK mnemonics */
         if (*p == '_') continue;
+        /* GAP-183 — fold every whitespace RUN to one space: XML
+         * attribute-value normalization (spec 3.3.3) turns the literal
+         * newlines inside catalog messages into spaces at parse time,
+         * while caller literals carry real \n — without folding, every
+         * multi-line body key ("This file is %s. …\n\nDo you want to
+         * continue?") could never match its catalog entry. */
+        if (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') {
+            if (!in_ws) g_string_append_c(b, ' ');
+            in_ws = TRUE;
+            continue;
+        }
+        in_ws = FALSE;
         if (p[0] == '.' && p[1] == '.' && p[2] == '.') {   /* ... -> … */
             g_string_append(b, "\xE2\x80\xA6");
             p += 2;
@@ -1128,6 +1141,14 @@ void i18n_build_translation(const char *stem)
                 const char *tval = g_hash_table_lookup(tgt, key);
                 if (!tval || !tval[0]) continue;
                 xl_insert(s_xlate, xl_normalize(eval), tval, FALSE);
+                /* GAP-183 — misc: entries are ALSO reachable by their own
+                 * key (i18n_misc), under a \x1f namespace no normalized
+                 * English can collide with (macOS keeps a separate
+                 * miscMap for exactly this). */
+                if (g_str_has_prefix(key, "misc:")) {
+                    char *direct = g_strconcat("misc\x1f", key + 5, NULL);
+                    xl_insert(s_xlate, direct, tval, FALSE);
+                }
             }
         }
         g_list_free(keys);
@@ -1145,12 +1166,27 @@ void i18n_build_translation(const char *stem)
                 g_free(v);
                 v = n;
             }
-            xl_insert(s_xlate, g_strdup(kAliases[a].key), v, FALSE);
+            /* Through xl_normalize: the multi-line alias keys must fold
+             * exactly like the caller lookups do. */
+            xl_insert(s_xlate, xl_normalize(kAliases[a].key), v, FALSE);
             g_free(v);
         }
     }
     if (eng) g_hash_table_destroy(eng);
     if (tgt) g_hash_table_destroy(tgt);
+}
+
+/* GAP-183 — misc-string accessor (macOS miscString:): a direct
+ * MiscStrings key, dodging the wording lottery — several dialogs'
+ * English is literally "OK", and the sorted pass-1 winner for that text
+ * can be anything ("Quitter" in French). */
+const char *i18n_misc(const char *key, const char *fallback)
+{
+    if (!s_xlate || !key) return fallback;
+    char *k = g_strconcat("misc\x1f", key, NULL);
+    const char *v = g_hash_table_lookup(s_xlate, k);
+    g_free(k);
+    return v ? v : fallback;
 }
 
 /* GAP-182 — test/debug visibility into the built map. */

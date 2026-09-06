@@ -160,7 +160,42 @@ int main(void)
         g_free(ec); g_free(ep); g_free(bp); g_free(dir);
     }
 
-    /* 12 — mnemonic contract untouched: && -> & in fallback and values. */
+    /* 12 — GAP-183 caller literals: every dialog string the new call
+     * sites pass must resolve under French (wording drift against the
+     * catalogs breaks here first). */
+    i18n_set_language("french");
+    expect_translated("\"%s\" changed on disk", "%s", "fr changed-on-disk title");
+    expect_translated("\"%s\"\n\nThis file has been modified by another program.\nDo you want to reload it?",
+                      "%s", "fr reload body (clean)");
+    expect_translated("\"%s\"\n\nThis file has been modified by another program.\nDo you want to reload it and lose the changes made in Nextpad++?",
+                      "%s", "fr reload body (dirty)");
+    expect_translated("Could not reload \"%s\"", "%s", "fr reload-failed title");
+    expect_translated("The file could not be read.", NULL, "fr reload-failed body");
+    expect_translated("Reload", NULL, "fr Reload button");
+    expect_translated("Keep My Version", NULL, "fr Keep My Version");
+    expect_translated("Open Anyway", NULL, "fr Open Anyway");
+    expect_translated("Large File Warning", NULL, "fr large-file title (alias)");
+    expect_translated("This file is %s. Opening it will disable syntax highlighting and undo history to keep the app responsive.\n\nDo you want to continue?",
+                      "%s", "fr large-file body (fold + %%@)");
+    expect_translated("Move '%s' to Trash?", "%s", "fr trash message (mb alias)");
+    expect_translated("Find in Current Document", NULL, "fr find scope current");
+    expect_translated("Find in All Documents", NULL, "fr find scope all");
+    CHECK(strcmp(i18n_misc("common-ok", "OK"), "OK") == 0,
+          "fr common-ok is literally OK in French -> [%s]",
+          i18n_misc("common-ok", "OK"));
+    i18n_set_language("chineseSimplified");
+    CHECK(strcmp(i18n_misc("common-ok", "OK"), "\xe7\xa1\xae\xe5\xae\x9a") == 0,
+          "zh-CN common-ok misc -> [%s]", i18n_misc("common-ok", "OK"));
+    i18n_set_language("french");
+    CHECK(strcmp(i18n_misc("nonexistent-key", "FB"), "FB") == 0,
+          "misc fallback");
+    expect_translated("Cancel", NULL, "fr Cancel");
+    /* whitespace-fold equivalence: \n and space callers hit one entry */
+    CHECK(strcmp(i18n_translate("Large File Warning"),
+                 i18n_translate("Large  File\nWarning")) == 0,
+          "whitespace runs fold to one key");
+
+    /* 13 — mnemonic contract untouched: && -> & in fallback and values. */
     i18n_set_language("english");
     CHECK(strcmp(i18n_translate("A && B"), "A && B") == 0,
           "english passthrough keeps caller string verbatim");
