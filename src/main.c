@@ -74,6 +74,58 @@
 #include "theme.h"
 #ifdef GDK_WINDOWING_X11
 #include <gdk/x11/gdkx.h>
+#endif
+
+/* GH #7 — remember the window POSITION between sessions. GTK4 removed
+ * gtk_window_move/get_position by design (Wayland compositors own
+ * placement), so the compat shims stub them and only SIZE survived a
+ * restart — every launch let the WM drop the window wherever it liked.
+ * On X11 we can still do it with the same raw-Xlib route Move-to-Monitor
+ * uses. Device pixels both ways (capture AND restore go through raw X),
+ * so no scale conversion is needed. On Wayland this stays impossible for
+ * any app; we record the sentinel so restore skips cleanly. */
+#define NPP_POS_UNSET (-32768)
+static int s_restore_x = NPP_POS_UNSET, s_restore_y = NPP_POS_UNSET;
+
+static void npp_window_get_origin(GtkWindow *win, int *x, int *y)
+{
+    *x = NPP_POS_UNSET; *y = NPP_POS_UNSET;
+#ifdef GDK_WINDOWING_X11
+    GdkDisplay *d = gtk_widget_get_display(GTK_WIDGET(win));
+    GdkSurface *surf = gtk_native_get_surface(GTK_NATIVE(win));
+    if (!surf || !GDK_IS_X11_DISPLAY(d)) return;
+    Display *xd = gdk_x11_display_get_xdisplay(d);
+    Window   xw = gdk_x11_surface_get_xid(surf);
+    Window   root = DefaultRootWindow(xd), child;
+    int rx = 0, ry = 0;
+    if (XTranslateCoordinates(xd, xw, root, 0, 0, &rx, &ry, &child)) {
+        *x = rx; *y = ry;
+    }
+#else
+    (void)win;
+#endif
+}
+
+/* One-shot on the window's first map: the X surface only exists now. */
+static void on_window_first_map(GtkWidget *w, gpointer ud)
+{
+    (void)ud;
+    if (s_restore_x == NPP_POS_UNSET) return;
+#ifdef GDK_WINDOWING_X11
+    GdkDisplay *d = gtk_widget_get_display(w);
+    GdkSurface *surf = gtk_native_get_surface(GTK_NATIVE(w));
+    if (surf && GDK_IS_X11_DISPLAY(d)) {
+        Display *xd = gdk_x11_display_get_xdisplay(d);
+        XMoveWindow(xd, gdk_x11_surface_get_xid(surf),
+                    s_restore_x, s_restore_y);
+        XFlush(xd);
+    }
+#endif
+    s_restore_x = s_restore_y = NPP_POS_UNSET;
+    g_signal_handlers_disconnect_by_func(w, on_window_first_map, ud);
+}
+
+#ifdef GDK_WINDOWING_X11
 #include <X11/Xlib.h>
 #endif
 #include "udl_editor.h"
@@ -623,8 +675,8 @@ static void action_quit(GSimpleAction *a, GVariant *p, gpointer ud) {
     /* Capture window frame so the next launch restores it. */
     if (g_window) {
         int ww = 0, wh = 0, wx = 0, wy = 0;
-        gtk_window_get_size    (GTK_WINDOW(g_window), &ww, &wh);
-        gtk_window_get_position(GTK_WINDOW(g_window), &wx, &wy);
+        gtk_window_get_size(GTK_WINDOW(g_window), &ww, &wh);
+        npp_window_get_origin(GTK_WINDOW(g_window), &wx, &wy);  /* GH #7 */
         gboolean maxim = gtk_window_is_maximized(GTK_WINDOW(g_window));
         session_stash_geometry(ww, wh, wx, wy, maxim);
     }
@@ -9135,8 +9187,8 @@ static gboolean on_window_delete(GtkWindow *w, gpointer ud)
      * toplevel starts tearing down and size queries become unreliable. */
     if (g_window) {
         int ww = 0, wh = 0, wx = 0, wy = 0;
-        gtk_window_get_size    (GTK_WINDOW(g_window), &ww, &wh);
-        gtk_window_get_position(GTK_WINDOW(g_window), &wx, &wy);
+        gtk_window_get_size(GTK_WINDOW(g_window), &ww, &wh);
+        npp_window_get_origin(GTK_WINDOW(g_window), &wx, &wy);  /* GH #7 */
         gboolean maxim = gtk_window_is_maximized(GTK_WINDOW(g_window));
         session_stash_geometry(ww, wh, wx, wy, maxim);
     }
@@ -9245,8 +9297,13 @@ static void build_main_window(GtkApplication *app)
         if (session_get_saved_geometry(&sw, &sh, &sx, &sy, &smax)
             && sw > 200 && sh > 200) {
             gtk_window_set_default_size(GTK_WINDOW(g_window), sw, sh);
-            if (sx > -32768 && sy > -32768)
-                gtk_window_move(GTK_WINDOW(g_window), sx, sy);
+            /* GH #7 — position restores on first map (X11 only; the
+             * surface doesn't exist yet at this point). */
+            if (sx > NPP_POS_UNSET && sy > NPP_POS_UNSET) {
+                s_restore_x = sx; s_restore_y = sy;
+                g_signal_connect(g_window, "map",
+                                 G_CALLBACK(on_window_first_map), NULL);
+            }
             if (smax)
                 gtk_window_maximize(GTK_WINDOW(g_window));
         } else {

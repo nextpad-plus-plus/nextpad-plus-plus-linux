@@ -515,6 +515,28 @@ void session_restore_from(const char *path)
     int restored = 0;
     int last_page = -1;
 
+    /* GH #7 — the startup placeholder "new 1". editor_open_path adopts a
+     * pristine empty untitled tab in place (file entries consume it), but
+     * the untitled-snapshot branch below creates a NEW doc, so a session
+     * whose only tab was a dirty scratchpad restored NEXT TO the
+     * placeholder: two "New 1" tabs, one empty. Remember the lone
+     * pristine untitled now; if the restore brought anything in and it is
+     * STILL pristine afterwards, close it (macOS restoreLastSession never
+     * creates the placeholder in the first place). */
+    NppDoc *placeholder = NULL;
+    {
+        GPtrArray *docs = editor_all_docs();
+        if (docs->len == 1) {
+            NppDoc *d0 = g_ptr_array_index(docs, 0);
+            if (d0 && d0->sci && !d0->filepath &&
+                !(d0->custom_name && d0->custom_name[0]) && !d0->modified &&
+                scintilla_send_message(SCINTILLA(d0->sci),
+                                       SCI_GETLENGTH, 0, 0) == 0)
+                placeholder = d0;
+        }
+        g_ptr_array_free(docs, TRUE);
+    }
+
     for (int i = 0; i < st.count; i++) {
         SessionEntry *e = &st.entries[i];
         gboolean untitled = (e->filepath[0] == '\0');
@@ -720,6 +742,30 @@ void session_restore_from(const char *path)
         restored++;
         g_free(e->bookmarks);
         g_free(e->folds);
+    }
+
+    /* GH #7 — drop the untouched placeholder (see above). Guard that it
+     * still exists and stayed pristine: a file entry may have adopted it
+     * (filepath set) and the user cannot have typed into it mid-restore. */
+    if (restored > 0 && placeholder) {
+        GPtrArray *docs = editor_all_docs();
+        gboolean alive = FALSE;
+        for (guint i = 0; i < docs->len && !alive; i++)
+            alive = (g_ptr_array_index(docs, i) == placeholder);
+        g_ptr_array_free(docs, TRUE);
+        gboolean pristine =
+            alive && !placeholder->filepath && !placeholder->modified &&
+            !(placeholder->custom_name && placeholder->custom_name[0]) &&
+            scintilla_send_message(SCINTILLA(placeholder->sci),
+                                   SCI_GETLENGTH, 0, 0) == 0;
+        if (pristine)
+            editor_close_sci(placeholder->sci);
+        if (g_getenv("NPP_SESSION_DEBUG")) {
+            GPtrArray *after = editor_all_docs();
+            g_message("[session] restored=%d placeholder=%s tabs=%u",
+                      restored, pristine ? "closed" : "kept", after->len);
+            g_ptr_array_free(after, TRUE);
+        }
     }
 
     if (last_page >= 0) {
