@@ -135,6 +135,8 @@ typedef struct {
     char     panel_zoom[256];         /* GAP-162 — "workspace=2 git=-1"
                                          (macOS PanelZoom_* keys) */
     char     floating_panels[512];    /* "funclist=420x600:pinned" */
+    char     panel_dock_heights[512]; /* GAP-184 — "doclist=240 …" (bottom
+                                       * strip height per panel) */
     char     panel_dock_sides[512];   /* GAP-123 — "doclist=left …";
                                        * absent = right (macOS
                                        * PanelDockSides dict) */

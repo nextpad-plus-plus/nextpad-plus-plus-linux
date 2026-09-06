@@ -45,9 +45,11 @@ typedef struct {
     GtkWidget *title_label;
     GtkWidget *pop_button;
     GtkWidget *pop_image;     /* GtkImage inside pop_button */
-    GtkWidget *move_button;   /* GAP-123 — move-dock (left↔right) button */
+    GtkWidget *move_button;   /* GAP-123/184 — target-carrying dock button */
     GtkWidget *move_image;
-    gboolean   on_left;       /* GAP-123 — currently docked on the left  */
+    GtkWidget *dock2_button;  /* GAP-184 — the second dock button          */
+    GtkWidget *dock2_image;
+    NppDockSide side;         /* GAP-184 — current dock region            */
     GtkWidget *close_button;
     GtkWidget *separator;
     GtkWidget *content;
@@ -59,7 +61,7 @@ typedef struct {
 
 /* GAP-123 — main.c installs the actual host-move logic; the frame only
  * owns the button + icon. */
-static void (*s_move_hook)(GtkWidget *frame);
+static void (*s_move_hook)(GtkWidget *frame, NppDockSide target);
 
 #define PF_STATE_KEY "nextpad-panel-frame-state"
 
@@ -387,35 +389,65 @@ static void on_pop_clicked(GtkButton *btn, gpointer ud) {
 
 /* ── GAP-123 — move-dock button (macOS 2ccf0d9) ──────────────────────── */
 
-/* Right-docked panels show the "move left" symbol, left-docked ones the
- * mirror — the icon depicts the DESTINATION, like macOS. */
+/* GAP-184 (macOS 8b22e9d) — the dock buttons carry explicit TARGETS.
+ * Side-docked frames: [dock-to-bottom][move-across]; bottom-docked
+ * frames: [dock-left][dock-right]. Icons depict the DESTINATION
+ * (Adwaita-grid sidebar pictograms, 16-unit, user asset swap
+ * 2026-08-11; dock-bottom drawn in the same family — placeholder until
+ * the user supplies their own art). Targets ride on the buttons as
+ * object data so one click handler serves both. */
 static void pf_refresh_move_icon(PanelFrameState *st) {
     if (!st->move_button) return;
-    /* Adwaita-grid sidebar pictograms (16-unit, pixel-aligned strokes —
-     * crisp at small sizes unlike the 100-unit SF exports; user asset
-     * swap 2026-08-11). sidebar-show = panel on the LEFT edge,
-     * sidebar-show-rtl = panel on the RIGHT; the icon depicts the
-     * DESTINATION side, as before. */
-    GtkWidget *img = st->on_left
-        ? pf_sfsymbol_image("sidebar-show-rtl",
-                            PF_MOVE_ICON_PX, "go-next")
-        : pf_sfsymbol_image("sidebar-show",
-                            PF_MOVE_ICON_PX, "go-previous");
+    const char *sym_a, *fb_a, *tip_a; NppDockSide tgt_a;
+    const char *sym_b, *fb_b, *tip_b; NppDockSide tgt_b;
+    if (st->side == NPP_DOCK_BOTTOM) {
+        sym_a = "sidebar-show";     fb_a = "go-previous";
+        tip_a = "Dock on the left side";  tgt_a = NPP_DOCK_LEFT;
+        sym_b = "sidebar-show-rtl"; fb_b = "go-next";
+        tip_b = "Dock on the right side"; tgt_b = NPP_DOCK_RIGHT;
+    } else {
+        sym_a = "dock-bottom";      fb_a = "go-down";
+        tip_a = "Dock at the bottom";     tgt_a = NPP_DOCK_BOTTOM;
+        if (st->side == NPP_DOCK_LEFT) {
+            sym_b = "sidebar-show-rtl"; fb_b = "go-next";
+            tip_b = "Move to the right side"; tgt_b = NPP_DOCK_RIGHT;
+        } else {
+            sym_b = "sidebar-show";     fb_b = "go-previous";
+            tip_b = "Move to the left side";  tgt_b = NPP_DOCK_LEFT;
+        }
+    }
+    if (st->dock2_button) {
+        GtkWidget *img = pf_sfsymbol_image(sym_a, PF_MOVE_ICON_PX, fb_a);
+        if (st->dock2_image)
+            gtk_container_remove(GTK_CONTAINER(st->dock2_button),
+                                 st->dock2_image);
+        st->dock2_image = img;
+        gtk_container_add(GTK_CONTAINER(st->dock2_button), st->dock2_image);
+        gtk_widget_show(st->dock2_image);
+        gtk_widget_set_tooltip_text(st->dock2_button, tip_a);
+        g_object_set_data(G_OBJECT(st->dock2_button), "npp-dock-target",
+                          GINT_TO_POINTER((int)tgt_a + 1));
+    }
+    GtkWidget *img = pf_sfsymbol_image(sym_b, PF_MOVE_ICON_PX, fb_b);
     if (st->move_image)
         gtk_container_remove(GTK_CONTAINER(st->move_button), st->move_image);
     st->move_image = img;
     gtk_container_add(GTK_CONTAINER(st->move_button), st->move_image);
     gtk_widget_show(st->move_image);
-    gtk_widget_set_tooltip_text(st->move_button,
-        st->on_left ? "Move to the right side" : "Move to the left side");
+    gtk_widget_set_tooltip_text(st->move_button, tip_b);
+    g_object_set_data(G_OBJECT(st->move_button), "npp-dock-target",
+                      GINT_TO_POINTER((int)tgt_b + 1));
 }
 
 static void on_move_clicked(GtkButton *btn, gpointer ud) {
-    (void)btn;
-    if (s_move_hook) s_move_hook(GTK_WIDGET(ud));
+    int t = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(btn),
+                                              "npp-dock-target"));
+    if (s_move_hook && t)
+        s_move_hook(GTK_WIDGET(ud), (NppDockSide)(t - 1));
 }
 
-void panel_frame_set_move_hook(void (*hook)(GtkWidget *frame)) {
+void panel_frame_set_move_hook(void (*hook)(GtkWidget *frame,
+                                            NppDockSide target)) {
     s_move_hook = hook;
 }
 
@@ -423,20 +455,25 @@ void panel_frame_set_move_hook(void (*hook)(GtkWidget *frame)) {
  * lives in the bottom pane — not movable). */
 void panel_frame_set_movable(GtkWidget *frame, gboolean movable) {
     PanelFrameState *st = pf_state(frame);
-    if (st && st->move_button)
-        gtk_widget_set_visible(st->move_button, movable);
+    if (!st) return;
+    if (st->move_button)  gtk_widget_set_visible(st->move_button, movable);
+    if (st->dock2_button) gtk_widget_set_visible(st->dock2_button, movable);
 }
 
-void panel_frame_set_dock_side(GtkWidget *frame, gboolean left) {
+void panel_frame_set_dock_side(GtkWidget *frame, NppDockSide side) {
     PanelFrameState *st = pf_state(frame);
     if (!st) return;
-    st->on_left = left;
+    st->side = side;
     pf_refresh_move_icon(st);
 }
 
-gboolean panel_frame_dock_side_left(GtkWidget *frame) {
+NppDockSide panel_frame_dock_side(GtkWidget *frame) {
     PanelFrameState *st = pf_state(frame);
-    return st ? st->on_left : FALSE;
+    return st ? st->side : NPP_DOCK_RIGHT;
+}
+
+gboolean panel_frame_dock_side_left(GtkWidget *frame) {
+    return panel_frame_dock_side(frame) == NPP_DOCK_LEFT;
 }
 
 const char *panel_frame_get_name(GtkWidget *frame) {
@@ -660,8 +697,27 @@ GtkWidget *panel_frame_new(const char *name,
     pf_apply_css(st->move_button);
     g_signal_connect(st->move_button, "clicked",
                      G_CALLBACK(on_move_clicked), frame);
-    pf_refresh_move_icon(st);
     gtk_widget_set_visible(st->move_button, FALSE);
+
+    /* GAP-184 — second dock button (dock-to-bottom for side-docked
+     * frames; dock-left when bottom-docked). Same 17×17 chrome. */
+    st->dock2_button = gtk_button_new();
+    gtk_button_set_has_frame(GTK_BUTTON(st->dock2_button), FALSE);
+    gtk_widget_set_focus_on_click(st->dock2_button, FALSE);
+    gtk_widget_set_size_request(st->dock2_button, PF_POP_BTN_PX, PF_POP_BTN_PX);
+    gtk_widget_set_valign(st->dock2_button, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(st->dock2_button,    PF_POP_BTN_MARGIN_V);
+    gtk_widget_set_margin_bottom(st->dock2_button, PF_POP_BTN_MARGIN_V);
+    gtk_widget_set_margin_start(st->dock2_button,  PF_POP_BTN_MARGIN_H);
+    gtk_style_context_add_class(
+        gtk_widget_get_style_context(st->dock2_button),
+        "nextpad-panel-frame-button");
+    pf_apply_css(st->dock2_button);
+    g_signal_connect(st->dock2_button, "clicked",
+                     G_CALLBACK(on_move_clicked), frame);
+    gtk_widget_set_visible(st->dock2_button, FALSE);
+    st->side = NPP_DOCK_RIGHT;
+    pf_refresh_move_icon(st);
 
     /* Pop-out (detach) button — same 17×17 box as the close ✕. */
     st->pop_button = gtk_button_new();
@@ -710,6 +766,7 @@ GtkWidget *panel_frame_new(const char *name,
                      G_CALLBACK(on_close_clicked), frame);
 
     npp_box_pack(GTK_BOX(st->title_bar), st->title_label, TRUE, 0);
+    npp_box_pack(GTK_BOX(st->title_bar), st->dock2_button, FALSE, 0);
     npp_box_pack(GTK_BOX(st->title_bar), st->move_button, FALSE, 0);
     npp_box_pack(GTK_BOX(st->title_bar), st->pop_button, FALSE, 0);
     npp_box_pack(GTK_BOX(st->title_bar), st->close_button, FALSE, 0);

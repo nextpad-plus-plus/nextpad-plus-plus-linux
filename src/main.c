@@ -8751,6 +8751,10 @@ static gboolean on_files_dropped(GtkDropTarget *dt, const GValue *value,
 /* GAP-49 — plugin panels dock into the same right-side host. Stored
  * here so plugin.c can attach frames after build time. */
 static GtkWidget *g_side_panel_host;
+/* GAP-184 — third dock region: the bottom strip (panels side-by-side)
+ * living in a vertical paned above the editor's own bottom area. */
+static GtkWidget *g_side_panel_host_bottom;
+static GtkWidget *g_bottom_dock_paned;
 /* GAP-123 (macOS 2ccf0d9) — second host on the LEFT edge; panels move
  * between the two via the title-bar move-dock button. */
 static GtkWidget *g_side_panel_host_left;
@@ -8761,6 +8765,9 @@ static GtkWidget *frame_current_host(GtkWidget *frame) {
     if (g_side_panel_host_left &&
         gtk_widget_is_ancestor(frame, g_side_panel_host_left))
         return g_side_panel_host_left;
+    if (g_side_panel_host_bottom &&
+        gtk_widget_is_ancestor(frame, g_side_panel_host_bottom))
+        return g_side_panel_host_bottom;
     return g_side_panel_host;
 }
 
@@ -8905,6 +8912,7 @@ typedef struct {
     int        last_set_n;
     guint      redist_source;
     int        redist_tries;
+    gboolean   horizontal;                 /* GAP-184 — bottom strip */
 } DockChain;
 
 static DockChain *host_chain(GtkWidget *host) {
@@ -8933,7 +8941,8 @@ static gboolean side_dock_redistribute_cb(gpointer d) {
     if (!dc->chain_root) { dc->redist_source = 0; return G_SOURCE_REMOVE; }
     GtkAllocation a;
     gtk_widget_get_allocation(dc->chain_root, &a);
-    if (a.height <= 1) {
+    int extent = dc->horizontal ? a.width : a.height;   /* GAP-184 */
+    if (extent <= 1) {
         if (++dc->redist_tries < 600) return G_SOURCE_CONTINUE;
         dc->redist_source = 0;
         return G_SOURCE_REMOVE;   /* never mapped — give up */
@@ -8942,7 +8951,7 @@ static gboolean side_dock_redistribute_cb(gpointer d) {
     for (GtkWidget *p = dc->chain_root; GTK_IS_PANED(p);
          p = gtk_paned_get_end_child(GTK_PANED(p)))
         m++;
-    int slice = a.height / m;
+    int slice = extent / m;
     for (GtkWidget *p = dc->chain_root; GTK_IS_PANED(p);
          p = gtk_paned_get_end_child(GTK_PANED(p)))
         gtk_paned_set_position(GTK_PANED(p), slice);
@@ -8958,6 +8967,10 @@ static void side_dock_schedule_redistribute(DockChain *dc) {
 
 static void side_dock_chain_rebuild(GtkWidget *host) {
     DockChain *dc = host_chain(host);
+    /* GAP-184 — the bottom strip stacks side-by-side: horizontal paneds
+     * (macOS flips the NSSplitView axis the same way). */
+    dc->horizontal =
+        g_object_get_data(G_OBJECT(host), "npp-dock-bottom") != NULL;
     GtkWidget *vis[MAX_DOCK_FRAMES];
     int n = 0;
     for (int i = 0; i < s_dock_frame_n; i++) {
@@ -9020,8 +9033,10 @@ static void side_dock_chain_rebuild(GtkWidget *host) {
 
     GtkWidget *tail = NULL;
     for (int i = 0; i < n - 1; i++) {
-        GtkWidget *pd = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
+        GtkWidget *pd = gtk_paned_new(dc->horizontal
+            ? GTK_ORIENTATION_HORIZONTAL : GTK_ORIENTATION_VERTICAL);
         gtk_widget_set_vexpand(pd, TRUE);
+        if (dc->horizontal) gtk_widget_set_hexpand(pd, TRUE);
         gtk_paned_set_shrink_start_child(GTK_PANED(pd), FALSE);
         gtk_paned_set_shrink_end_child(GTK_PANED(pd), FALSE);
         /* Outer-height changes go to the bottom-most panel (macOS: the
@@ -9042,6 +9057,63 @@ static void side_dock_chain_rebuild(GtkWidget *host) {
     g_object_unref(vis[n - 1]);
     npp_box_pack(GTK_BOX(host), dc->chain_root, TRUE, 0);
     side_dock_schedule_redistribute(dc);
+    if (g_getenv("NPP_PANEL_DEBUG"))
+        g_message("[panel] chain rebuilt: n=%d horizontal=%d",
+                  n, dc->horizontal);
+}
+
+/* GAP-184 — deferred bottom-strip expansion (the 6455974 lesson carried
+ * as design: expand from the PERSISTED height, never the live frame, and
+ * defer until the paned is allocated — startup restore runs pre-map). */
+typedef struct { GtkWidget *paned; int strip; int tries; } BottomPending;
+
+static gboolean apply_bottom_pending(gpointer d)
+{
+    BottomPending *bp = d;
+    GtkAllocation a;
+    gtk_widget_get_allocation(bp->paned, &a);
+    if (a.height <= 1) {
+        if (++bp->tries < 600) return G_SOURCE_CONTINUE;
+        g_object_set_data(G_OBJECT(bp->paned), "npp-bottom-pending", NULL);
+        g_free(bp);
+        return G_SOURCE_REMOVE;
+    }
+    int strip = bp->strip > 0 ? bp->strip : MAX(160, a.height * 3 / 10);
+    if (strip > a.height - 200) strip = MAX(120, a.height - 200);
+    s_paned_programmatic = TRUE;
+    gtk_paned_set_position(GTK_PANED(bp->paned), a.height - strip);
+    s_paned_programmatic = FALSE;
+    if (g_getenv("NPP_PANEL_DEBUG"))
+        g_message("[panel] bottom deferred apply: H=%d strip=%d pos=%d",
+                  a.height, strip, a.height - strip);
+    g_object_set_data(G_OBJECT(bp->paned), "npp-bottom-pending", NULL);
+    g_free(bp);
+    return G_SOURCE_REMOVE;
+}
+
+static void bottom_strip_expand(GtkWidget *frame)
+{
+    if (!g_bottom_dock_paned) return;
+    int saved = panelstate_saved_height(frame);
+    GtkAllocation a;
+    gtk_widget_get_allocation(g_bottom_dock_paned, &a);
+    if (a.height <= 1) {
+        BottomPending *bp = g_object_get_data(G_OBJECT(g_bottom_dock_paned),
+                                              "npp-bottom-pending");
+        if (bp) { bp->strip = saved; return; }   /* newer open wins */
+        bp = g_new0(BottomPending, 1);
+        bp->paned = g_bottom_dock_paned;
+        bp->strip = saved;
+        g_object_set_data(G_OBJECT(g_bottom_dock_paned),
+                          "npp-bottom-pending", bp);
+        g_timeout_add(50, apply_bottom_pending, bp);
+        return;
+    }
+    int strip = saved > 0 ? saved : MAX(160, a.height * 3 / 10);
+    if (strip > a.height - 200) strip = MAX(120, a.height - 200);
+    s_paned_programmatic = TRUE;
+    gtk_paned_set_position(GTK_PANED(g_bottom_dock_paned), a.height - strip);
+    s_paned_programmatic = FALSE;
 }
 
 static void side_host_recount(GtkWidget *host, GtkWidget *opened_frame) {
@@ -9049,6 +9121,31 @@ static void side_host_recount(GtkWidget *host, GtkWidget *opened_frame) {
     GtkWidget *paned = GTK_WIDGET(g_object_get_data(G_OBJECT(host),
                                                     "npp-hpaned"));
     side_dock_chain_rebuild(host);   /* GAP-99 — re-nest on set change */
+    /* GAP-184 — the bottom strip expands/collapses through its own
+     * vertical paned; the side branches below are width logic. Collapse
+     * = hide the host (GtkPaned drops the handle for a hidden child and
+     * hands the space back — no divider-thickness games needed, unlike
+     * the macOS NSSplitView fight in 6455974). Expand only when the
+     * strip was collapsed: stacking a second panel into an open strip
+     * must never jump the height the user chose (GAP-82 rule). */
+    if (host == g_side_panel_host_bottom) {
+        gboolean was_hidden = !gtk_widget_get_visible(host);
+        if (side_host_any_visible(host)) {
+            gtk_widget_show(host);
+            if (was_hidden) bottom_strip_expand(opened_frame);
+        } else {
+            gtk_widget_hide(host);
+        }
+        if (g_getenv("NPP_PANEL_DEBUG"))
+            g_message("[panel] bottom host: visible=%d pos=%d",
+                      side_host_any_visible(host),
+                      g_bottom_dock_paned
+                        ? gtk_paned_get_position(GTK_PANED(g_bottom_dock_paned))
+                        : -1);
+        if (!s_tb_sync_idle)
+            s_tb_sync_idle = g_idle_add(tb_sync_idle_cb, NULL);
+        return;
+    }
     if (side_host_any_visible(host)) {
         /* GAP-82 (macOS 619750a): position the divider only when the
          * pane was COLLAPSED — stacking a second panel into an open
@@ -9122,18 +9219,39 @@ static void side_host_dock_changed(GtkWidget *frame_or_null) {
         side_host_recount(g_side_panel_host, frame_or_null);
     if (g_side_panel_host_left)
         side_host_recount(g_side_panel_host_left, NULL);
+    if (g_side_panel_host_bottom)                       /* GAP-184 */
+        side_host_recount(g_side_panel_host_bottom, NULL);
 }
 
-/* GAP-123 — the panel_frame move-dock button hook: reparent the frame
- * into the other host, persist the side, refresh the icon. Popped
- * frames never show the button (chrome collapses), so the frame is
- * always docked here. */
-static void panel_move_dock_side(GtkWidget *frame) {
-    if (!g_side_panel_host_left || !frame) return;
+/* GAP-184 — host for a dock region (macOS _hostForSide:). */
+static GtkWidget *host_for_side(NppDockSide side) {
+    switch (side) {
+    case NPP_DOCK_LEFT:   return g_side_panel_host_left;
+    case NPP_DOCK_BOTTOM: return g_side_panel_host_bottom;
+    case NPP_DOCK_RIGHT:  default: return g_side_panel_host;
+    }
+}
+
+/* GAP-184 — per-region frame minimums: side stacks floor the HEIGHT
+ * (title bar + sliver, 40), the bottom strip floors the WIDTH (150 —
+ * the macOS horizontal minimum) so side-by-side dividers can't crush a
+ * panel to nothing. */
+static void panel_frame_apply_min(GtkWidget *frame, NppDockSide side) {
+    if (side == NPP_DOCK_BOTTOM)
+        gtk_widget_set_size_request(frame, 150, 40);
+    else
+        gtk_widget_set_size_request(frame, -1, 40);
+}
+
+/* GAP-123/184 — the panel_frame dock-button hook: reparent the frame
+ * into the host for the requested region, persist the side, refresh the
+ * chrome (macOS _movePanel:toSide:). Popped frames never show the
+ * buttons (chrome collapses), so the frame is always docked here. */
+static void panel_move_dock_side(GtkWidget *frame, NppDockSide side) {
+    if (!frame) return;
     GtkWidget *src = frame_current_host(frame);
-    gboolean to_left = (src != g_side_panel_host_left);
-    GtkWidget *dst = to_left ? g_side_panel_host_left : g_side_panel_host;
-    if (src == dst) return;
+    GtkWidget *dst = host_for_side(side);
+    if (!dst || src == dst) return;
 
     /* Same focus rescue as the chain rebuild — the reparent unparents
      * the frame with the focus chain live. */
@@ -9152,25 +9270,34 @@ static void panel_move_dock_side(GtkWidget *frame) {
     npp_box_pack(GTK_BOX(dst), frame, TRUE, 0);
     g_object_unref(frame);
 
-    panel_frame_set_dock_side(frame, to_left);
+    panel_frame_set_dock_side(frame, side);
+    panel_frame_apply_min(frame, side);
     const char *nm = panel_frame_get_name(frame);
-    if (nm) panelstate_note_side(nm, to_left);
+    if (nm) panelstate_note_side_v(nm, side);
+    if (g_getenv("NPP_PANEL_DEBUG"))
+        g_message("[panel] move %s -> %s", nm ? nm : "?",
+                  side == NPP_DOCK_LEFT ? "left" :
+                  side == NPP_DOCK_BOTTOM ? "bottom" : "right");
 
     side_host_recount(src, NULL);
     side_host_recount(dst, gtk_widget_get_visible(frame) ? frame : NULL);
 }
 
-/* GAP-123 — apply a persisted left-side choice to a (hidden, box-packed)
- * frame at build/attach time, and enable its move button. */
+/* GAP-123/184 — apply a persisted dock region to a (hidden, box-packed)
+ * frame at build/attach time, and enable its dock buttons. */
 static void panel_apply_dock_side(GtkWidget *frame) {
     panel_frame_set_movable(frame, TRUE);
     const char *nm = panel_frame_get_name(frame);
-    if (!nm || !panelstate_side_left(nm) || !g_side_panel_host_left) return;
+    if (!nm) return;
+    NppDockSide side = panelstate_side(nm);
+    GtkWidget *dst = host_for_side(side);
+    if (side == NPP_DOCK_RIGHT || !dst) return;
     g_object_ref(frame);
     gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(frame)), frame);
-    npp_box_pack(GTK_BOX(g_side_panel_host_left), frame, TRUE, 0);
+    npp_box_pack(GTK_BOX(dst), frame, TRUE, 0);
     g_object_unref(frame);
-    panel_frame_set_dock_side(frame, TRUE);
+    panel_frame_set_dock_side(frame, side);
+    panel_frame_apply_min(frame, side);
 }
 
 /* GAP-82 — a user drag of the hpaned divider resized the side pane:
@@ -9192,6 +9319,21 @@ static void on_hpaned_position(GObject *paned, GParamSpec *pspec,
     int pos = gtk_paned_get_position(GTK_PANED(paned));
     panelstate_note_width_host(left ? pos : a.width - pos,
                                GTK_WIDGET(host));
+}
+
+/* GAP-184 — a user drag of the bottom-strip divider resized the strip:
+ * remember the new HEIGHT for every panel docked in it (the vertical
+ * twin of on_hpaned_position; macOS _saveBottomPanelHeight). */
+static void on_bottom_paned_position(GObject *paned, GParamSpec *pspec,
+                                     gpointer host)
+{
+    (void)pspec;
+    if (s_paned_programmatic || !s_paned_user_drag) return;
+    if (!gtk_widget_get_visible(GTK_WIDGET(host))) return;
+    GtkAllocation a;
+    gtk_widget_get_allocation(GTK_WIDGET(paned), &a);
+    int h = a.height - gtk_paned_get_position(GTK_PANED(paned));
+    panelstate_note_height_host(h, GTK_WIDGET(host));
 }
 
 /* ------------------------------------------------------------------ */
@@ -9421,8 +9563,27 @@ static void build_main_window(GtkApplication *app)
     GtkWidget *cliphistory_frame = cliphistoryw
         ? panel_frame_new("cliphistory", "Clipboard History", cliphistoryw, NULL, NULL) : NULL;
 
+    /* GAP-184 (macOS 8b22e9d) — bottom dock strip: [editor / bottom
+     * host] nested as the TOP pane of the search split, so Search
+     * Results keeps its exact divider semantics and stays at the very
+     * bottom, below the strip. Topology note: macOS's search split
+     * wraps the whole editor+sides area; the Linux one spans the editor
+     * column only, so the strip follows the Linux convention and spans
+     * the editor column — documented divergence (docs/13 GAP-184). */
+    GtkWidget *side_panel_host_bottom =
+        gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    g_side_panel_host_bottom = side_panel_host_bottom;
+    g_object_set_data(G_OBJECT(side_panel_host_bottom), "npp-dock-bottom",
+                      GINT_TO_POINTER(1));
+    GtkWidget *bottom_dock_paned = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
+    g_bottom_dock_paned = bottom_dock_paned;
+    gtk_paned_pack1(GTK_PANED(bottom_dock_paned), notebook, TRUE, FALSE);
+    gtk_paned_pack2(GTK_PANED(bottom_dock_paned), side_panel_host_bottom,
+                    FALSE, FALSE);
+    gtk_widget_hide(side_panel_host_bottom);   /* collapsed until a panel docks */
+
     GtkWidget *vpaned = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
-    gtk_paned_pack1(GTK_PANED(vpaned), notebook, TRUE, FALSE);
+    gtk_paned_pack1(GTK_PANED(vpaned), bottom_dock_paned, TRUE, FALSE);
     if (sresults_frame) gtk_paned_pack2(GTK_PANED(vpaned), sresults_frame, FALSE, FALSE);
 
     GtkWidget *side_panel_host = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -9490,6 +9651,22 @@ static void build_main_window(GtkApplication *app)
                      G_CALLBACK(on_hpaned_position), side_panel_host_left);
     /* Starts empty — collapse until a panel moves in. */
     gtk_widget_hide(side_panel_host_left);
+
+    /* GAP-184 — bottom-strip divider: same user-drag gating as the side
+     * panes, saving the strip HEIGHT (paned height − position) to every
+     * panel docked in the strip. */
+    {
+        GtkGesture *g = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(g), GDK_BUTTON_PRIMARY);
+        gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(g),
+                                                   GTK_PHASE_CAPTURE);
+        g_signal_connect(g, "pressed",  G_CALLBACK(on_hpaned_press),   bottom_dock_paned);
+        g_signal_connect(g, "released", G_CALLBACK(on_hpaned_release), bottom_dock_paned);
+        gtk_widget_add_controller(bottom_dock_paned, GTK_EVENT_CONTROLLER(g));
+    }
+    g_signal_connect(bottom_dock_paned, "notify::position",
+                     G_CALLBACK(on_bottom_paned_position),
+                     side_panel_host_bottom);
 
     /* Q14 — wire each frame's show/hide to the host visibility counter. */
     GtkWidget *side_frames[] = {

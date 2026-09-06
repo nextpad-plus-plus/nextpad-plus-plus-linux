@@ -617,6 +617,10 @@ static void apply_text(const char *group, const char *text) {
         g_strlcpy(g_prefs.panel_dock_sides, t,
                   sizeof(g_prefs.panel_dock_sides));
     }
+    else if (!strcmp(group, "PanelDockHeights")) {         /* GAP-184 */
+        g_strlcpy(g_prefs.panel_dock_heights, t,
+                  sizeof(g_prefs.panel_dock_heights));
+    }
     else if (!strcmp(group, "NewDocDefaultLanguage")) {
         strncpy(g_prefs.default_language, t, sizeof(g_prefs.default_language) - 1);
         g_prefs.default_language[sizeof(g_prefs.default_language) - 1] = '\0';
@@ -975,6 +979,9 @@ g_prefs.tab_max_label_width,
     g_string_append_printf(b,
         "        <GUIConfig name=\"PanelDockSides\">%s</GUIConfig>\n",
         g_prefs.panel_dock_sides);
+    g_string_append_printf(b,
+        "        <GUIConfig name=\"PanelDockHeights\">%s</GUIConfig>\n",
+        g_prefs.panel_dock_heights);
 
     /* ScintillaPrimaryView */
     char edgeCol[32], edgeModeAttr[32], lineMult[16];

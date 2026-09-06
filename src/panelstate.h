@@ -24,6 +24,7 @@
 #define PANELSTATE_H
 
 #include <gtk/gtk.h>
+#include "panel_frame.h"   /* NppDockSide */
 
 /* Register a side panel. `frame` is its panel_frame widget (docked in
  * the right-side host). `restorable` panels participate in open-state
@@ -48,10 +49,20 @@ void panelstate_note_width(int width);
  * layout: save the width of whichever pane was dragged). */
 void panelstate_note_width_host(int width, GtkWidget *host);
 
-/* GAP-123 — per-panel dock side, persisted as the PanelDockSides
- * GUIConfig ("name=left …"; absent = right). */
-gboolean panelstate_side_left(const char *name);
-void     panelstate_note_side(const char *name, gboolean left);
+/* GAP-123/184 — per-panel dock region, persisted as the PanelDockSides
+ * GUIConfig ("name=left name=bottom …"; ABSENT means right — the
+ * historical encoding, so configs written by older builds stay
+ * compatible; identical to the macOS PanelDockSides rule). */
+NppDockSide panelstate_side(const char *name);
+void        panelstate_note_side_v(const char *name, NppDockSide side);
+gboolean panelstate_side_left(const char *name);              /* legacy */
+void     panelstate_note_side(const char *name, gboolean left);/* legacy */
+
+/* GAP-184 — bottom-strip height, per panel (PanelDockHeights: the
+ * vertical twin of SidePanelWidths). 0 = nothing stored (caller applies
+ * the first-open default). Floor 120 (macOS). */
+int  panelstate_saved_height(GtkWidget *frame);
+void panelstate_note_height_host(int height, GtkWidget *host);
 
 /* Replay the saved open/popped state (call once, at startup, after the
  * panels and floating registry are built). Gated by panel_keep_state.

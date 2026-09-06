@@ -7,6 +7,7 @@
  * of that window reparents back.
  */
 #include "floating.h"
+#include "panelstate.h"   /* GAP-184 — pop-out re-homes the dock side */
 #include "gtk_compat.h"
 #include "panel_frame.h"
 #include <string.h>
@@ -238,6 +239,16 @@ void floating_popout(const char *name) {
     /* GAP-98: the removal emits no hide — let the dock re-derive its
      * visibility (collapses when the detached panel was the last one). */
     if (s_dock_hook) s_dock_hook(NULL);
+
+    /* GAP-184 (macOS 8b22e9d rule) — a panel popped out of the LEFT or
+     * BOTTOM host is silently re-homed to the RIGHT host: dock-back
+     * targets the registration slot (the right stack), so flipping the
+     * remembered side here keeps the pref, the chrome and the next
+     * launch consistent with where the panel will actually land. */
+    if (panelstate_side(name) != NPP_DOCK_RIGHT) {
+        panelstate_note_side_v(name, NPP_DOCK_RIGHT);
+        panel_frame_set_dock_side(e->widget, NPP_DOCK_RIGHT);
+    }
 
     GtkWidget *win = gtk_window_new();
     /* Just the user-facing panel title from the frame's bar ("Folder as

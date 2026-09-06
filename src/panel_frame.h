@@ -16,6 +16,17 @@
 
 #include <gtk/gtk.h>
 
+/* GAP-184 (macOS NppDockSide.h, values identical) — which dock region a
+ * panel lives in. Left/right are the classic vertical side stacks;
+ * Bottom is the horizontal strip above the status-bar area (panels
+ * stacked side-by-side). Shared by panel_frame, panelstate and main.c
+ * so the three never disagree about direction. */
+typedef enum {
+    NPP_DOCK_LEFT   = 0,
+    NPP_DOCK_RIGHT  = 1,
+    NPP_DOCK_BOTTOM = 2,
+} NppDockSide;
+
 /* Wraps `content` in a uniform 24-px title bar with [pop] [×] buttons.
  *  - `title`: shown left-aligned in the bar.
  *  - `name`: stable id (must match the registration name used by floating.h)
@@ -64,13 +75,19 @@ void panel_frame_simulate_close(GtkWidget *frame);
  * by floating.c after dock-backs that bypass the frame's pop button. */
 void panel_frame_refresh_pop_icon(GtkWidget *frame);
 
-/* GAP-123 (macOS 2ccf0d9) — left↔right dock moving. The frame owns only
- * the title-bar move button and its side flag; main.c installs the hook
- * that actually reparents between the two side hosts. */
-void panel_frame_set_move_hook(void (*hook)(GtkWidget *frame));
+/* GAP-123/184 (macOS 2ccf0d9 + 8b22e9d) — dock-region moving. The frame
+ * owns only the title-bar dock buttons and its side stamp; main.c
+ * installs the hook that reparents between the three hosts. The hook
+ * receives the explicit TARGET side (bottom-docked frames carry both a
+ * left and a right button, so the target can no longer be inferred from
+ * the current side). Side-docked frames show [dock-bottom][move-across];
+ * bottom-docked frames show [dock-left][dock-right]. */
+void panel_frame_set_move_hook(void (*hook)(GtkWidget *frame,
+                                            NppDockSide target));
 void panel_frame_set_movable(GtkWidget *frame, gboolean movable);
-void panel_frame_set_dock_side(GtkWidget *frame, gboolean left);
-gboolean panel_frame_dock_side_left(GtkWidget *frame);
+void panel_frame_set_dock_side(GtkWidget *frame, NppDockSide side);
+NppDockSide panel_frame_dock_side(GtkWidget *frame);
+gboolean panel_frame_dock_side_left(GtkWidget *frame);   /* legacy: LEFT? */
 const char *panel_frame_get_name(GtkWidget *frame);
 
 /* GAP-101 — themed icon loader for the float-window header buttons:

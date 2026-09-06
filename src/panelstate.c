@@ -150,21 +150,23 @@ void panelstate_note_width_host(int width, GtkWidget *host)
 /* ── GAP-123 — per-panel dock side ("name=left …"; absent = right, so
  * the default layout is unchanged — the macOS PanelDockSides rule). ── */
 
-gboolean panelstate_side_left(const char *name)
+NppDockSide panelstate_side(const char *name)
 {
-    if (!name || !*name) return FALSE;
+    if (!name || !*name) return NPP_DOCK_RIGHT;
     gchar **tok = g_strsplit(g_prefs.panel_dock_sides, " ", -1);
-    gboolean left = FALSE;
+    NppDockSide side = NPP_DOCK_RIGHT;
     gsize len = strlen(name);
     for (int i = 0; tok[i]; i++) {
-        if (strncmp(tok[i], name, len) == 0 && tok[i][len] == '=' &&
-            strcmp(tok[i] + len + 1, "left") == 0) { left = TRUE; break; }
+        if (strncmp(tok[i], name, len) != 0 || tok[i][len] != '=') continue;
+        if      (strcmp(tok[i] + len + 1, "left") == 0)   side = NPP_DOCK_LEFT;
+        else if (strcmp(tok[i] + len + 1, "bottom") == 0) side = NPP_DOCK_BOTTOM;
+        break;
     }
     g_strfreev(tok);
-    return left;
+    return side;
 }
 
-void panelstate_note_side(const char *name, gboolean left)
+void panelstate_note_side_v(const char *name, NppDockSide side)
 {
     if (!name || !*name || s_frozen) return;
     gchar **tok = g_strsplit(g_prefs.panel_dock_sides, " ", -1);
@@ -177,14 +179,80 @@ void panelstate_note_side(const char *name, gboolean left)
         g_string_append(out, tok[i]);
     }
     g_strfreev(tok);
-    if (left) {   /* right is the absent-default — never stored */
+    if (side != NPP_DOCK_RIGHT) {   /* right = absent-default, never stored */
         if (out->len) g_string_append_c(out, ' ');
-        g_string_append_printf(out, "%s=left", name);
+        g_string_append_printf(out, "%s=%s", name,
+                               side == NPP_DOCK_LEFT ? "left" : "bottom");
     }
     g_strlcpy(g_prefs.panel_dock_sides, out->str,
               sizeof(g_prefs.panel_dock_sides));
     g_string_free(out, TRUE);
     prefs_save();
+}
+
+gboolean panelstate_side_left(const char *name)
+{
+    return panelstate_side(name) == NPP_DOCK_LEFT;
+}
+
+void panelstate_note_side(const char *name, gboolean left)
+{
+    panelstate_note_side_v(name, left ? NPP_DOCK_LEFT : NPP_DOCK_RIGHT);
+}
+
+/* ── GAP-184 — PanelDockHeights ("name=h …"), the bottom strip's twin of
+ * SidePanelWidths: every panel docked in the strip records a dragged
+ * height; a panel's own entry is what re-opens the strip when IT docks
+ * in (macOS kPrefPanelDockHeights). ── */
+
+static int height_for_name(const char *name)
+{
+    const char *s = g_prefs.panel_dock_heights;
+    size_t nl = strlen(name);
+    while (*s) {
+        while (*s == ' ') s++;
+        if (!strncmp(s, name, nl) && s[nl] == '=') {
+            int h = atoi(s + nl + 1);
+            if (h >= 120) return h;
+        }
+        while (*s && *s != ' ') s++;
+    }
+    return 0;
+}
+
+int panelstate_saved_height(GtkWidget *frame)
+{
+    PanelEntry *e = frame ? entry_for_frame(frame) : NULL;
+    return e ? height_for_name(e->name) : 0;
+}
+
+void panelstate_note_height_host(int height, GtkWidget *host)
+{
+    if (s_suspended || s_frozen || height < 120) return;
+    GtkWidget *vis[MAX_PANELS];
+    int n = docked_visible(vis, MAX_PANELS);
+    int m = 0;
+    for (int i = 0; i < n; i++)
+        if (host && gtk_widget_is_ancestor(vis[i], host)) vis[m++] = vis[i];
+    n = m;
+    if (n <= 0) return;
+    char buf[sizeof g_prefs.panel_dock_heights];
+    size_t off = 0;
+    buf[0] = '\0';
+    for (int i = 0; i < s_n; i++) {
+        gboolean upd = FALSE;
+        for (int k = 0; k < n; k++)
+            if (vis[k] == s_panels[i].frame) upd = TRUE;
+        int h = upd ? height : height_for_name(s_panels[i].name);
+        if (h < 120) continue;
+        off += (size_t)g_snprintf(buf + off, sizeof buf - off, "%s%s=%d",
+                                  off ? " " : "", s_panels[i].name, h);
+        if (off >= sizeof buf - 1) break;
+    }
+    g_strlcpy(g_prefs.panel_dock_heights, buf,
+              sizeof g_prefs.panel_dock_heights);
+    /* Flushed by the next open/close/pop event or the quit freeze, like
+     * the widths (notify::position fires continuously during a drag). */
 }
 
 /* ── FloatingPanels ("name=WxH:pinned|free …") ──────────────────────── */
