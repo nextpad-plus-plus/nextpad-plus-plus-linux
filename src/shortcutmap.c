@@ -336,7 +336,12 @@ static const SciKeyDef SCI_DEFS[] = {
     {"SCI_CLEAR",                2180, FALSE, FALSE, FALSE, 46},
     {"SCI_CLEARALL",             2004, FALSE, FALSE, FALSE,  0},
     {"SCI_UNDO",                 2176, TRUE,  FALSE, FALSE, 'Z'},
-    {"SCI_REDO",                 2011, TRUE,  FALSE, TRUE,  'Z'},
+    /* GAP-188 — the six cells below mirror the REAL GTK MapDefault
+     * (KeyMap.cxx, OS_X_KEYS=0), not the Windows table macOS's
+     * scintKeyDefs shows: Redo is Ctrl+Y here (which overlaps app.redo
+     * — a genuine conflict the checker can now see), plain/Shift Home
+     * run VCHome/VCHomeExtend, and LineCopy is Ctrl+Shift+T. */
+    {"SCI_REDO",                 2011, TRUE,  FALSE, FALSE, 'Y'},
     {"SCI_NEWLINE",              2329, FALSE, FALSE, FALSE, 13},
     {"SCI_TAB",                  2327, FALSE, FALSE, FALSE,  9},
     {"SCI_BACKTAB",              2328, FALSE, FALSE, TRUE,   9},
@@ -371,10 +376,10 @@ static const SciKeyDef SCI_DEFS[] = {
     {"SCI_WORDPARTLEFTEXTEND",   2391, TRUE,  FALSE, TRUE,  191},
     {"SCI_WORDPARTRIGHT",        2392, TRUE,  FALSE, FALSE, 220},
     {"SCI_WORDPARTRIGHTEXTEND",  2393, TRUE,  FALSE, TRUE,  220},
-    {"SCI_HOME",                 2312, FALSE, FALSE, FALSE, 36},
-    {"SCI_HOMEEXTEND",           2313, FALSE, FALSE, TRUE,  36},
-    {"SCI_VCHOME",               2331, FALSE, FALSE, FALSE,  0},
-    {"SCI_VCHOMEEXTEND",         2332, FALSE, FALSE, FALSE,  0},
+    {"SCI_HOME",                 2312, FALSE, FALSE, FALSE,  0},
+    {"SCI_HOMEEXTEND",           2313, FALSE, FALSE, FALSE,  0},
+    {"SCI_VCHOME",               2331, FALSE, FALSE, FALSE, 36},
+    {"SCI_VCHOMEEXTEND",         2332, FALSE, FALSE, TRUE,  36},
     {"SCI_LINEEND",              2314, FALSE, FALSE, FALSE, 35},
     {"SCI_LINEENDEXTEND",        2315, FALSE, FALSE, TRUE,  35},
     {"SCI_DOCUMENTSTART",        2316, TRUE,  FALSE, FALSE, 36},
@@ -392,7 +397,7 @@ static const SciKeyDef SCI_DEFS[] = {
     {"SCI_DELLINERIGHT",         2396, TRUE,  FALSE, TRUE,  46},
     {"SCI_LINEDELETE",           2338, TRUE,  FALSE, TRUE,  'L'},
     {"SCI_LINECUT",              2337, TRUE,  FALSE, FALSE, 'L'},
-    {"SCI_LINECOPY",             2455, TRUE,  FALSE, TRUE,  'X'},
+    {"SCI_LINECOPY",             2455, TRUE,  FALSE, TRUE,  'T'},
     {"SCI_LINETRANSPOSE",        2339, TRUE,  FALSE, FALSE, 'T'},
     {"SCI_CUT",                  2177, TRUE,  FALSE, FALSE, 'X'},
     {"SCI_COPY",                 2178, TRUE,  FALSE, FALSE, 'C'},
