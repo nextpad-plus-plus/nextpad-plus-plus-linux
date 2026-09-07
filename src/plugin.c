@@ -433,9 +433,37 @@ typedef struct {
     char      *module;
     int        cmd_index;
     char      *cmd_name;
+    /* GAP-185 — NPPM_DMMREGASDCKDLG (Windows-named registration). The
+     * tTbData uMask, kept so its DWS_DF_CONT_* hint can pick the default
+     * dock side for the panel. has_mask distinguishes "never given" from
+     * a mask of 0 (CONT_LEFT is zero). float_pending = DWS_DF_FLOATING,
+     * consumed once at the first show (macOS NppPluginManager parity).
+     * dock_name is the stable frame name derived from pszModuleName +
+     * dlgID (side/width memory survives plugin load-order changes, which
+     * the legacy plugin-panel-N name does not). */
+    unsigned int dock_mask;
+    gboolean     has_mask;
+    gboolean     float_pending;
+    char        *dock_name;
 } PluginPanel;
 static PluginPanel s_plugin_panels[32];
 static int         s_plugin_panel_count = 0;
+
+/* GAP-185 — default dock region from a registered panel's uMask, or -1
+ * when the plugin never provided one. Values match NppDockSide (0 left /
+ * 1 right / 2 bottom); CONT_TOP maps to bottom (no top dock). Mirrors
+ * macOS dockSideHintForPanelView, including the &0x7 quirk: a mask of
+ * DWS_DF_FLOATING alone reads as CONT_LEFT. */
+static int dock_side_hint_from_mask(unsigned int mask)
+{
+    switch ((mask >> 28) & 0x7) {   /* CONT_* container bits */
+        case CONT_LEFT:   return NPP_DOCK_LEFT;
+        case CONT_RIGHT:  return NPP_DOCK_RIGHT;
+        case CONT_TOP:                       /* no top dock — falls through */
+        case CONT_BOTTOM: return NPP_DOCK_BOTTOM;
+    }
+    return -1;
+}
 
 /* Indicator / marker slot allocators — start at the Scintilla-reserved-for-app
  * range and increment. INDIC_CONTAINER (8) is the lowest indicator slot
@@ -821,11 +849,25 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         if (!p->frame) {
             extern GtkWidget *main_plugin_panel_attach(const char *,
                                                        const char *,
-                                                       GtkWidget *);
-            char name[32];
-            g_snprintf(name, sizeof name, "plugin-panel-%d", idx + 1);
+                                                       GtkWidget *, int);
+            char namebuf[32];
+            const char *name = p->dock_name;   /* GAP-185 — stable key */
+            if (!name) {
+                g_snprintf(namebuf, sizeof namebuf,
+                           "plugin-panel-%d", idx + 1);
+                name = namebuf;
+            }
+            /* GAP-185 — Windows-parity docking hint (tTbData uMask): the
+             * mask picks the DEFAULT dock side, only while the user has
+             * no remembered side for this panel (right = absent-default
+             * in panelstate — exactly the macOS _hasDockKey gate).
+             * Resolved here, applied inside the attach so the frame is
+             * packed into its host exactly once. */
+            int hint = p->has_mask ? dock_side_hint_from_mask(p->dock_mask)
+                                   : -1;
             p->frame = main_plugin_panel_attach(name, p->title,
-                                                GTK_WIDGET(p->panel_widget));
+                                                GTK_WIDGET(p->panel_widget),
+                                                hint);
             if (!p->frame) return 0;
             /* GAP-81/83 — pop-out support (the frame's detach button
              * dispatches floating_toggle on this name) + per-panel width
@@ -840,6 +882,13 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         p->visible = 1;
         gtk_widget_set_visible(GTK_WIDGET(p->panel_widget), TRUE);
         gtk_widget_set_visible(p->frame, TRUE);
+        /* GAP-185 — DWS_DF_FLOATING (Windows-named registration): float
+         * on the FIRST show only — afterwards the user's pop/dock
+         * choices own the state (macOS floatShowPending parity). */
+        if (p->float_pending) {
+            p->float_pending = FALSE;
+            floating_popout(panel_frame_get_name(p->frame));
+        }
         panelstate_layout_changed();   /* GAP-81 — persist open set */
         return 1;
     }
@@ -1400,14 +1449,78 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         return 1;
     }
 
-    /* DMM panel verbs that don't take a registered panel ptr — these are
-     * the deprecated macOS aliases. They forward to the registered-panel
-     * variants we already implement above. */
-    case NPPM_DMMSHOW:            return plugin_host_message(NPPM_DMM_SHOWPANEL,   wParam, lParam);
-    case NPPM_DMMHIDE:            return plugin_host_message(NPPM_DMM_HIDEPANEL,   wParam, lParam);
-    case NPPM_DMMUPDATEDISPINFO:  return 1;  /* refresh request — no-op */
+    /* ── Windows-named docking surface (GAP-185, macOS ef91925) ────────
+     * Purely additive: no in-tree Linux plugin ever sent these (they were
+     * dead forwards); the NPPM_DMM_*PANEL surface is untouched. */
+    case NPPM_DMMREGASDCKDLG: {
+        /* wParam 0, lParam = tTbData* — may live on the caller's stack
+         * (like SETPANELINFO), so everything is copied out here. Composes
+         * the two Linux primitives (REGISTERPANEL + SETPANELINFO) and
+         * stores the docking-mask hint. */
+        (void)wParam;
+        const tTbData *d = (const tTbData *)(intptr_t)lParam;
+        if (!d || !d->hClient || !GTK_IS_WIDGET(d->hClient)) return 0;
+        int idx = -1;   /* idempotency: same client widget → same handle */
+        for (int i = 0; i < s_plugin_panel_count; i++)
+            if (s_plugin_panels[i].panel_widget == d->hClient) {
+                idx = i;
+                break;
+            }
+        if (idx < 0) {
+            long h = plugin_host_message(NPPM_DMM_REGISTERPANEL,
+                                         (unsigned long)(uintptr_t)d->pszName,
+                                         (long)(intptr_t)d->hClient);
+            if (h <= 0) return 0;
+            idx = (int)h - 1;
+        }
+        PluginPanel *p = &s_plugin_panels[idx];
+        p->dock_mask     = d->uMask;
+        p->has_mask      = TRUE;
+        p->float_pending = (d->uMask & DWS_DF_FLOATING) != 0;
+        if (d->pszModuleName && d->pszModuleName[0]) {
+            NppPanelInfo info = { d->pszModuleName, d->dlgID };
+            plugin_host_message(NPPM_DMM_SETPANELINFO,
+                                (unsigned long)(idx + 1),
+                                (long)(intptr_t)&info);
+            if (!p->dock_name && !p->frame) {
+                /* Stable frame name — module + dlgID identify the panel
+                 * across sessions and plugin load order (the legacy
+                 * plugin-panel-N key does not). Sanitised: panelstate
+                 * tokens are space-separated name=side pairs. */
+                char *nm = g_strdup_printf("dmm-%s-%d",
+                                           d->pszModuleName, d->dlgID);
+                for (char *c = nm; *c; c++)
+                    if (*c == ' ' || *c == '=') *c = '-';
+                p->dock_name = nm;
+            }
+        }
+        return idx + 1;
+    }
+    case NPPM_DMMSHOW:
+    case NPPM_DMMHIDE:
+    case NPPM_DMMUPDATEDISPINFO: {
+        /* Keyed by the client widget, as Windows keys by HWND (wParam 0,
+         * lParam = the registered GtkWidget*). Back-compat: when lParam
+         * matches no registered widget, a nonzero wParam is honoured as
+         * a NPPM_DMM_REGISTERPANEL handle — the pre-1.1.1 forwarding
+         * shape keeps working for out-of-tree callers. */
+        void *target = (void *)(intptr_t)lParam;
+        long handle = 0;
+        for (int i = 0; i < s_plugin_panel_count; i++)
+            if (target && s_plugin_panels[i].panel_widget == target) {
+                handle = i + 1;
+                break;
+            }
+        if (!handle && wParam >= 1 && (int)wParam <= s_plugin_panel_count)
+            handle = (long)wParam;
+        if (!handle) return 0;
+        if (msg == NPPM_DMMSHOW)
+            return plugin_host_message(NPPM_DMM_SHOWPANEL, handle, 0);
+        if (msg == NPPM_DMMHIDE)
+            return plugin_host_message(NPPM_DMM_HIDEPANEL, handle, 0);
+        return 1;   /* NPPM_DMMUPDATEDISPINFO — accepted, currently a no-op */
+    }
     case NPPM_DMMVIEWOTHERTAB:    return 1;  /* multi-view stub */
-    case NPPM_DMMREGASDCKDLG:     return plugin_host_message(NPPM_DMM_REGISTERPANEL, wParam, lParam);
     case NPPM_DMMGETPLUGINHWNDBYNAME: {
         /* Stub: returning 0 means "no panel registered under that name".
          * The panel-by-name lookup helper isn't exposed yet. */
@@ -1486,13 +1599,29 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
 /* A panel is "open" when its frame is visible in the dock or the frame
  * is popped out. p->visible is unreliable (the frame's × close hides
  * the wrapper without informing us) — trust the widget tree. */
+/* The floating-registry name for a panel: the name its frame was
+ * registered under — GAP-185 dmm-<module>-<dlgID> for Windows-named
+ * registrations, plugin-panel-N otherwise. `buf` backs the legacy
+ * fallback only. */
+static const char *panel_registry_name(int idx, char *buf, size_t n)
+{
+    PluginPanel *p = &s_plugin_panels[idx];
+    if (p->frame) {
+        const char *nm = panel_frame_get_name(p->frame);
+        if (nm) return nm;
+    }
+    if (p->dock_name) return p->dock_name;
+    g_snprintf(buf, n, "plugin-panel-%d", idx + 1);
+    return buf;
+}
+
 static gboolean panel_is_open_idx(int idx)
 {
     PluginPanel *p = &s_plugin_panels[idx];
     if (!p->frame) return FALSE;
-    char name[32];
-    g_snprintf(name, sizeof name, "plugin-panel-%d", idx + 1);
-    if (floating_is_floating(name)) return TRUE;
+    char nbuf[32];
+    if (floating_is_floating(panel_registry_name(idx, nbuf, sizeof nbuf)))
+        return TRUE;
     return gtk_widget_get_visible(p->frame);
 }
 
@@ -1502,8 +1631,8 @@ char *plugin_panels_save_tokens(void)
     for (int i = 0; i < s_plugin_panel_count; i++) {
         PluginPanel *p = &s_plugin_panels[i];
         if (!p->module || !panel_is_open_idx(i)) continue;   /* undeclared → not saved */
-        char name[32];
-        g_snprintf(name, sizeof name, "plugin-panel-%d", i + 1);
+        char nbuf[32];
+        const char *name = panel_registry_name(i, nbuf, sizeof nbuf);
         /* Float geometry+pin ride inside the token: the floating registry
          * keys plugin panels by load-order-dependent plugin-panel-N, so
          * the stable FloatingPanels group can't carry them. */
@@ -1575,6 +1704,9 @@ void plugin_panel_restore(const char *module, int cmd_index,
 
     /* Tier 3 — last resort when the declared command no longer
      * resolves: a direct host-side show of the registered panel. */
+    if (g_getenv("NPP_PANEL_DEBUG"))
+        g_message("[panel] restore %s/%s replayed=%d idx=%d",
+                  module, title, replayed, idx);
     if (!replayed) {
         if (idx < 0) return;                 /* nothing to show */
         plugin_host_message(NPPM_DMM_SHOWPANEL,
@@ -1588,8 +1720,8 @@ void plugin_panel_restore(const char *module, int cmd_index,
      * pop-out use the remembered geometry. */
     idx = panel_find_by_identity(module, title);
     if (idx >= 0 && s_plugin_panels[idx].frame) {
-        char name[32];
-        g_snprintf(name, sizeof name, "plugin-panel-%d", idx + 1);
+        char nbuf[32];
+        const char *name = panel_registry_name(idx, nbuf, sizeof nbuf);
         if (float_w > 0 && float_h > 0)
             floating_set_state(name, float_w, float_h, float_pinned);
         if (popped && !floating_is_floating(name)) floating_popout(name);

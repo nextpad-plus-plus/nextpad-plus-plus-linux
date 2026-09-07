@@ -186,6 +186,70 @@ typedef struct NppPanelInfo {
                                * open/toggle command for this panel (dlgID) */
 } NppPanelInfo;
 
+/* ── Windows-named docking surface (GAP-185, host 1.1.1+) ─────────────────
+ * The classic Windows docking registration, with GTK types — docking code
+ * ports from a Windows plugin with a typedef swap and UTF-8 strings. Field
+ * names and ORDER match the Windows tTbData (Docking.h). Complementary to
+ * the NPPM_DMM_*PANEL surface above: a widget registered through either can
+ * be driven through both; new plugins should prefer these Windows names.
+ *
+ * NPPM_DMMREGASDCKDLG (NPPM_BASE + 33) — wParam 0, lParam = tTbData*
+ *   (readable for the duration of the call; may live on your stack).
+ *   Registers hClient (your GtkWidget*) as a docked panel. uMask picks the
+ *   DEFAULT dock region via DWS_DF_CONT_LEFT / RIGHT / BOTTOM (CONT_TOP
+ *   maps to the bottom — there is no top dock); the user’s remembered
+ *   side for this panel ALWAYS wins over the mask — Windows’ “default
+ *   docking values for first call of plugin” semantics. DWS_DF_FLOATING
+ *   floats the panel on its first show. pszModuleName + dlgID double as
+ *   the session-restore metadata (exactly what NPPM_DMM_SETPANELINFO
+ *   declares — its command rules apply: dlgID must point at a plain
+ *   open/toggle FuncItem). pszName is the UTF-8 panel title. hIconTab,
+ *   pszAddInfo, rcFloat and iPrevCont are accepted and currently ignored.
+ *   The panel starts HIDDEN — show it with NPPM_DMMSHOW. Returns a
+ *   nonzero panel handle (also valid for the NPPM_DMM_*PANEL messages);
+ *   0 on failure — and 0 on hosts older than 1.1.1, which fall through
+ *   to the legacy handle-forwarding handlers, so probe with lParam = your
+ *   widget only after a nonzero registration.
+ *
+ * NPPM_DMMSHOW / NPPM_DMMHIDE (NPPM_BASE + 30 / 31) — wParam 0, lParam =
+ *   the registered GtkWidget* (keyed by client widget, as Windows keys by
+ *   HWND). Idempotent. Return 1, or 0 for an unregistered widget.
+ *   Back-compat: when lParam is not a registered widget, a nonzero wParam
+ *   is still honoured as a NPPM_DMM_REGISTERPANEL handle — the pre-1.1.1
+ *   Linux forwarding shape keeps working.
+ *
+ * NPPM_DMMUPDATEDISPINFO (NPPM_BASE + 32) — wParam 0, lParam = GtkWidget*.
+ *   Accepted for source compatibility; currently a no-op that returns 1
+ *   for a registered widget. */
+typedef struct tTbData {
+    void        *hClient;        /* your GtkWidget* (Windows: HWND) */
+    const char  *pszName;        /* panel title, UTF-8 (Windows: wchar_t*) */
+    int          dlgID;          /* FuncItem index of your open/toggle command */
+    unsigned int uMask;          /* DWS_DF_* — see the docking style flags below */
+    void        *hIconTab;       /* accepted, ignored (tab icon on Windows) */
+    const char  *pszAddInfo;     /* accepted, ignored (caption suffix on Windows) */
+    struct { int left, top, right, bottom; } rcFloat;      /* internal — ignored */
+    int          iPrevCont;      /* internal — ignored */
+    const char  *pszModuleName;  /* your plugin module name, e.g. "MyPlugin" */
+} tTbData;
+
+/* Docking panel positions */
+#define CONT_LEFT    0
+#define CONT_RIGHT   1
+#define CONT_TOP     2
+#define CONT_BOTTOM  3
+
+/* Docking style flags */
+#define DWS_ICONTAB             0x00000001
+#define DWS_ICONBAR             0x00000002
+#define DWS_ADDINFO             0x00000004
+#define DWS_USEOWNDARKMODE      0x00000008
+#define DWS_DF_CONT_LEFT        (CONT_LEFT   << 28)
+#define DWS_DF_CONT_RIGHT       (CONT_RIGHT  << 28)
+#define DWS_DF_CONT_TOP         (CONT_TOP    << 28)
+#define DWS_DF_CONT_BOTTOM      (CONT_BOTTOM << 28)
+#define DWS_DF_FLOATING         0x80000000
+
 /* GAP-88e — NPPM_MSGTOPLUGIN inter-plugin messaging (Windows canon):
  * wParam = const char * destination module name (getName()), lParam =
  * CommunicationInfo *. Delivered synchronously to the destination's

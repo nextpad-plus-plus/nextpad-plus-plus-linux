@@ -382,7 +382,10 @@ void panelstate_restore(void)
     if (g_prefs.panel_keep_state) {
         GApplication *app = g_application_get_default();
         char *copy = g_strdup(g_prefs.open_side_panels);
-        for (char *tok = strtok(copy, " "); tok; tok = strtok(NULL, " ")) {
+        gchar **btoks = g_strsplit(copy, " ", -1);   /* not strtok — see
+                                                      * panelstate_restore_plugins */
+        for (int t = 0; btoks[t]; t++) {
+            char *tok = btoks[t];
             gboolean popped = FALSE;
             char *colon = strchr(tok, ':');
             if (colon) {
@@ -403,6 +406,7 @@ void panelstate_restore(void)
             if (popped && !floating_is_floating(e->name))
                 floating_popout(e->name);
         }
+        g_strfreev(btoks);
         g_free(copy);
         s_suspended = FALSE;
         save_open_state();   /* normalize the stored shape once */
@@ -474,7 +478,13 @@ void panelstate_restore_plugins(void)
     if (!s_plugin_tokens_pending) return;
     char *copy = s_plugin_tokens_pending;   /* consume: live mode next */
     s_plugin_tokens_pending = NULL;
-    for (char *tok = strtok(copy, " "); tok; tok = strtok(NULL, " ")) {
+    /* NOT strtok: restoring a panel builds its frame lazily, and
+     * panel_frame_new parses the zoom prefs with strtok (GAP-162) —
+     * a global-state iterator here silently dropped every token after
+     * the first. */
+    gchar **toks = g_strsplit(copy ? copy : "", " ", -1);
+    for (int t = 0; toks[t]; t++) {
+        char *tok = toks[t];
         if (strncmp(tok, "plugin=", 7) != 0) continue;
         /* plugin=<esc-module>,<cmdIndex>,<esc-cmdName>,<esc-title>,
          *        <popped01>,<W>x<H>,<pin01> */
@@ -496,6 +506,7 @@ void panelstate_restore_plugins(void)
         }
         g_strfreev(f);
     }
+    g_strfreev(toks);
     g_free(copy);
     save_open_state();   /* normalize: live plugin state from here on */
 }

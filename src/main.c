@@ -8775,9 +8775,10 @@ static void on_panel_frame_show(GtkWidget *frame, gpointer user_data);
 static void on_panel_frame_hide(GtkWidget *frame, gpointer user_data);
 static void side_dock_register_frame(GtkWidget *frame);   /* GAP-99 */
 static void panel_apply_dock_side(GtkWidget *frame);      /* GAP-123 */
+static void panel_place_side(GtkWidget *frame, NppDockSide side);
 
 GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
-                                    GtkWidget *content)
+                                    GtkWidget *content, int side_hint)
 {
     if (!g_side_panel_host || !content) return NULL;
     GtkWidget *frame = panel_frame_new(name, title, content, NULL, NULL);
@@ -8794,6 +8795,15 @@ GtkWidget *main_plugin_panel_attach(const char *name, const char *title,
                      G_CALLBACK(on_panel_frame_hide), g_side_panel_host);
     side_dock_register_frame(frame);   /* GAP-99 */
     panel_apply_dock_side(frame);      /* GAP-123 — movable + saved side */
+    /* GAP-185 — Windows-parity docking hint (NPPM_DMMREGASDCKDLG uMask):
+     * the plugin's requested default region applies only while the user
+     * has no remembered side for this panel (right = absent-default in
+     * panelstate — the macOS _hasDockKey gate). Deliberately NOT
+     * persisted: a hinted panel the user never moves follows its
+     * plugin's mask session after session, exactly like macOS. */
+    if ((side_hint == NPP_DOCK_LEFT || side_hint == NPP_DOCK_BOTTOM) &&
+        panelstate_side(name) == NPP_DOCK_RIGHT)
+        panel_place_side(frame, (NppDockSide)side_hint);
     return frame;
 }
 
@@ -9289,7 +9299,13 @@ static void panel_apply_dock_side(GtkWidget *frame) {
     panel_frame_set_movable(frame, TRUE);
     const char *nm = panel_frame_get_name(frame);
     if (!nm) return;
-    NppDockSide side = panelstate_side(nm);
+    panel_place_side(frame, panelstate_side(nm));
+}
+
+/* Reparent a (hidden, box-packed) frame into the host for `side` without
+ * touching panelstate — shared by the persisted-side apply above and the
+ * GAP-185 plugin dock hint. Right is where frames are born; no-op. */
+static void panel_place_side(GtkWidget *frame, NppDockSide side) {
     GtkWidget *dst = host_for_side(side);
     if (side == NPP_DOCK_RIGHT || !dst) return;
     g_object_ref(frame);
