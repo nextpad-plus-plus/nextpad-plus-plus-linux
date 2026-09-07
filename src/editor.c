@@ -735,6 +735,29 @@ static gboolean on_sci_colsel_key(GtkEventControllerKey *ctl, guint keyval,
     sptr_t mode = sci_msg(sci, SCI_GETSELECTIONMODE, 0, 0);
     if (mode != SC_SEL_RECTANGLE && mode != SC_SEL_THIN) return FALSE;
 
+    /* GAP-187 (macOS c16a676 #266) — a rectangular-extend command must
+     * never collapse the block it is extending, whatever key it happens
+     * to be bound to. The Alt test above covers only the stock
+     * Alt+Shift+arrow bindings; a shortcut reassigned in the Shortcut
+     * Mapper carries no Alt, so without this the selection collapsed on
+     * every press and the block could never grow past two lines.
+     * scintilla_view_command_for_key is gtk4 patch 0018 — it shares its
+     * translation path with the backend's key handler. */
+    switch (scintilla_view_command_for_key(SCINTILLA(sci), keyval, state)) {
+    case SCI_LINEDOWNRECTEXTEND:
+    case SCI_LINEUPRECTEXTEND:
+    case SCI_CHARLEFTRECTEXTEND:
+    case SCI_CHARRIGHTRECTEXTEND:
+    case SCI_HOMERECTEXTEND:
+    case SCI_VCHOMERECTEXTEND:
+    case SCI_LINEENDRECTEXTEND:
+    case SCI_PAGEUPRECTEXTEND:
+    case SCI_PAGEDOWNRECTEXTEND:
+        return FALSE;
+    default:
+        break;
+    }
+
     sci_msg(sci, SCI_SETSELECTIONMODE, SC_SEL_STREAM, 0);
     sci_msg(sci, SCI_SETSELECTIONMODE, SC_SEL_STREAM, 0);
     return FALSE;       /* key still reaches Scintilla */
