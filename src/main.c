@@ -3728,12 +3728,21 @@ static char *npp_helper_path(void)
 {
     char *exe = g_file_read_link("/proc/self/exe", NULL);
     if (!exe) return NULL;
-    char *dir  = g_path_get_dirname(exe);
-    char *cand = g_build_filename(dir, "npp", NULL);
+    char *dir = g_path_get_dirname(exe);
     g_free(exe);
+    /* Package layout first (bindir sibling), then the build-tree layout
+     * (<builddir>/tui/npp — NPP_BUILD_TUI on, e.g. a release-shaped
+     * build-release, macOS T4.3's NPP_EMBED_TUI-in-cache analogue). */
+    static const char *const rel[] = { "npp", "tui/npp" };
+    for (gsize i = 0; i < G_N_ELEMENTS(rel); i++) {
+        char *cand = g_build_filename(dir, rel[i], NULL);
+        if (g_file_test(cand, G_FILE_TEST_IS_EXECUTABLE)) {
+            g_free(dir);
+            return cand;
+        }
+        g_free(cand);
+    }
     g_free(dir);
-    if (g_file_test(cand, G_FILE_TEST_IS_EXECUTABLE)) return cand;
-    g_free(cand);
     return NULL;
 }
 
