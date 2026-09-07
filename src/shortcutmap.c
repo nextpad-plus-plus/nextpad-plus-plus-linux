@@ -185,6 +185,46 @@ static int sck_from_vk(guint vk) {
     return 0;   /* F-keys etc.: not assignable into the Scintilla keymap */
 }
 
+/* GAP-186 (macOS bd42466 #268) — the character a printable key produces
+ * WITH Shift held, for the US layout that shortcuts.xml's Windows VK
+ * codes already assume. Returns 0 for keys that carry no case.
+ *
+ * Needed because GDK delivers the SHIFTED keyval ('!', '+') and the
+ * GTK4 backend passes ASCII through as-is (only letters are folded to
+ * upper case — ScintillaView.cxx key_pressed), while sck_from_vk
+ * registers the unshifted character ('1', '='); KeyMap::Find is an
+ * exact lookup, so a Shift shortcut registered only under the unshifted
+ * form can never match. Letters need no entry here: sck_from_vk already
+ * yields the upper-case form GDK delivers under Shift (the macOS table
+ * has a letter branch only because its unshifted map folded to lower
+ * case). */
+static int shifted_sck(guint vk) {
+    switch (vk) {
+        case '1': return '!';
+        case '2': return '@';
+        case '3': return '#';
+        case '4': return '$';
+        case '5': return '%';
+        case '6': return '^';
+        case '7': return '&';
+        case '8': return '*';
+        case '9': return '(';
+        case '0': return ')';
+        case 186: return ':';   /* VK_OEM_1      ; */
+        case 187: return '+';   /* VK_OEM_PLUS   = */
+        case 188: return '<';   /* VK_OEM_COMMA  , */
+        case 189: return '_';   /* VK_OEM_MINUS  - */
+        case 190: return '>';   /* VK_OEM_PERIOD . */
+        case 191: return '?';   /* VK_OEM_2      / */
+        case 192: return '~';   /* VK_OEM_3      ` */
+        case 219: return '{';   /* VK_OEM_4      [ */
+        case 220: return '|';   /* VK_OEM_5      \ */
+        case 221: return '}';   /* VK_OEM_6      ] */
+        case 222: return '"';   /* VK_OEM_7      ' */
+        default:  return 0;
+    }
+}
+
 /* Names exposed in the Modify-dialog key dropdown. The first entry MUST
  * be "None" (= unbound). Order matches the macOS popup. */
 static const char *const KEY_POPUP[] = {
@@ -594,6 +634,14 @@ void shortcutmap_apply_sci_overrides(GtkWidget *sci)
                  | (r->has_super ? SCMOD_SUPER : 0);
         scintilla_send_message(SCINTILLA(sci), SCI_ASSIGNCMDKEY,
             (uptr_t)(sck | (mods << 16)), (sptr_t)r->command_id);
+        /* GAP-186 — with Shift held GDK delivers the shifted keyval, so
+         * also register that form (macOS registers both too). */
+        if (r->has_shift) {
+            int shifted = shifted_sck(r->keycode);
+            if (shifted)
+                scintilla_send_message(SCINTILLA(sci), SCI_ASSIGNCMDKEY,
+                    (uptr_t)(shifted | (mods << 16)), (sptr_t)r->command_id);
+        }
     }
 
     g_ptr_array_free(x.macros,  TRUE);
