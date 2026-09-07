@@ -864,6 +864,12 @@ static void load_main_menu(ShortcutMapper *m, GPtrArray *overrides) {
             g_action_group_get_action_parameter_type(G_ACTION_GROUP(app),
                                                      names[i]);
         if (pt) continue;
+        /* GAP-189 (macOS bada446) — an installer action that writes into
+         * the user's PATH has no business behind a keyboard shortcut; an
+         * accidental press would be alarming. First named skip; the rest
+         * of the Help menu stays in the table so the conflict checker
+         * keeps seeing those shortcuts. */
+        if (g_strcmp0(names[i], "install-cli") == 0) continue;
 
         ShortcutRow *r = g_new0(ShortcutRow, 1);
         r->action_id = g_strdup_printf("app.%s", names[i]);

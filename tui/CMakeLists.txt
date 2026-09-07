@@ -182,7 +182,9 @@ add_executable(nextpad-tui main.cpp)
 set_target_properties(nextpad-tui PROPERTIES OUTPUT_NAME npp)
 # Wide-char curses (cchar_t / mvwin_wch for the dim-behind pass), same as the
 # scinterm sources; GCC 14 needs <cstdint> ahead of Sci_Position.h.
-target_compile_definitions(nextpad-tui PRIVATE _XOPEN_SOURCE_EXTENDED=1)
+target_compile_definitions(nextpad-tui PRIVATE _XOPEN_SOURCE_EXTENDED=1
+    NPP_TUI_VERSION="0.9.0")   # the TUI's own version, pre-1.0 (GAP-189 —
+                               # host version comes from branding.h APP_VERSION)
 target_compile_options(nextpad-tui PRIVATE "-include" "cstdint" ${NCURSESW_CFLAGS_OTHER})
 target_link_libraries(nextpad-tui PRIVATE
     npp_tui_shim        # shim/ funclist interop session workspace theme

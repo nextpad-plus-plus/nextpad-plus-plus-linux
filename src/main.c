@@ -1362,9 +1362,10 @@ static void action_help_cli_args(GSimpleAction *a, GVariant *p, gpointer u) {
         "  nextpad++ -lang python script.py\n"
         "  nextpad++ -r ~/project\n"
         "\n"
-        "The 'nextpad++' command comes from Help > Install nextpad++\n"
-        "Command Line Tool. After installing the package, 'Nextpad++' and\n"
-        "'nextpad-plus-plus' are on PATH as well.";
+        "The 'nextpad++' command comes from Help > Install Command Line\n"
+        "Tools… (which also installs 'npp', the terminal editor). After\n"
+        "installing the package, 'Nextpad++' and 'nextpad-plus-plus' are\n"
+        "on PATH as well.";
 
     GtkWidget *dlg = gtk_dialog_new_with_buttons(
         i18n_translate("Command Line Arguments"),
@@ -3717,6 +3718,25 @@ static char *cli_target_binary(char **why_out)
     return exe;
 }
 
+/* GAP-189 (macOS 4c893a8, TUI T4.3) — the npp terminal editor shipped
+ * beside the GUI binary (deb/rpm/Arch install both into the same bindir),
+ * or NULL when this build carries none (a GUI-only build tree — degrade
+ * gracefully, macOS parity). Unlike nextpad++, npp is installed as a
+ * DIRECT symlink: a real terminal binary must own the tty, and a symlink
+ * stays current across app updates. */
+static char *npp_helper_path(void)
+{
+    char *exe = g_file_read_link("/proc/self/exe", NULL);
+    if (!exe) return NULL;
+    char *dir  = g_path_get_dirname(exe);
+    char *cand = g_build_filename(dir, "npp", NULL);
+    g_free(exe);
+    g_free(dir);
+    if (g_file_test(cand, G_FILE_TEST_IS_EXECUTABLE)) return cand;
+    g_free(cand);
+    return NULL;
+}
+
 static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
     (void)a;(void)p;(void)u;
     GError *err = NULL;
@@ -3743,8 +3763,8 @@ static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
     char *script = g_strdup_printf(
         "#!/bin/sh\n"
         "# nextpad++ — CLI wrapper for Nextpad++ (Linux).\n"
-        "# Auto-generated; re-run Help > Install nextpad++ Command Line\n"
-        "# Tool if the application is moved.\n"
+        "# Auto-generated; re-run Help > Install Command Line Tools…\n"
+        "# if the application is moved.\n"
         "APP=%s\n"
         "# Files go to the running instance; option flags only take effect\n"
         "# at startup, so a command carrying flags gets its own instance.\n"
@@ -3761,8 +3781,27 @@ static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
      * exists, used to be reported as installed. */
     gboolean same       = (existing && g_strcmp0(existing, script) == 0);
     gboolean executable = g_file_test(target, G_FILE_TEST_IS_EXECUTABLE);
-    gboolean already    = same && executable;
     g_free(existing);
+
+    /* GAP-189 — v1.1.1 installs BOTH commands in one action: the
+     * nextpad++ GUI wrapper and, when this build ships it, the npp
+     * terminal editor. An npp already reachable on PATH (the packaged
+     * layout: /usr/bin/npp beside the GUI) needs nothing; otherwise a
+     * helper beside the GUI binary gets a direct symlink here. A
+     * GUI-only build installs just nextpad++ — every dialog names what
+     * was actually installed. PATH exposure stays opt-in: only this
+     * menu item ever writes there. */
+    char *npp_on_path = g_find_program_in_path("npp");
+    char *npp_helper  = npp_on_path ? NULL : npp_helper_path();
+    gboolean with_npp = (npp_on_path != NULL) || (npp_helper != NULL);
+    char *npp_link    = g_build_filename(bindir, "npp", NULL);
+    gboolean npp_current = TRUE;   /* nothing to do unless a helper needs linking */
+    if (npp_helper) {
+        char *dest = g_file_read_link(npp_link, NULL);
+        npp_current = (dest && g_strcmp0(dest, npp_helper) == 0);
+        g_free(dest);
+    }
+    gboolean already = same && executable && npp_current;
 
     gboolean on_path = FALSE;
     const char *pe = g_getenv("PATH");
@@ -3784,25 +3823,54 @@ static void action_install_cli(GSimpleAction *a, GVariant *p, gpointer u) {
            : "\n\nNote: ~/.local/bin is not on your PATH — add it to run "
              "'nextpad++' from any terminal.");
 
-    char detail[1024];
+    /* Usage blurb mentions npp only when this install actually covers it
+     * (macOS _cliUsageText). */
+    const char *usage = with_npp
+        ? "Usage:  nextpad++ file.txt      (opens in the app)\n"
+          "        npp file.txt            (terminal editor — works over SSH too)"
+        : "Usage:  nextpad++ file.txt\n        nextpad++ -n42 main.cpp";
+    const char *names = with_npp ? "'nextpad++' and 'npp' commands"
+                                 : "'nextpad++' command";
+
+    char npp_note[512] = "";
+    if (npp_helper && !npp_current) {
+        /* Create/replace bindir/npp → helper. Remove first so this works
+         * as an upgrade over a stale link or a plain file. */
+        g_unlink(npp_link);
+        if (symlink(npp_helper, npp_link) == 0)
+            g_snprintf(npp_note, sizeof npp_note,
+                       "\n\nnpp installed at:\n%s → %s", npp_link, npp_helper);
+        else
+            g_snprintf(npp_note, sizeof npp_note,
+                       "\n\nnpp could NOT be linked at %s: %s",
+                       npp_link, g_strerror(errno));
+    } else if (npp_on_path) {
+        g_snprintf(npp_note, sizeof npp_note,
+                   "\n\nnpp is already available at:\n%s", npp_on_path);
+    }
+
+    char detail[1400];
     if (already) {
         snprintf(detail, sizeof detail,
-            "nextpad++ is already installed at:\n%s\n\nIt points at %s.\n\n"
-            "Usage:  nextpad++ file.txt%s", target, why ? why : "", path_note);
+            "The %s are already installed.\n\nnextpad++ at:\n%s\n\n"
+            "It points at %s.%s\n\n%s%s",
+            names, target, why ? why : "", npp_note, usage, path_note);
         npp_info_dialog("Already Installed", detail);
     } else if (g_file_set_contents(target, script, -1, &err)) {
         chmod(target, 0755);
         snprintf(detail, sizeof detail,
-            "Installed the 'nextpad++' command at:\n%s\n\nIt points at %s.\n\n"
-            "Usage:  nextpad++ file.txt\n        nextpad++ -n42 main.cpp%s",
-            target, why ? why : "", path_note);
-        npp_info_dialog("Command Line Tool Installed", detail);
+            "Installed the %s.\n\nnextpad++ at:\n%s\n\nIt points at "
+            "%s.%s\n\n%s%s",
+            names, target, why ? why : "", npp_note, usage, path_note);
+        npp_info_dialog(with_npp ? "Command Line Tools Installed"
+                                 : "Command Line Tool Installed", detail);
     } else {
         npp_info_dialog("Installation Failed",
             err ? err->message : "Could not write the wrapper script.");
         if (err) g_error_free(err);
     }
     g_free(exe); g_free(why); g_free(bindir); g_free(target); g_free(script);
+    g_free(npp_on_path); g_free(npp_helper); g_free(npp_link);
 }
 
 
@@ -8703,7 +8771,7 @@ static GMenuModel *build_menu_model(void)
          * Updates" can be refreshed after a check. */
         GMenu *upd_grp = g_menu_new();
         g_menu_append(upd_grp, "Check for Updates…", "app.check-updates");
-        g_menu_append(upd_grp, "Install nextpad++ Command Line Tool…",
+        g_menu_append(upd_grp, "Install Command Line Tools…",
                       "app.install-cli");
         g_menu_append_section(help, NULL, G_MENU_MODEL(upd_grp));
         g_updates_section = upd_grp;   /* kept alive by the menu tree */

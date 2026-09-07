@@ -3901,7 +3901,15 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (argc > 1 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
-      printf("npp (Nextpad++ terminal editor) %s\n", APP_VERSION);
+      /* GAP-189 (macOS 4c893a8): the TUI carries its own pre-1.0 version.
+       * NPP_TUI_VERSION is injected by tui/CMakeLists.txt (fallback keeps
+       * ad-hoc compiles working); the host version is branding.h's
+       * APP_VERSION — the Linux single source of truth (macOS injects it
+       * from CMake because the bundle plist needs the same value). */
+#ifndef NPP_TUI_VERSION
+#define NPP_TUI_VERSION "0.9.0-dev"
+#endif
+      printf("npp %s (Nextpad++ %s)\n", NPP_TUI_VERSION, APP_VERSION);
       return 0;
     }
     std::vector<std::string> cliPaths;
