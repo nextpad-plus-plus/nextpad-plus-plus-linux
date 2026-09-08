@@ -221,7 +221,14 @@ static void pf_frame_gone(gpointer data, GObject *dead) {
 #define PF_POP_ICON_PX 15
 /* The move-side pictogram is denser art (frame + arrow) — rendered a
  * step larger so its hairlines survive; the button grows with it. */
-#define PF_MOVE_ICON_PX 17
+/* 14, not PF_POP_ICON_PX: the sidebar-* family is full-bleed while the
+ * arrow.*.square art keeps ~5% padding inside a 100-unit canvas — at 15 px
+ * the arrow GLYPH is ~13.5 px, so full-bleed icons must render at 14 px
+ * for all four title-bar glyphs to appear the same size (measured from
+ * the rasterized alpha bounds, 2026-09-08; dropped to 13 the same day —
+ * the user matched it against the pop-out glyph on a real desktop and
+ * 13 reads as the equal size). */
+#define PF_MOVE_ICON_PX 13
 #define PF_POP_BTN_PX  17
 /* Margins around the title-bar tool buttons: horizontal spacing is the
  * user-tuned 5px; vertical stays 4px so the 17px buttons keep the
@@ -408,7 +415,7 @@ static void pf_refresh_move_icon(PanelFrameState *st) {
         sym_b = "sidebar-show-rtl"; fb_b = "go-next";
         tip_b = "Dock on the right side"; tgt_b = NPP_DOCK_RIGHT;
     } else {
-        sym_a = "sidebar-show-bottom"; fb_a = "go-down";
+        sym_a = "sidebar-show-btm"; fb_a = "go-down";
         tip_a = "Dock at the bottom";     tgt_a = NPP_DOCK_BOTTOM;
         if (st->side == NPP_DOCK_LEFT) {
             sym_b = "sidebar-show-rtl"; fb_b = "go-next";
