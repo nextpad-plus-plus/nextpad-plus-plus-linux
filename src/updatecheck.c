@@ -45,7 +45,7 @@ static const char *kReleasesAPI =
     "https://api.github.com/repos/nextpad-plus-plus/"
     "nextpad-plus-plus-linux/releases/latest";
 static const char *kDownloadPage =
-    "https://github.com/nextpad-plus-plus/nextpad-plus-plus-linux/releases/latest";
+    "https://nextpad.org/download/linux.html";
 
 #define CHECK_INTERVAL   (24 * 60 * 60)   /* daily                     */
 #define RETRY_FLOOR      (10 * 60)        /* after a failure           */
