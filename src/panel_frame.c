@@ -392,10 +392,12 @@ static void on_pop_clicked(GtkButton *btn, gpointer ud) {
 /* GAP-184 (macOS 8b22e9d) — the dock buttons carry explicit TARGETS.
  * Side-docked frames: [dock-to-bottom][move-across]; bottom-docked
  * frames: [dock-left][dock-right]. Icons depict the DESTINATION
- * (Adwaita-grid sidebar pictograms, 16-unit, user asset swap
- * 2026-08-11; dock-bottom drawn in the same family — placeholder until
- * the user supplies their own art). Targets ride on the buttons as
- * object data so one click handler serves both. */
+ * (Adwaita-grid sidebar pictograms, user asset swaps 2026-08-11 and
+ * 2026-09-08). Targets ride on the buttons as
+ * object data so one click handler serves both. Bottom pictogram =
+ * sidebar-show-bottom-symbolic.svg (user asset 2026-09-08, replacing
+ * the drawn placeholder; the -symbolic suffix must stay LAST in the
+ * filename or GTK skips the dark-theme recolor). */
 static void pf_refresh_move_icon(PanelFrameState *st) {
     if (!st->move_button) return;
     const char *sym_a, *fb_a, *tip_a; NppDockSide tgt_a;
@@ -406,7 +408,7 @@ static void pf_refresh_move_icon(PanelFrameState *st) {
         sym_b = "sidebar-show-rtl"; fb_b = "go-next";
         tip_b = "Dock on the right side"; tgt_b = NPP_DOCK_RIGHT;
     } else {
-        sym_a = "dock-bottom";      fb_a = "go-down";
+        sym_a = "sidebar-show-bottom"; fb_a = "go-down";
         tip_a = "Dock at the bottom";     tgt_a = NPP_DOCK_BOTTOM;
         if (st->side == NPP_DOCK_LEFT) {
             sym_b = "sidebar-show-rtl"; fb_b = "go-next";
