@@ -120,6 +120,8 @@ void       editor_refresh_all_tab_labels(void);
 /* GAP-32 — apply the "wrap tabs" pref (build/dissolve the flow strip). */
 void       editor_tabstrip_sync(void);
 void       editor_reload_current(void);            /* reload current doc from disk */
+gboolean   editor_plugin_reload_file(const char *path,
+                                     gboolean with_alert); /* GAP-190 */
 void       editor_reload_as(const char *encoding); /* re-read with forced encoding */
 gboolean   editor_close_page(int page);            /* -1 = current           */
 gboolean   editor_close_sci(GtkWidget *sci);        /* close one exact tab     */

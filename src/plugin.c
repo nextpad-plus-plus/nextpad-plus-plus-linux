@@ -993,13 +993,13 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         return 0;
     }
     case NPPM_RELOADFILE: {
+        /* GAP-190 — Windows contract: BOOL NPPM_RELOADFILE(BOOL
+         * withAlert, TCHAR *path). Any open doc matching the path
+         * reloads (not just the current one); withAlert shows the
+         * reload confirmation only when that doc has unsaved changes,
+         * otherwise the reload is silent and unconditional. */
         const char *path = (const char *)(intptr_t)lParam;
-        NppDoc *d = editor_current_doc();
-        if (d && d->filepath && path && strcmp(d->filepath, path) == 0) {
-            editor_reload_current();
-            return 1;
-        }
-        return 0;
+        return editor_plugin_reload_file(path, wParam != 0) ? 1 : 0;
     }
     case NPPM_RELOADBUFFERID: {
         NppDoc *d = (NppDoc *)(intptr_t)wParam;

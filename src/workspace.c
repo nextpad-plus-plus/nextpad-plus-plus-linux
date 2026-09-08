@@ -5,6 +5,8 @@
 #include "editor.h"
 #include "macrobatch.h"
 #include "find_window.h"
+#include "i18n.h"     /* GAP-191 */
+#include <errno.h>
 #include <gtk/gtk.h>
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -324,6 +326,22 @@ static void ctx_rename(GtkButton *mi, gpointer u) {
             if (g_rename(old_path, new_path) == 0) {
                 /* Reload the workspace tree to reflect the rename. */
                 workspace_refresh();
+            } else {
+                /* GAP-191 (macOS FolderTreePanel) — a failed rename
+                 * must say so. The title resolves through the
+                 * harvested mb:RenameTabTemporaryNameAlreadyInUse
+                 * translations (lookup is case-folded); the body is
+                 * the OS error, macOS's localizedDescription analogue. */
+                int e = errno;
+                GtkWidget *a = gtk_message_dialog_new(
+                    s_window ? GTK_WINDOW(s_window) : NULL,
+                    GTK_DIALOG_MODAL, GTK_MESSAGE_WARNING,
+                    GTK_BUTTONS_OK, "%s",
+                    i18n_translate("Rename Failed"));
+                gtk_message_dialog_format_secondary_text(
+                    GTK_MESSAGE_DIALOG(a), "%s", g_strerror(e));
+                gtk_dialog_run(GTK_DIALOG(a));
+                gtk_widget_destroy(a);
             }
             g_free(parent); g_free(new_path);
         }

@@ -4656,6 +4656,50 @@ gboolean editor_save_all(void)
     return ok;
 }
 
+/* GAP-190 (macOS NPPM_RELOADFILE handler) — reload the open doc holding
+ * `path` on behalf of a plugin. with_alert shows the host's reload
+ * confirmation only when the doc has unsaved changes (mirrors macOS
+ * reloadFromDisk:); without it the reload is silent and unconditional.
+ * Synchronous — the plugin message needs the result. Any open doc
+ * matches, not just the current one (macOS searches all editors). */
+gboolean editor_plugin_reload_file(const char *path, gboolean with_alert)
+{
+    if (!path || !*path) return FALSE;
+    NppDoc *doc = NULL;
+    GPtrArray *docs = editor_all_docs();
+    for (guint i = 0; i < docs->len && !doc; i++) {
+        NppDoc *d = g_ptr_array_index(docs, i);
+        if (d->filepath && strcmp(d->filepath, path) == 0) doc = d;
+    }
+    g_ptr_array_free(docs, TRUE);
+    if (!doc) return FALSE;              /* not open in any view */
+
+    if (with_alert && doc->modified) {
+        char *base  = g_path_get_basename(path);
+        gchar *body = g_strdup_printf(
+            i18n_translate("'%s' has unsaved changes.\n"
+                           "Reload and discard changes?"), base);
+        GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(s_window),
+            GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
+            "%s", i18n_translate("Reload from Disk"));
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg),
+                                                 "%s", body);
+        char b_reload[128];
+        save_btn_label(b_reload, sizeof b_reload, "Reload", "_Reload");
+        gtk_dialog_add_button(GTK_DIALOG(dlg), b_reload, GTK_RESPONSE_YES);
+        gtk_dialog_add_button(GTK_DIALOG(dlg),
+                              i18n_misc("common-cancel", "_Cancel"),
+                              GTK_RESPONSE_CANCEL);
+        gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_YES);
+        int resp = gtk_dialog_run(GTK_DIALOG(dlg));
+        gtk_widget_destroy(dlg);
+        g_free(body);
+        g_free(base);
+        if (resp != GTK_RESPONSE_YES) return FALSE;
+    }
+    return reload_doc_from_disk(doc, NULL);
+}
+
 void editor_reload_current(void)
 {
     NppDoc *doc = editor_current_doc();
