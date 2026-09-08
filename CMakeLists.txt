@@ -22,7 +22,18 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK4 REQUIRED gtk4)
 pkg_check_modules(ADW  REQUIRED libadwaita-1)
 pkg_check_modules(UCHARDET REQUIRED uchardet)   # GAP-57 CJK detection
-pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)  # GAP-171 Paste with Hyperlinks (offline HTML parse)
+# GAP-171 Paste with Hyperlinks (offline HTML parse). Packaging builds set
+# NPP_LIBXML2_STATIC_PREFIX (tools/build-libxml2-static.sh) to link a
+# minimal --without-icu libxml2 STATICALLY: Ubuntu 26 removed the libxml2
+# package/soname (2.14 break), and the distro's own libxml2.a would drag in
+# version-churning ICU sonames. Dev builds keep the system dylib.
+if(NPP_LIBXML2_STATIC_PREFIX)
+    set(LIBXML2_INCLUDE_DIRS "${NPP_LIBXML2_STATIC_PREFIX}/include/libxml2")
+    set(LIBXML2_LIBRARIES "${NPP_LIBXML2_STATIC_PREFIX}/lib/libxml2.a" m)
+    set(LIBXML2_LIBRARY_DIRS "")
+else()
+    pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
+endif()
 
 set(SCI_ROOT "${CMAKE_SOURCE_DIR}/scintilla")
 set(LEX_ROOT "${CMAKE_SOURCE_DIR}/lexilla")

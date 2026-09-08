@@ -48,10 +48,12 @@ trap 'rm -rf "$STAGE" "$TOP"' EXIT
 mkdir -p "$TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
 echo "── Building Nextpad++ $VER ($ARCH, -j$JOBS)"
+XMLPREFIX=$(tools/build-libxml2-static.sh)   # static libxml2 (see the script)
 cmake -B build-pkg -S . \
       -DCMAKE_BUILD_TYPE=Release \
       -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
       -DCMAKE_INSTALL_PREFIX=/usr \
+      -DNPP_LIBXML2_STATIC_PREFIX="$XMLPREFIX" \
       -DNPP_BUILD_TUI=ON
 cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null

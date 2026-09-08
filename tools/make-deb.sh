@@ -33,10 +33,12 @@ STAGE=$(mktemp -d /tmp/npp-pkg-XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
 
 echo "── Building Nextpad++ $VER ($ARCH, -j$JOBS)"
+XMLPREFIX=$(tools/build-libxml2-static.sh)   # static libxml2 (see the script)
 cmake -B build-pkg -S . \
       -DCMAKE_BUILD_TYPE=Release \
       -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
       -DCMAKE_INSTALL_PREFIX=/usr \
+      -DNPP_LIBXML2_STATIC_PREFIX="$XMLPREFIX" \
       -DNPP_BUILD_TUI=ON
 cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null
@@ -62,7 +64,8 @@ fi
 
 mkdir -p "$STAGE/DEBIAN"
 
-# The binary links gtk4/glib/uchardet/libxml2/libstdc++ (NOT libadwaita — checked
+# The binary links gtk4/glib/uchardet/libstdc++ (NOT libadwaita — checked;
+# libxml2 is linked STATICALLY — Ubuntu 26 dropped the libxml2 soname/package
 # via ldd 2026-07-23); libscintilla.so ships inside the package itself.
 # unzip: Plugins Admin archive extraction. git: the Git side panel.
 cat > "$STAGE/DEBIAN/control" <<EOF
@@ -72,7 +75,7 @@ Section: editors
 Priority: optional
 Architecture: $ARCH
 Maintainer: Andrew Letov <aletik@gmail.com>
-Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libxml2, libstdc++6, libc6, curl, libncursesw6, libtinfo6
+Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libstdc++6, libc6, curl, libncursesw6, libtinfo6
 Recommends: unzip, git, wl-clipboard | xclip
 Description: Multi-tab text editor (Linux port of Notepad++)
  Nextpad++ is a native Linux port of the Notepad++ text editor, built on
