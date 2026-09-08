@@ -84,6 +84,19 @@ cat > "$TOP/SPECS/nextpad-plus-plus.spec" <<SPEC
 %define __os_install_post %{nil}
 %define _build_id_links none
 %global __brp_check_rpaths %{nil}
+# npp (the terminal editor) links ncursesw/tinfo. Debian-family ncurses
+# exports VERSIONED symbols (NCURSESW6_*, NCURSES6_TINFO_*), so elfdeps on
+# this build host generates versioned requires — which Fedora/RHEL/openSUSE
+# can never satisfy: their ncurses is built WITHOUT symbol versioning
+# (v1.1.1 launch-day report: dnf "nothing provides libncursesw.so.6
+# (NCURSESW6_5.1...)"). Filter ONLY the versioned forms; the bare soname
+# requires stay, so dnf still pulls ncurses-libs. NOTE bracket classes,
+# no backslashes: rpm macro expansion EATS backslash escapes, silently
+# turning the regex into one that never matches. At load, glibc binds the
+# versioned references against an unversioned library by name (one
+# "no version information available" note on stderr) — the standard trade
+# for one cross-distro rpm.
+%global __requires_exclude ^(libncursesw|libtinfo)[.]so[.]6[(]NCURSES
 
 Name:           nextpad-plus-plus
 Version:        $VER
