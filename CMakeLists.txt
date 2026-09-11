@@ -340,6 +340,20 @@ install(DIRECTORY resources/icons/hicolor/
 option(NPP_BUILD_TUI "Build the terminal editor (npp)" OFF)
 if(NPP_BUILD_TUI)
     pkg_check_modules(NCURSESW REQUIRED ncursesw)   # Debian: adds -ltinfo
+    # Packaging builds (make-deb/make-rpm) set NPP_STATIC_NCURSES: npp then
+    # carries ncurses inside instead of trusting the host's flavor. The
+    # distros VERSION their ncurses symbols differently — Debian NCURSESW6_*,
+    # openSUSE NCURSES6_TINFO_* only (GH #8: hard loader error on Tumbleweed),
+    # Fedora none (cosmetic loader warnings) — so a foreign-built dynamic npp
+    # can never be right everywhere. Ubuntu's libncursesw.a is dependency-
+    # clean (no ICU-style baggage; +~370 KB raw, ~120 KB compressed) and
+    # terminfo is still read from the host at runtime, same binary format
+    # everywhere. Dev builds stay dynamic.
+    if(NPP_STATIC_NCURSES)
+        find_library(NCURSESW_A NAMES libncursesw.a REQUIRED)
+        find_library(TINFO_A    NAMES libtinfo.a    REQUIRED)
+        set(NCURSESW_LIBRARIES ${NCURSESW_A} ${TINFO_A})
+    endif()
     enable_testing()
     add_subdirectory(tui)
     install(FILES packaging/npp.1

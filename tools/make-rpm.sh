@@ -54,6 +54,7 @@ cmake -B build-pkg -S . \
       -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
       -DCMAKE_INSTALL_PREFIX=/usr \
       -DNPP_LIBXML2_STATIC_PREFIX="$XMLPREFIX" \
+      -DNPP_STATIC_NCURSES=ON \
       -DNPP_BUILD_TUI=ON
 cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null

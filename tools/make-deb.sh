@@ -39,6 +39,7 @@ cmake -B build-pkg -S . \
       -DNPP_RES_DIR=/usr/share/nextpad-plus-plus \
       -DCMAKE_INSTALL_PREFIX=/usr \
       -DNPP_LIBXML2_STATIC_PREFIX="$XMLPREFIX" \
+      -DNPP_STATIC_NCURSES=ON \
       -DNPP_BUILD_TUI=ON
 cmake --build build-pkg -j"$JOBS"
 DESTDIR="$STAGE" cmake --install build-pkg > /dev/null
@@ -75,7 +76,7 @@ Section: editors
 Priority: optional
 Architecture: $ARCH
 Maintainer: Andrew Letov <aletik@gmail.com>
-Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libstdc++6, libc6, curl, libncursesw6, libtinfo6
+Depends: libgtk-4-1, libglib2.0-0t64, libuchardet0, libstdc++6, libc6, curl
 Recommends: unzip, git, wl-clipboard | xclip
 Description: Multi-tab text editor (Linux port of Notepad++)
  Nextpad++ is a native Linux port of the Notepad++ text editor, built on
