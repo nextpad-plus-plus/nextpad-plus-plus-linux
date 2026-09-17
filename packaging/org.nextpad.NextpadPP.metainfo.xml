@@ -56,6 +56,11 @@
   </provides>
 
   <releases>
+    <release version="1.1.1.1" date="2026-09-17">
+      <description>
+        <p>Packaging fixes: installable again on Ubuntu 26, Fedora and openSUSE (static libxml2 and ncurses); the npp terminal editor now runs on every distro's ncurses flavor.</p>
+      </description>
+    </release>
     <release version="1.1.1" date="2026-08-21">
       <description>
         <p>Binary-safe file loading, Window menu, macro and toolbar refinements, floating-panel polish, threaded plugin installs, and the HexEditor plugin.</p>

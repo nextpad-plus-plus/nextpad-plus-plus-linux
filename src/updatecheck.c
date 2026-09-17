@@ -94,15 +94,17 @@ static void state_save(void)
 
 /* ── Pure helpers ──────────────────────────────────────────────────── */
 
-/* Numeric compare, so 1.10.0 sorts above 1.9.0 (macOS NSNumericSearch). */
+/* Numeric compare, so 1.10.0 sorts above 1.9.0 (macOS NSNumericSearch).
+ * Four components: sub-releases like 1.1.1.1 must sort above 1.1.1. */
 static int version_cmp(const char *a, const char *b)
 {
-    int a1 = 0, a2 = 0, a3 = 0, b1 = 0, b2 = 0, b3 = 0;
-    sscanf(a ? a : "", "%d.%d.%d", &a1, &a2, &a3);
-    sscanf(b ? b : "", "%d.%d.%d", &b1, &b2, &b3);
+    int a1 = 0, a2 = 0, a3 = 0, a4 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0;
+    sscanf(a ? a : "", "%d.%d.%d.%d", &a1, &a2, &a3, &a4);
+    sscanf(b ? b : "", "%d.%d.%d.%d", &b1, &b2, &b3, &b4);
     if (a1 != b1) return a1 - b1;
     if (a2 != b2) return a2 - b2;
-    return a3 - b3;
+    if (a3 != b3) return a3 - b3;
+    return a4 - b4;
 }
 
 static char *json_string_value(const char *json, const char *key)
