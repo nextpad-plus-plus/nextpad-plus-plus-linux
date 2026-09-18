@@ -73,7 +73,7 @@ if [ -n "${NPP_ARCH_REFRESH:-}" ] || ! "$OCI" image exists "$BUILDER_IMAGE" 2>/d
       "RUN sed -i '/^\\[options\\]/a DisableSandbox' /etc/pacman.conf" \
       "RUN pacman -Syu --noconfirm && \\" \
       "    pacman -S --needed --noconfirm base-devel cmake pkgconf \\" \
-      "        gtk4 libadwaita glib2 glib2-devel uchardet libxml2 libx11 ncurses && \\" \
+      "        gtk4 glib2 glib2-devel uchardet libxml2 libx11 ncurses && \\" \
       "    pacman -Scc --noconfirm" \
       "# makepkg refuses to run as root, by design." \
       "RUN useradd -m builder" \

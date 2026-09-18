@@ -27,9 +27,8 @@ license=('GPL-3.0-or-later')
 
 # Runtime linkage, verified with ldd against an Arch-built binary:
 # gtk4, glib2, uchardet, libxml2 (Paste with Hyperlinks), libx11 (Window
-# menu > Move to Monitor), plus the
-# toolchain runtimes. libadwaita is a BUILD dependency only — the sources
-# include its headers but the link stage pulls in no libadwaita symbol.
+# menu > Move to Monitor), plus the toolchain runtimes. libadwaita is not
+# needed at all — the app is pure GTK4 (no adw_* call, no <adwaita.h>).
 #
 # curl is not linked either: every remote fetch (plugin catalog, UDL
 # installs, update check) spawns the curl BINARY, which is invisible to any
@@ -43,7 +42,7 @@ depends=('gtk4' 'glib2' 'uchardet' 'libxml2' 'libx11' 'curl' 'gcc-libs' 'glibc' 
 # GTK4 makefile runs to generate its marshallers and enum tables. Arch splits
 # those tools out of glib2; Debian ships them inside libglib2.0-dev, which is
 # why nothing in the .deb recipe names them.
-makedepends=('cmake' 'pkgconf' 'libadwaita' 'glib2-devel')
+makedepends=('cmake' 'pkgconf' 'glib2-devel')
 optdepends=('wl-clipboard: npp terminal editor clipboard on Wayland'
             'xclip: npp terminal editor clipboard on X11'
             'unzip: Plugins Admin archive extraction'

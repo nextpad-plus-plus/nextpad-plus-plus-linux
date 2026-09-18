@@ -1552,7 +1552,7 @@ static void action_help_about(GSimpleAction *a, GVariant *p, gpointer u) {
 
     /* The two facts specific to this port. */
     char *tech = g_markup_printf_escaped(
-        "Built on GTK %d.%d.%d with libadwaita, written in C11 — a full "
+        "Built on GTK %d.%d.%d, written in C11 — a full "
         "GTK4 application.\n\n"
         "Full Scintilla GTK4 support was added to Nextpad++ to make the "
         "application fully GTK4 (Scintilla %s, Lexilla %s).",

@@ -78,7 +78,7 @@ apt_wait
 echo "── Installing toolchain + dependencies"
 sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     build-essential cmake pkg-config \
-    libgtk-4-dev libadwaita-1-dev libglib2.0-dev libuchardet-dev libxml2-dev \
+    libgtk-4-dev libglib2.0-dev libuchardet-dev libxml2-dev \
     libncurses-dev \
     git rsync rpm \
     xvfb xdotool imagemagick dbus-x11
@@ -88,20 +88,19 @@ echo "── Verifying"
 printf '  %-16s %s\n' gcc "$(gcc -dumpfullversion 2>/dev/null)" \
                       cmake "$(cmake --version | head -1 | awk '{print $3}')" \
                       rpmbuild "$(rpmbuild --version 2>/dev/null | awk '{print $3}')"
-for m in gtk4 libadwaita-1 glib-2.0 uchardet libxml-2.0; do
+for m in gtk4 glib-2.0 uchardet libxml-2.0; do
     printf '  %-16s %s\n' "$m" "$(pkg-config --modversion "$m" 2>&1)"
 done
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/p.c" <<'EOF'
 #include <gtk/gtk.h>
-#include <adwaita.h>
 #include <uchardet/uchardet.h>
 int main(void){ uchardet_t u=uchardet_new(); uchardet_delete(u);
   g_print("  probe OK       gtk %d.%d.%d glib %d.%d.%d\n",
     gtk_get_major_version(),gtk_get_minor_version(),gtk_get_micro_version(),
     GLIB_MAJOR_VERSION,GLIB_MINOR_VERSION,GLIB_MICRO_VERSION); return 0; }
 EOF
-gcc "$T/p.c" -o "$T/p" $(pkg-config --cflags --libs gtk4 libadwaita-1 uchardet)
+gcc "$T/p.c" -o "$T/p" $(pkg-config --cflags --libs gtk4 uchardet)
 "$T/p"
 echo 'int main(){auto f=[](auto x){return x;};return f(0);}' > "$T/p.cpp"
 g++ -std=c++17 "$T/p.cpp" -o "$T/pp" && echo "  c++17 OK"

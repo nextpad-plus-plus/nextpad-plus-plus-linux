@@ -20,7 +20,6 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK4 REQUIRED gtk4)
-pkg_check_modules(ADW  REQUIRED libadwaita-1)
 pkg_check_modules(UCHARDET REQUIRED uchardet)   # GAP-57 CJK detection
 # GAP-171 Paste with Hyperlinks (offline HTML parse). Packaging builds set
 # NPP_LIBXML2_STATIC_PREFIX (tools/build-libxml2-static.sh) to link a
@@ -213,7 +212,7 @@ target_include_directories(nextpad_pp PRIVATE
     "${CMAKE_SOURCE_DIR}/regex"
     "${CMAKE_SOURCE_DIR}/fuzzy"
     "${CMAKE_SOURCE_DIR}/fuzzy/rapidfuzz"
-    ${GTK4_INCLUDE_DIRS} ${ADW_INCLUDE_DIRS} ${LIBXML2_INCLUDE_DIRS}
+    ${GTK4_INCLUDE_DIRS} ${LIBXML2_INCLUDE_DIRS}
 )
 # RESOURCES_DIR is baked in at compile time. For a dev build it points at
 # the in-tree resources/. For a packaged build, pass -DNPP_RES_DIR=<path>
@@ -229,7 +228,7 @@ target_compile_definitions(nextpad_pp PRIVATE
     NPP_LEX_VERSION="${NPP_LEX_VERSION}"
     NPP_SCI_PATCHES=${NPP_SCI_PATCHES}
 )
-target_compile_options(nextpad_pp PRIVATE ${GTK4_CFLAGS_OTHER} ${ADW_CFLAGS_OTHER})
+target_compile_options(nextpad_pp PRIVATE ${GTK4_CFLAGS_OTHER})
 set_source_files_properties("${SRC}/lexilla_bridge.cpp" PROPERTIES
     COMPILE_OPTIONS "-include;cstdint")
 
@@ -254,11 +253,11 @@ find_package(X11)   # Window menu: Move to Monitor (X11 sessions only)
 target_link_libraries(nextpad_pp PRIVATE
     "${SCI_SO}"
     lexilla
-    ${GTK4_LIBRARIES} ${ADW_LIBRARIES} ${UCHARDET_LIBRARIES} ${LIBXML2_LIBRARIES}
+    ${GTK4_LIBRARIES} ${UCHARDET_LIBRARIES} ${LIBXML2_LIBRARIES}
     ${X11_LIBRARIES}
     m
 )
-target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${ADW_LIBRARY_DIRS} ${UCHARDET_LIBRARY_DIRS} ${LIBXML2_LIBRARY_DIRS})
+target_link_directories(nextpad_pp PRIVATE ${GTK4_LIBRARY_DIRS} ${UCHARDET_LIBRARY_DIRS} ${LIBXML2_LIBRARY_DIRS})
 
 # -----------------------------------------------------------------------------
 # Install / packaging targets

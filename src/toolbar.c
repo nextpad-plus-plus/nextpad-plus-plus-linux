@@ -121,8 +121,9 @@ static gboolean is_dark_mode(void)
 /* (scale-factor aware), via gtk_image_set_pixel_size().                 */
 /* ------------------------------------------------------------------ */
 /* GAP-46 — resolve the colorization target (macOS _nppToolbarTargetColor;
- * palette = Windows fluent list). "System Accent" has no portable GTK4
- * query on this libadwaita, so it maps to the stock fluent blue. */
+ * palette = Windows fluent list). "System Accent" has no portable plain-
+ * GTK4 query (the accent API lives in libadwaita, which we don't link),
+ * so it maps to the stock fluent blue. */
 static void toolbar_target_rgb(double *r, double *g, double *b)
 {
     static const struct { double r, g, b; } kPal[7] = {
