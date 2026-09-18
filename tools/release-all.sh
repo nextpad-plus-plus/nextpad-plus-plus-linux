@@ -84,6 +84,9 @@ for H in $REMOTES; do
             ./tools/make-arch.sh >/tmp/npp-arch.log 2>&1 && \
             if [ \$(uname -m) = x86_64 ]; then \
                 ./tools/make-deb-i386.sh >/tmp/npp-i386.log 2>&1; \
+                if [ -n '${NPP_ARMHF:-}' ]; then \
+                    ./tools/make-deb-armhf.sh >/tmp/npp-armhf.log 2>&1; \
+                fi; \
             fi; \
         else echo 'no podman — arch package skipped'; fi" \
       || { echo "  ✗ build FAILED — logs on $H: /tmp/npp-{sci,deb,rpm,arch,i386}.log"
