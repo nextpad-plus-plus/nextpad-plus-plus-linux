@@ -57,9 +57,16 @@ static const char *const CATALOG_LINUX =
     "https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/"
 #if defined(__aarch64__)
     "main/pl.linux-arm64.json";
+#elif defined(__arm__)
+    "main/pl.linux-armhf.json";   /* 32-bit ARM (Raspberry Pi OS 32-bit) */
+#elif defined(__i386__)
+    "main/pl.linux-i386.json";    /* 32-bit Intel/AMD (antiX, MX-23, …) */
 #else
     "main/pl.linux-x86.json";     /* 64-bit Intel/AMD (user's naming) */
 #endif
+/* The 32-bit catalogs exist but are EMPTY until 32-bit plugin builds are
+ * published — 32-bit users get a clean empty Plugins Admin, and filling
+ * the file later needs no app update. */
 static const char *const CATALOG_MAC =
     "https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/"
     "main/pl.macos-arm64.json";
@@ -640,15 +647,23 @@ static void load_catalogs(AdminUI *ui) {
     char  *nbody = fetch_catalog_to_string(cat_url, &n_len);
 #if defined(__aarch64__)
     const char *origin = "linux-arm64";
+#elif defined(__arm__)
+    const char *origin = "linux-armhf";
+#elif defined(__i386__)
+    const char *origin = "linux-i386";
 #else
     const char *origin = "linux-x86";
 #endif
     const char *loaded_url = cat_url;
+#if !defined(__arm__) && !defined(__i386__)
+    /* 64-bit only: the macOS catalog is a display fallback. On 32-bit it
+     * could only offer binaries that can never load — stay empty instead. */
     if (!nbody) {
         nbody  = fetch_catalog_to_string(CATALOG_MAC, &n_len);
         origin = "macos-arm64 (fallback)";
         loaded_url = CATALOG_MAC;
     }
+#endif
     g_free(g_catalog_file);
     g_catalog_file = nbody ? g_path_get_basename(loaded_url) : NULL;
     if (nbody) {

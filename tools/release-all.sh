@@ -81,10 +81,13 @@ for H in $REMOTES; do
         ./tools/make-deb.sh >/tmp/npp-deb.log 2>&1 && \
         ./tools/make-rpm.sh >/tmp/npp-rpm.log 2>&1 && \
         if command -v podman >/dev/null 2>&1; then \
-            ./tools/make-arch.sh >/tmp/npp-arch.log 2>&1; \
+            ./tools/make-arch.sh >/tmp/npp-arch.log 2>&1 && \
+            if [ \$(uname -m) = x86_64 ]; then \
+                ./tools/make-deb-i386.sh >/tmp/npp-i386.log 2>&1; \
+            fi; \
         else echo 'no podman — arch package skipped'; fi" \
-      || { echo "  ✗ build FAILED — logs on $H: /tmp/npp-{sci,deb,rpm,arch}.log"
-           ssh -o BatchMode=yes "$H" "tail -12 /tmp/npp-arch.log /tmp/npp-rpm.log /tmp/npp-deb.log 2>/dev/null" | tail -20
+      || { echo "  ✗ build FAILED — logs on $H: /tmp/npp-{sci,deb,rpm,arch,i386}.log"
+           ssh -o BatchMode=yes "$H" "tail -12 /tmp/npp-i386.log /tmp/npp-arch.log /tmp/npp-rpm.log /tmp/npp-deb.log 2>/dev/null" | tail -20
            continue; }
 
     echo "  → fetching artifacts"
