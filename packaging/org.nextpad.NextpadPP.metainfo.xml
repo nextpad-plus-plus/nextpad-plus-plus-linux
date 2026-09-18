@@ -56,7 +56,7 @@
   </provides>
 
   <releases>
-    <release version="1.1.1.1" date="2026-09-17">
+    <release version="1.1.2" date="2026-09-17">
       <description>
         <p>Packaging fixes: installable again on Ubuntu 26, Fedora and openSUSE (static libxml2 and ncurses); the npp terminal editor now runs on every distro's ncurses flavor.</p>
       </description>
