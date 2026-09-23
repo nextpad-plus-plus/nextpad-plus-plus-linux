@@ -550,12 +550,10 @@ static void on_tgl_doclist(GtkToggleButton *item, gpointer d)
 static void on_tgl_docmap(GtkToggleButton *item, gpointer d)
 {
     (void)d;
-    gboolean on = gtk_toggle_button_get_active(item);
-    docmap_set_visible(on);
-    if (on) {
-        NppDoc *doc = editor_current_doc();
-        if (doc) docmap_update(doc->sci);
-    }
+    /* Feeding the map happens in docmap.c's "map" handler — the one
+     * path shared with the View menu, the Tahoe overflow row and
+     * session restore. */
+    docmap_set_visible(gtk_toggle_button_get_active(item));
 }
 
 static void on_tgl_workspace(GtkToggleButton *item, gpointer d)

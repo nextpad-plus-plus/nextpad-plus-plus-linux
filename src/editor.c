@@ -3007,6 +3007,9 @@ brace_done:;
         if (doc->filepath)
             gitgutter_update(sci, doc->filepath);
         funclist_schedule_update(sci);
+        /* Document Map re-copy (debounced in docmap.c) — the map holds a
+         * private COPY of the document, so edits must be propagated. */
+        docmap_notify_modified(sci);
         /* GAP-64 — hide the watermark when content appears; re-show if
          * the untitled buffer empties back out. */
         watermark_refresh();
@@ -3087,6 +3090,12 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
      * showed empty until the user typed). */
     if (funclist_is_visible())
         funclist_update(sci);
+    /* Document Map follows the active tab while open — macOS re-targets
+     * with setTrackedEditor: on every editor activation
+     * (MainWindowController.mm didActivateEditor ~9237). Without this
+     * the map kept showing the previously active document. */
+    if (docmap_is_visible())
+        docmap_update(sci);
     /* GAP-120 — a deferred file-changed prompt may target the tab that
      * just became visible; the idle steps past this emission (the
      * notebook still reports the OLD page here). */
@@ -3837,6 +3846,11 @@ gboolean editor_open_path(const char *path)
      * isn't empty until the user makes the first edit. */
     if (funclist_is_visible())
         funclist_update(sci);
+    /* Document Map: same trap as the funclist/GAP-112 notes above — a
+     * file opening INTO the current untitled tab fires no switch-page,
+     * so the map must be re-fed (new content and lexer) here. */
+    if (docmap_is_visible())
+        docmap_update(sci);
     /* GAP-80 (macOS 09ce824 / Windows parity) — a new FILE-BACKED buffer
      * exists. Deliberately NOT fired for: focusing an already-open file
      * (early return at the top — only BUFFERACTIVATED re-fires), untitled
