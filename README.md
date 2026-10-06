@@ -17,8 +17,7 @@ You asked for it in macOS release thread, and the answer was always "soon". Toda
 - **Git, spell check, Markdown preview and change history built in** — things even Windows Notepad++ doesn't have.
 - **.deb and .rpm for x86_64 and arm64**, plus a Snap in the Ubuntu App Center. Yes, arm64 — Nextpad++ flies on a Raspberry Pi 5 and on ARM laptops.
 
-![main-window](https://github.com/nextpad-plus-plus/nextpad.org/blob/main/news/npp_linux_v1.1.0_release/main-window-light.png) 
-
+![main-window](https://github.com/nextpad-plus-plus/nextpad.org/blob/main/news/npp_linux_v1.1.0_release/dark-mode.png) 
 
 # What you get
 
