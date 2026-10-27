@@ -4,6 +4,10 @@
 #include <gtk/gtk.h>
 #include "sci_c.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     GtkWidget    *sci;
     char         *filepath;           /* NULL = unsaved */
@@ -191,5 +195,9 @@ void editor_auto_insert_on_char(GtkWidget *sci, int ch);
 
 /* Convenience send to current doc */
 sptr_t editor_send(unsigned int msg, uptr_t wp, sptr_t lp);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* EDITOR_H */

@@ -15,6 +15,10 @@
 
 #include <glib.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Returns the user data dir — caller MUST free with g_free(). */
 gchar *npp_user_dir(void);
 /* GAP-17 — always-local base (never cloud-redirected): session, backup,
@@ -66,5 +70,9 @@ gchar *npp_bundle_file(const char *subdir_or_null, const char *leaf);
  * Mirrors macOS `ensureNppDirs()`.
  */
 void npp_ensure_user_dirs(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PATHS_H */

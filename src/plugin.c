@@ -1,4 +1,5 @@
 #include "plugin.h"
+#include "indicator_alloc.h"
 #include "floating.h"
 #include "panelstate.h"
 #include "paths.h"
@@ -369,13 +370,19 @@ typedef struct {
 static PluginPanel s_plugin_panels[32];
 static int         s_plugin_panel_count = 0;
 
-/* Indicator / marker slot allocators — start at the Scintilla-reserved-for-app
- * range and increment. INDIC_CONTAINER (8) is the lowest indicator slot
- * plugins may use; markers 25..31 are reserved for plugins per Scintilla
- * convention. */
-static int s_next_indicator = INDIC_CONTAINER + 1;  /* 9 onward */
+/* Indicator slots start at 9. npp_indicator_alloc skips 9 (incremental
+ * search) and 19 (clickable links). Slot 20 is not reserved. Markers
+ * 25..31 stay reserved for plugins per Scintilla convention. */
+static int s_next_indicator = NPP_INDICATOR_FIRST;
 static int s_next_marker    = 25;
 static int s_next_alloc_cmd = 11000;                /* well above CMD_ID_BASE */
+
+int npp_alloc_one_indicator(void)
+{
+    int out = -1;
+    if (!npp_indicator_alloc(&s_next_indicator, 1, &out)) return -1;
+    return out;
+}
 
 /* Canonical Windows NPP LangType values, ported from macOS
  * NppPluginManager.mm:700-797. A plugin built against
@@ -689,12 +696,10 @@ long plugin_host_message(unsigned int msg, unsigned long wParam, long lParam)
         return 1;
     }
     case NPPM_ALLOCATEINDICATOR: {
-        /* wParam = count; lParam = int * base */
+        /* wParam = count; lParam = int * base. */
         int *out = (int *)(intptr_t)lParam;
-        if (!out) return 0;
-        if (s_next_indicator + (int)wParam > 31) return 0; /* range exhausted */
-        *out = s_next_indicator;
-        s_next_indicator += (int)wParam;
+        int count = (int)wParam;
+        if (!npp_indicator_alloc(&s_next_indicator, count, out)) return 0;
         return 1;
     }
     case NPPM_ALLOCATEMARKER: {

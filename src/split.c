@@ -18,6 +18,7 @@
  * Edits go through one shared gap buffer; both views update in real time.
  */
 #include "split.h"
+#include "semantic_search.h"
 #include "gtk_compat.h"
 #include "sci_c.h"
 #include "prefs.h"
@@ -85,22 +86,11 @@ GtkWidget *split_init(GtkWidget *primary, GtkWidget *parent_window) {
 /* The primary side's notebook lives inside editor.c. Reach into it via a
  * small public hook. The cleanest way is to ask editor.c for the current
  * Scintilla; we have editor_current_doc() already exposed. */
-extern GtkWidget *editor_current_sci_ptr(void);
 static GtkWidget *primary_active_sci(void) {
-    /* Walk the primary container looking for the first GtkNotebook, then
-     * return its current page. Avoids a cyclic include with editor.c. */
-    if (!s_primary) return NULL;
-    GtkWidget *nb = NULL;
-    /* Primary is a GtkBox; iterate children to find the notebook. */
-    GList *kids = gtk_container_get_children(GTK_CONTAINER(s_primary));
-    for (GList *l = kids; l; l = l->next) {
-        if (GTK_IS_NOTEBOOK(l->data)) { nb = GTK_WIDGET(l->data); break; }
-    }
-    g_list_free(kids);
-    if (!nb) return NULL;
-    int p = gtk_notebook_get_current_page(GTK_NOTEBOOK(nb));
-    if (p < 0) return NULL;
-    return split_page_sci(GTK_NOTEBOOK(nb), p);
+    // The primary notebook is nested inside overlays and editor split panes.
+    // Use the editor's active-view accessor rather than a shallow widget walk.
+    NppDoc *doc = editor_current_doc();
+    return doc ? doc->sci : NULL;
 }
 
 static const char *primary_active_label(void) {
@@ -138,6 +128,7 @@ void split_clone_current(void) {
 
     GtkWidget *sci = scintilla_new();
     scintilla_send_message(SCINTILLA(sci), SCI_SETDOCPOINTER, 0, doc);
+    semantic_search_configure_view(sci);
 
     /* Mirror a few stylings — wire-up of real syntax styling is left to
      * editor.c via split_apply_prefs_to_all(). Set a usable default font. */
@@ -228,5 +219,14 @@ void split_apply_prefs_to_all(void) {
                                g_prefs.caret_width, 0);
         scintilla_send_message(SCINTILLA(sci), SCI_SETCARETPERIOD,
                                g_prefs.caret_blink_rate, 0);
+    }
+}
+
+void split_foreach_sci(void (*fn)(GtkWidget *sci)) {
+    if (!s_notebook || !fn) return;
+    int n = gtk_notebook_get_n_pages(GTK_NOTEBOOK(s_notebook));
+    for (int i = 0; i < n; ++i) {
+        GtkWidget *sci = split_page_sci(GTK_NOTEBOOK(s_notebook), i);
+        if (sci) fn(sci);
     }
 }

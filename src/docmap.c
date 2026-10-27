@@ -1,4 +1,5 @@
 #include "docmap.h"
+#include "semantic_search.h"
 #include "gtk_compat.h"
 #include "editor.h"
 #include "sci_c.h"
@@ -167,6 +168,8 @@ GtkWidget *docmap_init(void)
     return s_panel;
 }
 
+GtkWidget *docmap_scintilla(void) { return s_mini; }
+
 void docmap_update(GtkWidget *sci)
 {
     if (!s_mini || !sci) return;
@@ -191,6 +194,7 @@ void docmap_update(GtkWidget *sci)
     /* Re-apply minimap view settings (overrides any style-reset side effects) */
     apply_minimap_settings();
 
+    semantic_search_configure_view(s_mini);
     docmap_sync_scroll(sci);
 }
 

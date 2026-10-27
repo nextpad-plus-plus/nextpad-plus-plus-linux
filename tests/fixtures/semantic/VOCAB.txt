@@ -1,0 +1,4 @@
+vocab.txt is the WordPiece vocabulary shipped with
+sentence-transformers/all-MiniLM-L6-v2 (BERT uncased).
+The model and vocabulary are Apache License 2.0.
+The file is here so tokenizer tests run without a download.

@@ -3,6 +3,9 @@
 %:
 	dh $@ --buildsystem=cmake
 
+# Semantic search dlopens libonnxruntime at run time. These packages do
+# not depend on it and do not bundle weights. The editor starts without
+# the library. Pass -DNPP_WITH_ONNXRUNTIME=OFF to compile out the loader.
 override_dh_auto_configure:
 	dh_auto_configure -- \
 		-DCMAKE_BUILD_TYPE=Release \

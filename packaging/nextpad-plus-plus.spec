@@ -10,6 +10,9 @@ Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  cmake >= 3.20
 BuildRequires:  pkgconfig(gtk+-3.0)
 BuildRequires:  pkgconfig(glib-2.0)
+# ONNX Runtime is optional for semantic search and is not a BuildRequires.
+# The editor dlopens libonnxruntime and starts when the library is absent.
+# Weights are not shipped.
 
 %description
 Nextpad++ is a native Linux port of the Notepad++ text editor, built on
