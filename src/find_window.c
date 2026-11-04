@@ -733,8 +733,23 @@ static GtkWidget *build_mark_tab(FW *w) {
 
 static void retitle_on_switch(GtkNotebook *nb, GtkWidget *page,
                               guint num, gpointer ud) {
-    (void)nb; (void)page;
+    (void)page;
     if (!s_fw) return;
+    /* Carry "Find what" / "Replace with" from the outgoing tab. */
+    GtkWidget *finds[] = { s_fw->f_find, s_fw->r_find, s_fw->fif_find,
+                           s_fw->fip_find, s_fw->m_find };
+    GtkWidget *repls[] = { NULL, s_fw->r_repl, s_fw->fif_repl,
+                           s_fw->fip_repl, NULL };
+    int old = gtk_notebook_get_current_page(nb);
+    if (old >= 0 && old < 5 && (guint)old != num && num < 5) {
+        GtkWidget *src[2] = { finds[old], repls[old] };
+        GtkWidget *dst[2] = { finds[num], repls[num] };
+        for (int i = 0; i < 2; i++) {
+            if (!src[i] || !dst[i]) continue;
+            GtkWidget *e = gtk_bin_get_child(GTK_BIN(dst[i]));
+            if (e) gtk_entry_set_text(GTK_ENTRY(e), combo_text(src[i]));
+        }
+    }
     static const char *titles[] = {
         "Find", "Replace", "Find in Files", "Find in Projects", "Mark"
     };
