@@ -21,6 +21,7 @@
 #include "gtk_compat.h"
 #include "branding.h"
 #include "macro.h"
+#include "plugin.h"
 
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
@@ -404,6 +405,10 @@ typedef struct {
     GtkWidget *views[TAB_COUNT];  /* GtkTreeView */
     GtkListStore *stores[TAB_COUNT];
 
+    /* <PluginCommands> entries whose plugin isn't loaded this session —
+     * not shown, but written back on Save so they aren't lost. */
+    GPtrArray *plugin_orphans;
+
     gboolean dirty;
 } ShortcutMapper;
 
@@ -545,7 +550,16 @@ static gchar *shortcuts_xml_path(void) {
     return npp_user_file(NULL, "shortcuts.xml");
 }
 
+/* Initialise *x and parse shortcuts.xml into it (empty if the file is
+ * missing). Release with xml_ctx_clear(). */
 static void load_shortcuts_xml(XmlCtx *x) {
+    memset(x, 0, sizeof *x);
+    x->macros   = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x->runcmds  = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x->plugins  = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x->intcmds  = g_ptr_array_new_with_free_func(shortcut_row_free);
+    x->sci_over = g_hash_table_new_full(g_direct_hash, g_direct_equal,
+                                        NULL, shortcut_row_free);
     gchar *path = shortcuts_xml_path();
     gchar *xml  = NULL;
     gsize  len  = 0;
@@ -562,6 +576,16 @@ static void load_shortcuts_xml(XmlCtx *x) {
     g_free(path);
 }
 
+static void xml_ctx_clear(XmlCtx *x) {
+    g_ptr_array_free(x->macros,  TRUE);
+    g_ptr_array_free(x->runcmds, TRUE);
+    g_ptr_array_free(x->plugins, TRUE);
+    g_ptr_array_free(x->intcmds, TRUE);
+    g_hash_table_destroy(x->sci_over);
+    if (x->current_cmd_text) g_string_free(x->current_cmd_text, TRUE);
+    g_free(x->current_cmd_name);
+}
+
 /* Push the user's ScintillaKeys overrides into one editor's live keymap
  * (macOS #181's applyScintillaOverrides). Called on editor creation and
  * after a mapper Save. Removing an override takes effect on restart —
@@ -570,13 +594,7 @@ static void load_shortcuts_xml(XmlCtx *x) {
 void shortcutmap_apply_sci_overrides(GtkWidget *sci)
 {
     if (!sci) return;
-    XmlCtx x = {0};
-    x.macros  = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.runcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.plugins = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.intcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.sci_over = g_hash_table_new_full(g_direct_hash, g_direct_equal,
-                                       NULL, shortcut_row_free);
+    XmlCtx x;
     load_shortcuts_xml(&x);
 
     GHashTableIter it;
@@ -594,13 +612,7 @@ void shortcutmap_apply_sci_overrides(GtkWidget *sci)
             (uptr_t)(sck | (mods << 16)), (sptr_t)r->command_id);
     }
 
-    g_ptr_array_free(x.macros,  TRUE);
-    g_ptr_array_free(x.runcmds, TRUE);
-    g_ptr_array_free(x.plugins, TRUE);
-    g_ptr_array_free(x.intcmds, TRUE);
-    g_hash_table_destroy(x.sci_over);
-    if (x.current_cmd_text) g_string_free(x.current_cmd_text, TRUE);
-    g_free(x.current_cmd_name);
+    xml_ctx_clear(&x);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════ */
@@ -715,6 +727,9 @@ static void load_main_menu(ShortcutMapper *m, GPtrArray *overrides) {
             g_action_group_get_action_parameter_type(G_ACTION_GROUP(app),
                                                      names[i]);
         if (pt) continue;
+        /* Plugin commands live on the Plugin tab (keyed by moduleName +
+         * internalID, which survives cmdID renumbering) — not here. */
+        if (g_str_has_prefix(names[i], "plugin-check-")) continue;
 
         ShortcutRow *r = g_new0(ShortcutRow, 1);
         r->action_id = g_strdup_printf("app.%s", names[i]);
@@ -1066,21 +1081,89 @@ static gchar *gtk_accel_string_for_row(const ShortcutRow *r) {
     return gtk_accelerator_name(kv, m);
 }
 
-static void push_live_accels(void) {
+static GtkApplication *default_gtk_app(void) {
     GApplication *gapp = g_application_get_default();
-    if (!GTK_IS_APPLICATION(gapp)) return;
-    GtkApplication *app = GTK_APPLICATION(gapp);
+    return GTK_IS_APPLICATION(gapp) ? GTK_APPLICATION(gapp) : NULL;
+}
 
-    GPtrArray *rows = G->rows[TAB_MAIN];
-    for (guint i = 0; i < rows->len; i++) {
-        ShortcutRow *r = (ShortcutRow *)g_ptr_array_index(rows, i);
-        if (!r->action_id || !*r->action_id) continue;
-        gchar *acc = gtk_accel_string_for_row(r);
-        const gchar *accels[2] = { acc ? acc : NULL, NULL };
-        gtk_application_set_accels_for_action(app, r->action_id,
-            acc ? accels : (const gchar *[]){ NULL });
-        g_free(acc);
+/* Bind r's combo to a detailed action; keycode 0 clears the accel. */
+static void set_row_accel(GtkApplication *app, const char *action,
+                          const ShortcutRow *r) {
+    gchar *acc = gtk_accel_string_for_row(r);
+    const gchar *accels[2] = { acc, NULL };
+    gtk_application_set_accels_for_action(app, action, accels);
+    g_free(acc);
+}
+
+static void push_live_accels(void) {
+    GtkApplication *app = default_gtk_app();
+    if (!app) return;
+
+    /* Main-menu rows carry "app.<action>"; plugin rows carry
+     * "app.plugin-check-<cmdID>" (load_plugin_rows). */
+    static const SmTab tabs[] = { TAB_MAIN, TAB_PLUGIN };
+    for (size_t t = 0; t < G_N_ELEMENTS(tabs); t++) {
+        GPtrArray *rows = G->rows[tabs[t]];
+        for (guint i = 0; i < rows->len; i++) {
+            ShortcutRow *r = (ShortcutRow *)g_ptr_array_index(rows, i);
+            if (!r->action_id || !*r->action_id) continue;
+            set_row_accel(app, r->action_id, r);
+        }
     }
+}
+
+/* <PluginCommand moduleName=…> is the plugin's getName() on Linux/macOS,
+ * but the module file name on Windows ("ComparePlus.dll") — accept both
+ * so a shortcuts.xml carried over from another platform still binds. */
+static gboolean module_matches(const char *module, const char *plugin_name) {
+    if (!module || !plugin_name || !*plugin_name) return FALSE;
+    size_t n = strlen(plugin_name);
+    if (g_ascii_strncasecmp(module, plugin_name, n) != 0) return FALSE;
+    const char *ext = module + n;
+    return !*ext || !g_ascii_strcasecmp(ext, ".dll") ||
+           !g_ascii_strcasecmp(ext, ".so") || !g_ascii_strcasecmp(ext, ".dylib");
+}
+
+/* (moduleName, internalID = FuncItem index) → cmdID; 0 when the plugin is
+ * not loaded or the index is out of range / a separator. */
+static int plugin_cmd_for(const char *module, int internal_id) {
+    for (int pi = 0; pi < plugin_count(); pi++) {
+        if (!module_matches(module, plugin_name_at(pi))) continue;
+        int cid = plugin_func_cmd_id(pi, internal_id);
+        if (cid > 0) return cid;
+    }
+    return 0;
+}
+
+void shortcutmap_apply_main_accels(void) {
+    GtkApplication *app = default_gtk_app();
+    if (!app) return;
+    XmlCtx x;
+    load_shortcuts_xml(&x);
+    for (guint i = 0; i < x.intcmds->len; i++) {
+        ShortcutRow *r = (ShortcutRow *)g_ptr_array_index(x.intcmds, i);
+        /* Only our own "app.<action>" ids — Windows files use numeric
+         * command ids, which mean nothing here. */
+        if (!g_str_has_prefix(r->action_id, "app.")) continue;
+        set_row_accel(app, r->action_id, r);
+    }
+    xml_ctx_clear(&x);
+}
+
+void shortcutmap_apply_plugin_accels(void) {
+    GtkApplication *app = default_gtk_app();
+    if (!app || plugin_count() == 0) return;
+    XmlCtx x;
+    load_shortcuts_xml(&x);
+    for (guint i = 0; i < x.plugins->len; i++) {
+        ShortcutRow *r = (ShortcutRow *)g_ptr_array_index(x.plugins, i);
+        int cid = plugin_cmd_for(r->plugin_name, r->command_id);
+        if (!cid) continue;
+        gchar *action = g_strdup_printf("app.plugin-check-%d", cid);
+        set_row_accel(app, action, r);
+        g_free(action);
+    }
+    xml_ctx_clear(&x);
 }
 
 static void xml_append_shortcut_attrs(GString *out, const ShortcutRow *r) {
@@ -1145,19 +1228,25 @@ static void save_shortcuts_xml(void) {
     }
     g_string_append(out, "    </UserDefinedCommands>\n");
 
-    /* PluginCommands */
+    /* PluginCommands — every row loaded from or edited in this session,
+     * plus entries for plugins that aren't loaded right now. */
     g_string_append(out, "    <PluginCommands>\n");
-    for (guint i = 0; i < G->rows[TAB_PLUGIN]->len; i++) {
-        ShortcutRow *r =
-            (ShortcutRow *)g_ptr_array_index(G->rows[TAB_PLUGIN], i);
-        if (!r->modified) continue;
-        gchar *em = g_markup_escape_text(r->plugin_name ? r->plugin_name : "", -1);
-        g_string_append_printf(out,
-            "        <PluginCommand moduleName=\"%s\" internalID=\"%d\"",
-            em, r->command_id);
-        xml_append_shortcut_attrs(out, r);
-        g_string_append(out, " />\n");
-        g_free(em);
+    GPtrArray *plugin_sets[2] = { G->rows[TAB_PLUGIN], G->plugin_orphans };
+    for (int s = 0; s < 2; s++) {
+        if (!plugin_sets[s]) continue;
+        for (guint i = 0; i < plugin_sets[s]->len; i++) {
+            ShortcutRow *r =
+                (ShortcutRow *)g_ptr_array_index(plugin_sets[s], i);
+            if (s == 0 && !r->modified) continue;
+            gchar *em = g_markup_escape_text(
+                r->plugin_name ? r->plugin_name : "", -1);
+            g_string_append_printf(out,
+                "        <PluginCommand moduleName=\"%s\" internalID=\"%d\"",
+                em, r->command_id);
+            xml_append_shortcut_attrs(out, r);
+            g_string_append(out, " />\n");
+            g_free(em);
+        }
     }
     g_string_append(out, "    </PluginCommands>\n");
 
@@ -1352,6 +1441,10 @@ static void free_arrays(void) {
             G->rows[t] = NULL;
         }
     }
+    if (G->plugin_orphans) {
+        g_ptr_array_free(G->plugin_orphans, TRUE);
+        G->plugin_orphans = NULL;
+    }
 }
 
 /* TAB_MACROS rows are a view onto macro.c's model (GAP-19): name +
@@ -1375,17 +1468,56 @@ static void sync_macro_rows(void) {
     }
 }
 
+/* Plugin tab: one row per loaded plugin command (internalID = FuncItem
+ * index, Windows semantics), with the <PluginCommands> bindings from
+ * shortcuts.xml overlaid. XML entries for plugins not loaded this
+ * session go to G->plugin_orphans and are preserved on Save. */
+static void load_plugin_rows(GPtrArray *xml_rows) {
+    GPtrArray *rows = G->rows[TAB_PLUGIN];
+    for (int pi = 0; pi < plugin_count(); pi++) {
+        const char *pname = plugin_name_at(pi);
+        for (int fi = 0; fi < plugin_func_count(pi); fi++) {
+            int cid = plugin_func_cmd_id(pi, fi);
+            if (cid <= 0) continue;               /* separator */
+            ShortcutRow *r = g_new0(ShortcutRow, 1);
+            r->name        = g_strdup(plugin_func_name(pi, fi));
+            r->category    = g_strdup(pname);
+            r->plugin_name = g_strdup(pname);
+            r->command_id  = fi;
+            r->action_id   = g_strdup_printf("app.plugin-check-%d", cid);
+            g_ptr_array_add(rows, r);
+        }
+    }
+
+    G->plugin_orphans = g_ptr_array_new_with_free_func(shortcut_row_free);
+    while (xml_rows->len) {
+        ShortcutRow *o = g_ptr_array_steal_index(xml_rows, 0);
+        ShortcutRow *hit = NULL;
+        for (guint j = 0; j < rows->len && !hit; j++) {
+            ShortcutRow *r = (ShortcutRow *)g_ptr_array_index(rows, j);
+            if (r->command_id == o->command_id &&
+                module_matches(o->plugin_name, r->plugin_name))
+                hit = r;
+        }
+        if (!hit) {
+            g_ptr_array_add(G->plugin_orphans, o);
+            continue;
+        }
+        hit->has_ctrl  = o->has_ctrl;
+        hit->has_alt   = o->has_alt;
+        hit->has_shift = o->has_shift;
+        hit->has_super = o->has_super;
+        hit->keycode   = o->keycode;
+        hit->modified  = TRUE;   /* came from the file → keep on Save */
+        shortcut_row_free(o);
+    }
+}
+
 static void load_all_data(void) {
     for (int t = 0; t < TAB_COUNT; t++)
         G->rows[t] = g_ptr_array_new_with_free_func(shortcut_row_free);
 
-    XmlCtx x = {0};
-    x.macros  = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.runcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.plugins = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.intcmds = g_ptr_array_new_with_free_func(shortcut_row_free);
-    x.sci_over = g_hash_table_new_full(g_direct_hash, g_direct_equal,
-                                       NULL, shortcut_row_free);
+    XmlCtx x;
     load_shortcuts_xml(&x);
 
     /* Macros come from macro.c, not from our own XML pass (x.macros is
@@ -1396,20 +1528,12 @@ static void load_all_data(void) {
         g_ptr_array_add(G->rows[TAB_RUN], g_ptr_array_index(x.runcmds, i));
     g_ptr_array_set_free_func(x.runcmds, NULL);
 
-    for (guint i = 0; i < x.plugins->len; i++)
-        g_ptr_array_add(G->rows[TAB_PLUGIN], g_ptr_array_index(x.plugins, i));
-    g_ptr_array_set_free_func(x.plugins, NULL);
+    load_plugin_rows(x.plugins);
 
     load_main_menu(G, x.intcmds);
     load_scintilla(G, x.sci_over);
 
-    g_ptr_array_free(x.macros,  TRUE);
-    g_ptr_array_free(x.runcmds, TRUE);
-    g_ptr_array_free(x.plugins, TRUE);
-    g_ptr_array_free(x.intcmds, TRUE);
-    g_hash_table_destroy(x.sci_over);
-    if (x.current_cmd_text) g_string_free(x.current_cmd_text, TRUE);
-    g_free(x.current_cmd_name);
+    xml_ctx_clear(&x);
 }
 
 static gboolean on_window_delete(GtkWindow *w, gpointer ud) {

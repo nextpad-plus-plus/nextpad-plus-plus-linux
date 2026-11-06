@@ -7643,7 +7643,10 @@ static GMenuModel *build_menu_model(void)
         for (int fi = 0; fi < nf; fi++) {
             const char *fname = plugin_func_name(pi, fi);
             if (!fname || !*fname) continue;
-            if (g_strcmp0(fname, "-") == 0) {
+            /* A FuncItem without pFunc (cmdID 0) is a separator,
+             * whatever its name (Windows semantics). */
+            if (g_strcmp0(fname, "-") == 0 ||
+                plugin_func_cmd_id(pi, fi) <= 0) {
                 if (g_menu_model_get_n_items(G_MENU_MODEL(sect))) {
                     g_menu_append_section(sub, NULL, G_MENU_MODEL(sect));
                     g_object_unref(sect);
@@ -8496,8 +8499,13 @@ static void build_main_window(GtkApplication *app)
     }
     /* GAP-20 — the Plugins menu lists each loaded plugin's FuncItems;
      * they only exist after plugin_load_all, so rebuild the menubar. */
-    if (plugin_count() > 0)
+    if (plugin_count() > 0) {
         main_rebuild_menubar();
+        /* <PluginCommands> map (moduleName, internalID) → cmdID, which is
+         * only known once the plugins are loaded — so bind them here, not
+         * in on_startup (where plugin_count() is still 0). */
+        shortcutmap_apply_plugin_accels();
+    }
     /* G33 — fire NPPN_READY once plugins are loaded; GAP-88a — macOS
      * fires NPPN_TBMODIFICATION immediately after (toolbar-icon
      * registration window). */
@@ -8728,6 +8736,10 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.get-php-help",         "<Alt>F1");
     set_accel(app, "app.wikipedia-search",     "<Alt>F3");
     set_accel(app, "app.open-in-new-instance", "<Alt>F6");
+
+    /* User <InternalCommands> overrides from shortcuts.xml win over the
+     * built-in defaults above. */
+    shortcutmap_apply_main_accels();
 
     /* Menu bar — keep the English model (g_menu_english) for the context-
      * menu index and for live retranslation; the app menubar itself uses a
