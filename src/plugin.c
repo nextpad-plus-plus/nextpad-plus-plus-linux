@@ -112,8 +112,11 @@ static void load_plugin(const char *sopath)
     p->funcs   = (n > 0 && funcs) ? funcs : NULL;
     p->n_funcs = (n > 0 && funcs) ? n     : 0;
 
+    /* Windows/macOS parity: only real commands get a cmdID. A FuncItem with
+     * no pFunc is a separator — it keeps cmdID 0 and does not advance the
+     * counter, so IDs match the shipped (snap) build and Notepad++. */
     for (int i = 0; i < p->n_funcs; i++)
-        p->funcs[i].cmdID = s_next_cmd_id++;
+        p->funcs[i].cmdID = p->funcs[i].pFunc ? s_next_cmd_id++ : 0;
 
     s_n_plugins++;
     g_message("plugin: loaded '%s' (%d items) from %s", p->name, p->n_funcs, sopath);
