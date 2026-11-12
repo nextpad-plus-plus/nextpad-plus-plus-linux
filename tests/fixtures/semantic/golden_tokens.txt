@@ -1,0 +1,58 @@
+# Hugging Face BertTokenizer ids for all-MiniLM-L6-v2, max 256 tokens
+TEXT 26
+This is a simple sentence.
+IDS 8
+101 2023 2003 1037 3722 6251 1012 102
+TEXT 35
+Machine learning models embed text.
+IDS 9
+101 3698 4083 4275 7861 8270 3793 1012 102
+TEXT 56
+A completely unrelated remark about the weather in Oslo.
+IDS 12
+101 1037 3294 15142 17674 2055 1996 4633 1999 9977 1012 102
+TEXT 53
+Semantic search finds sentences with similar meaning.
+IDS 10
+101 21641 3945 4858 11746 2007 2714 3574 1012 102
+TEXT 23
+The cat sat on the mat.
+IDS 9
+101 1996 4937 2938 2006 1996 13523 1012 102
+TEXT 21
+Café naïve façade.
+IDS 6
+101 7668 15743 8508 1012 102
+TEXT 26
+Hello, world! How are you?
+IDS 10
+101 7592 1010 2088 999 2129 2024 2017 1029 102
+TEXT 42
+Padding and punctuation: (yes); it's fine.
+IDS 18
+101 11687 4667 1998 26136 6593 14505 1024 1006 2748 1007 1025 2009 1005 1055 2986 1012 102
+TEXT 6
+Short.
+IDS 4
+101 2460 1012 102
+TEXT 64
+The quick brown fox jumps over the lazy dog near the river bank.
+IDS 16
+101 1996 4248 2829 4419 14523 2058 1996 13971 3899 2379 1996 2314 2924 1012 102
+TEXT 28
+中文测试 sentence mixed.
+IDS 9
+101 1746 1861 100 100 6251 3816 1012 102
+TEXT 0
+
+IDS 2
+101 102
+TEXT 27
+Line one.
+Line two	is here.
+IDS 10
+101 2240 2028 1012 2240 2048 2003 2182 1012 102
+TEXT 1999
+word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word
+IDS 256
+101 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 2773 102

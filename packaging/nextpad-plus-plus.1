@@ -38,11 +38,23 @@ Tail-f mode \- auto-reload the file on every external change without prompting.
 File operations follow standard conventions (Ctrl+N, Ctrl+O, Ctrl+S,
 Ctrl+W, Ctrl+Q). See the View > Command Palette menu (Ctrl+Shift+P) for
 the full action list.
+.TP
+.B Ctrl+Alt+F
+Semantic search. Sentences in the active document are colored by
+similarity to the query. F2 still moves between bookmarks. Band
+swatches bookmark only the lines this search added.
 .SH FILES
 .TP
 .I ~/.config/nextpad-plus-plus/
 User configuration directory: session.xml, recentfiles.txt, backup/,
 stylers.xml, userDefineLangs/, plugins/.
+.TP
+.I $XDG_DATA_HOME/nextpad++/semantic-models/
+Downloaded sentence-embedding models (usually
+.IR ~/.local/share/nextpad++/semantic-models/ ).
+Preferences for the search bar are in
+.I $XDG_DATA_HOME/nextpad++/semantic-search.ini
+.
 .SH SEE ALSO
 The Notepad++ User Manual at https://npp-user-manual.org/.
 .SH AUTHORS

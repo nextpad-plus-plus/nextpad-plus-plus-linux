@@ -13,6 +13,10 @@
 
 #include <gtk/gtk.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Build the split layout. Pass the primary editor container (return value
  * of editor_init). Returns the new outer widget that should be packed in
  * place of the primary container. The secondary pane starts hidden. */
@@ -39,5 +43,10 @@ GtkWidget *split_secondary_current_sci(void);
 
 /* Apply prefs / styles to every secondary view. Cheap when empty. */
 void split_apply_prefs_to_all(void);
+void split_foreach_sci(void (*fn)(GtkWidget *sci));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

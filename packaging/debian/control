@@ -27,3 +27,7 @@ Description: Multi-tab text editor (Linux port of Notepad++)
  Folder Tree, Search Results, Character Panel, Clipboard History,
  Project), bookmark margin, 5-colour mark/style system, command
  palette, and a plugin SDK compatible with Notepad++ for macOS.
+ Semantic search (Ctrl+Alt+F) colors sentences in the active document
+ by meaning. The editor loads ONNX Runtime at run time when it is
+ installed and still starts when it is not. ONNX Runtime is not a
+ package dependency. Model weights are downloaded on first use.

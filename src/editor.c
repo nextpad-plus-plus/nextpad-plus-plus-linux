@@ -29,6 +29,7 @@ extern bool NextpadSetCJKFriendlyWrap(bool enabled);
 #include "funclist.h"
 #include "docmap.h"
 #include "spell.h"
+#include "semantic_search.h"
 #include "ctxmenu.h"
 #include "plugin.h"
 #include <math.h>     /* isfinite — hostile scroll deltas */
@@ -2819,6 +2820,7 @@ brace_done:;
          * the panel is hidden, so this is essentially free in steady state. */
         extern void main_mdpreview_notify_changed(void);
         main_mdpreview_notify_changed();
+        semantic_search_note_modified(sci);
     } else if (code == SCN_MACRORECORD) {
         macro_on_record((unsigned int)n->message, n->wParam, n->lParam);
     }
@@ -2895,6 +2897,9 @@ static void on_switch_page(GtkNotebook *nb, GtkWidget *page,
     schedule_pending_recheck();
     extern void main_mdpreview_notify_changed(void);
     main_mdpreview_notify_changed();
+    /* Incoming page, not editor_current_doc(): during switch-page the
+     * notebook still reports the old page. */
+    semantic_search_note_activated(sci);
     /* GAP-101 — NPPN_BUFFERACTIVATED on plain tab switches. It only fired
      * via main_doclist_refresh (open/close/save paths), so clicking another
      * tab never notified plugins: the Markdown panel kept rendering the old
@@ -3866,6 +3871,10 @@ static gboolean close_sci_full(GtkWidget *sci, gboolean *dont_save_all)
      * plugins use it to flush state while the buffer is still whole). */
     plugin_notify_file_before_close(doc);
 
+    /* While doc->sci is still in the notebook, drop heatmap state and
+     * any bookmarks semantic search added on this buffer. */
+    semantic_search_note_closed(doc);
+
     filewatch_stop(doc);
     backup_clean(doc);
     gtk_notebook_remove_page(nb, gtk_notebook_page_num(nb, sw));
@@ -4058,6 +4067,7 @@ void editor_clone_to_view(gboolean vertical)
     /* Share the document buffer (Scintilla ref-counts it). */
     sptr_t docptr = sci_msg(src->sci, SCI_GETDOCPOINTER, 0, 0);
     sci_msg(sci, SCI_SETDOCPOINTER, 0, docptr);
+    semantic_search_configure_view(sci);
     g_signal_connect(sci, "sci-notify", G_CALLBACK(on_sci_notify), NULL);
     if (doc->language && doc->language[0]) {
         g_object_set_data_full(G_OBJECT(sci), "npp-lang",
@@ -4434,7 +4444,10 @@ void editor_close_all_quit(GApplication *app)
      * quit is COMMITTED — a cancelled quit above fires neither. Fired
      * before tab teardown so plugins can still query open buffers; the
      * teardown itself does not fire per-file FILECLOSED (macOS parity).
-     * Covers every quit route: menu Quit, Ctrl+Q, window close. */
+     * Covers every quit route: menu Quit, Ctrl+Q, window close.
+     * Semantic indexing is stopped first, while the editors it paints
+     * are still alive, so quit does not wait on a model download. */
+    semantic_search_shutdown();
     plugin_notify_before_shutdown();
     plugin_notify_shutdown();
 

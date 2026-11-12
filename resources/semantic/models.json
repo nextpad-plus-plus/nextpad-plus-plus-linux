@@ -1,0 +1,75 @@
+{
+  "default": "all-MiniLM-L6-v2-fp32",
+  "models": [
+    {
+      "id": "all-MiniLM-L6-v2",
+      "name": "MiniLM-L6 int8",
+      "heatmap_profile": "minilm",
+      "dimension": 384,
+      "pooling": "mean",
+      "max_tokens": 256,
+      "vocab": {
+        "filename": "vocab.txt",
+        "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt",
+        "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+      },
+      "model": {
+        "x86_64": {
+          "filename": "model_quint8_avx2.onnx",
+          "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_quint8_avx2.onnx",
+          "sha256": "b941bf19f1f1283680f449fa6a7336bb5600bdcd5f84d10ddc5cd72218a0fd21"
+        },
+        "aarch64": {
+          "filename": "model_qint8_arm64.onnx",
+          "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_arm64.onnx",
+          "sha256": "4278337fd0ff3c68bfb6291042cad8ab363e1d9fbc43dcb499fe91c871902474"
+        }
+      }
+    },
+    {
+      "id": "all-MiniLM-L6-v2-fp32",
+      "name": "MiniLM-L6 fp32",
+      "heatmap_profile": "minilm",
+      "dimension": 384,
+      "pooling": "mean",
+      "max_tokens": 256,
+      "vocab": {
+        "filename": "vocab.txt",
+        "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt",
+        "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+      },
+      "model": {
+        "all": {
+          "filename": "model.onnx",
+          "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx",
+          "sha256": "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452"
+        }
+      }
+    },
+    {
+      "id": "paraphrase-MiniLM-L3-v2",
+      "name": "MiniLM-L3 int8",
+      "heatmap_profile": "minilm",
+      "dimension": 384,
+      "pooling": "mean",
+      "max_tokens": 128,
+      "vocab": {
+        "filename": "vocab.txt",
+        "url": "https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L3-v2/resolve/main/vocab.txt",
+        "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+      },
+      "model": {
+        "x86_64": {
+          "filename": "model_quint8_avx2.onnx",
+          "url": "https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L3-v2/resolve/main/onnx/model_quint8_avx2.onnx",
+          "sha256": "7b411e18f5974428b388be5667cf76d57c2a52968e1d6b0153a30a8ccfb34204"
+        },
+        "aarch64": {
+          "filename": "model_qint8_arm64.onnx",
+          "url": "https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L3-v2/resolve/main/onnx/model_qint8_arm64.onnx",
+          "sha256": "44a2d6852c28e7a4cff4d77a8bc8d5ca2a8b38884c1fa746e6652d830109e0c2"
+        }
+      }
+    }
+  ]
+}

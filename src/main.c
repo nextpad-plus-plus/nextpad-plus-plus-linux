@@ -47,6 +47,7 @@
 #include "statusbar.h"
 #include "findreplace.h"
 #include "findinfiles.h"
+#include "semantic_search.h"
 #include "macro.h"
 #include "funclist.h"
 #include "docmap.h"
@@ -5767,6 +5768,10 @@ static void action_incremental_search(GSimpleAction *a, GVariant *p, gpointer u)
      * responder — retyping replaces the previous needle. */
     gtk_editable_select_region(GTK_EDITABLE(g_isearch_entry), 0, -1);
 }
+static void action_semantic_search(GSimpleAction *a, GVariant *p, gpointer u) {
+    (void)a;(void)p;(void)u;
+    semantic_search_toggle();
+}
 
 /* ──────────────────────────────────────────────────────────────────────
  * G15 Command Palette (Ctrl+Shift+P)
@@ -6817,6 +6822,7 @@ static const GActionEntry kAppActions[] = {
     { "clear-all-marks",     action_clear_all_marks,     NULL, NULL, NULL },
     /* G22 Incremental search */
     { "incremental-search",  action_incremental_search,  NULL, NULL, NULL },
+    { "semantic-search",     action_semantic_search,     NULL, NULL, NULL },
     /* G15 Command Palette */
     { "command-palette",     action_command_palette,     NULL, NULL, NULL },
     /* G20 Tab polish */
@@ -7428,6 +7434,7 @@ static GMenuModel *build_menu_model(void)
         GMenu *g = g_menu_new();
         g_menu_append(g, "Replace…",           "app.replace");
         g_menu_append(g, "Incremental Search", "app.incremental-search");
+        g_menu_append(g, "Semantic Search",    "app.semantic-search");
         g_menu_append_section(search, NULL, G_MENU_MODEL(g));
         g_object_unref(g);
     }
@@ -8949,6 +8956,7 @@ static void build_main_window(GtkApplication *app)
     if (toolbar)   npp_box_pack(GTK_BOX(vbox), toolbar, FALSE, 0);
     npp_box_pack(GTK_BOX(vbox), hpaned0, TRUE, 0);   /* GAP-123 */
     npp_box_pack(GTK_BOX(vbox), g_isearch_revealer, FALSE, 0);
+    npp_box_pack(GTK_BOX(vbox), semantic_search_bar_new(), FALSE, 0);
     if (statusbar) npp_box_pack(GTK_BOX(vbox), statusbar, FALSE, 0);
     gtk_container_add(GTK_CONTAINER(g_window), vbox);
 
@@ -9237,6 +9245,7 @@ static void on_startup(GtkApplication *app, gpointer ud)
     set_accel(app, "app.bookmark-prev",        "<Shift>F2");
     set_accel(app, "app.command-palette",      "<Primary><Shift>p");
     set_accel(app, "app.incremental-search",   "<Primary>i");
+    set_accel(app, "app.semantic-search",      "<Primary><Alt>f");
     set_accel(app, "app.reopen-closed",        "<Primary><Shift>t");
     set_accel(app, "app.multisel-add-next",    "<Primary><Alt>n");
     set_accel(app, "app.hide-lines",           "<Primary><Shift>h");
