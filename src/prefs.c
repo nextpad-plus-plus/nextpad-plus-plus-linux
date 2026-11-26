@@ -2679,6 +2679,15 @@ static void on_prefs_response(GtkDialog *dlg, gint r, gpointer d)
     gtk_widget_hide(GTK_WIDGET(dlg));
 }
 
+/* Der Dialog kann auch über das Schließen-Kreuz zerstört werden (nicht nur
+ * versteckt, wie bei "Close"). Dann darf s_prefs_dlg nicht mehr auf das
+ * alte Fenster zeigen, sonst greift der nächste Aufruf ins Leere. */
+static void on_prefs_destroy(GtkWidget *w, gpointer d)
+{
+    (void)w; (void)d;
+    s_prefs_dlg = NULL;
+}
+
 /* Tab label for the vertical (left-side) prefs notebook strip. The label
  * fills the tab width and right-aligns its text, so the titles sit flush
  * against the page content rather than ragged on the left. */
@@ -3131,6 +3140,7 @@ void prefs_dialog_show(GtkWidget *parent)
     gtk_container_add(GTK_CONTAINER(ca), nb);
 
     g_signal_connect(s_prefs_dlg, "response", G_CALLBACK(on_prefs_response), NULL);
+    g_signal_connect(s_prefs_dlg, "destroy",  G_CALLBACK(on_prefs_destroy), NULL);
     gtk_widget_show_all(s_prefs_dlg);
 }
 
