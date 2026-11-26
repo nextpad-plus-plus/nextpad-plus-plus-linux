@@ -3440,6 +3440,34 @@ static void tabscroll_attach(GtkWidget *nb)
     gtk_widget_add_controller(hdr, sc);
 }
 
+/* Doppelklick auf die leere Fläche der Tab-Leiste = neues Dokument
+ * (wie der "New"-Button). Klicks auf Tabs und Scroll-Pfeile ignorieren. */
+static void on_tabbar_pressed(GtkGestureClick *gc, int n_press,
+                              double x, double y, gpointer ud)
+{
+    (void)ud;
+    if (n_press != 2) return;
+    GtkWidget *hdr = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gc));
+    GtkWidget *hit = gtk_widget_pick(hdr, x, y, GTK_PICK_DEFAULT);
+    const char *name = hit ? gtk_widget_get_css_name(hit) : NULL;
+    if (g_strcmp0(name, "header") != 0 && g_strcmp0(name, "tabs") != 0)
+        return;
+    g_action_group_activate_action(
+        G_ACTION_GROUP(g_application_get_default()), "new", NULL);
+}
+
+static void tabbar_dblclick_attach(GtkWidget *nb)
+{
+    GtkWidget *hdr = gtk_widget_get_first_child(nb);
+    if (!hdr) return;
+    GtkGesture *gc = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), GDK_BUTTON_PRIMARY);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(gc),
+                                               GTK_PHASE_CAPTURE);
+    g_signal_connect(gc, "pressed", G_CALLBACK(on_tabbar_pressed), NULL);
+    gtk_widget_add_controller(hdr, GTK_EVENT_CONTROLLER(gc));
+}
+
 GtkWidget *editor_init(GtkWidget *window)
 {
     stylestore_init(NULL);
@@ -3464,6 +3492,7 @@ GtkWidget *editor_init(GtkWidget *window)
                                !g_prefs.hide_tab_bar);   /* macOS #183 */
     g_signal_connect(s_notebook, "switch-page", G_CALLBACK(on_switch_page), NULL);
     tabscroll_attach(s_notebook);                        /* GAP-106 */
+    tabbar_dblclick_attach(s_notebook);   /* Doppelklick leere Tab-Leiste = New */
     g_signal_connect(s_notebook, "page-removed",
                      G_CALLBACK(on_page_removed), NULL);
     g_signal_connect(s_notebook, "page-reordered",
